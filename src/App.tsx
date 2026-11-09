@@ -6,11 +6,11 @@ import { BattleArena } from './components/BattleArena';
 import { soundFX } from './engine/SoundFX';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '7:04 AM - 11/09/2026';
+const FALLBACK_TIMESTAMP = '7:16 AM - 11/09/2026';
 export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 
-const STORAGE_KEY = 'last_survival_dead_ahead_v1';
+const STORAGE_KEY = 'last_survival_dead_ahead_v2';
 
 const INITIAL_PROGRESS: PlayerProgress = {
   coins: 143,
@@ -23,11 +23,11 @@ const INITIAL_PROGRESS: PlayerProgress = {
   spikedBumper: false,
   weldedArmor: false,
   unitLevels: {
-    redneck: 5,
-    farmer: 5,
-    builder: 5,
-    policeman: 5,
-    mechanic: 4,
+    redneck: 1,
+    farmer: 1,
+    builder: 1,
+    policeman: 1,
+    mechanic: 1,
   },
   missionStars: {},
   unlockedMissions: [1, 2],

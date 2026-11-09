@@ -113,13 +113,15 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     maxBusHp: 200 + progress.busHpBonus,
     busDamagedEver: false,
     busX: -2,
-    busY: 112,
+    busY: 100,
     doorOpenTimer: 0,
     barricadeHp: mission.barricadeHp,
     maxBarricadeHp: mission.barricadeHp,
-    barricadeX: 546,
+    barricadeX: 614,
     barricadeShake: 0,
-    billShotTimer: 1.5,
+    barricadeThresholdIdx: 0,
+    rushPackTimer: 18.0,
+    billShotTimer: 1.8,
     billFiringVisual: 0,
     billBarrageCharge: 45,
     billBarrageActiveTimer: 0,
@@ -139,18 +141,18 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     obstacles: [] as RenderObstacle[],
     pickups: [] as RenderPickup[],
     crows: [
-      { x: 280, y: 225, z: 0, vx: 0, vy: 0, vz: 0, flying: false, animOffset: 0 },
-      { x: 350, y: 248, z: 0, vx: 0, vy: 0, vz: 0, flying: false, animOffset: 1.7 },
+      { x: 310, y: 212, z: 0, vx: 0, vy: 0, vz: 0, flying: false, animOffset: 0 },
+      { x: 390, y: 238, z: 0, vx: 0, vy: 0, vz: 0, flying: false, animOffset: 1.7 },
     ] as RenderCrow[],
     particles: [] as RenderParticle[],
     floatingTexts: [] as RenderFloatingText[],
     fireZones: [] as RenderFireZone[],
     keysPressed: new Set<string>(),
     selectedUnitId: null as string | null,
-    mouseLogical: { x: 320, y: 240, insideRoad: false },
+    mouseLogical: { x: 360, y: 228, insideRoad: false },
     draggingItem: null as TacticalItemType | null,
-    waveTimer: 2.8,
-    skeletonTimer: mission.skeletonAmbush ? 9.0 : 9999,
+    waveTimer: 1.6,
+    skeletonTimer: mission.skeletonAmbush ? 8.0 : 9999,
     timeRemaining: 145,
     hordeTriggered: false,
     screenShake: 0,
@@ -326,8 +328,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         scareCrows();
       }
 
-      const level = Math.max(5, progress.unitLevels[type] || 5);
-      const statMult = 1 + (level - 1) * 0.12;
+      const actualLevel = progress.unitLevels[type] || 1;
+      const statMult = 1 + (actualLevel - 1) * 0.14;
       const hp = Math.round(cfg.baseHp * statMult);
       const damage = Math.round(cfg.baseDamage * statMult);
       const isLucky = freeInitial || Math.random() * 100 < cfg.fortune;
@@ -346,8 +348,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         id: `s_${Date.now()}_${Math.random()}`,
         team: 'survivor',
         subType: type,
-        level: 7,
-        x: customX ?? sim.busX + 104,
+        level: actualLevel,
+        x: customX ?? sim.busX + 106,
         y: spawnY,
         z: freeInitial ? 0 : 6,
         vx: freeInitial ? 0 : 22,
@@ -578,11 +580,17 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
   const getLogicalCoords = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
-    if (!canvas) return { x: 320, y: 240, insideRoad: false };
+    if (!canvas) return { x: 360, y: 228, insideRoad: false };
     const rect = canvas.getBoundingClientRect();
-    const x = ((clientX - rect.left) / rect.width) * LOGICAL_WIDTH;
-    const y = ((clientY - rect.top) / rect.height) * LOGICAL_HEIGHT;
-    const insideRoad = x >= 120 && x <= 560 && y >= ROAD_Y_MIN - 15 && y <= ROAD_Y_MAX + 15;
+    const scale = Math.max(rect.width / LOGICAL_WIDTH, rect.height / LOGICAL_HEIGHT);
+    const renderedW = LOGICAL_WIDTH * scale;
+    const renderedH = LOGICAL_HEIGHT * scale;
+    const offsetX = (rect.width - renderedW) / 2;
+    const offsetY = (rect.height - renderedH) / 2;
+
+    const x = (clientX - rect.left - offsetX) / scale;
+    const y = (clientY - rect.top - offsetY) / scale;
+    const insideRoad = x >= 120 && x <= 620 && y >= ROAD_Y_MIN - 15 && y <= ROAD_Y_MAX + 15;
     return { x, y, insideRoad };
   };
 
@@ -638,11 +646,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   useEffect(() => {
     initDecalCanvas();
 
-    // Start cleanly with NO player units outside the bus — only zombies near the right barricade!
+    // Start cleanly with NO player units outside the bus — 5 tough zombies guarding the barricade!
     simRef.current.units = [];
-    spawnZombie('walker', 465, 224);
-    spawnZombie('walker', 505, 258);
-    spawnZombie('bloated', 522, 238);
+    spawnZombie('walker', 505, 206);
+    spawnZombie('walker', 535, 248);
+    spawnZombie('runner', 558, 218);
+    spawnZombie('crit_zombie', 575, 258);
+    spawnZombie('bloated', 590, 232);
 
     let animationFrameId: number;
     let lastTime = performance.now();
@@ -696,7 +706,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         }
 
         if (sim.phase === 'combat') {
-          sim.courage = Math.min(100, sim.courage + dt * 3.5);
+          sim.courage = Math.min(100, sim.courage + dt * 1.65);
           SURVIVOR_ORDER.forEach((k) => {
             if (sim.unitCooldowns[k] > 0) {
               sim.unitCooldowns[k] = Math.max(0, sim.unitCooldowns[k] - dt);
@@ -714,42 +724,64 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             setHordeTriggered(true);
             soundFX.playSiren();
             sim.screenShake = 9;
-            for (let i = 0; i < 7; i++) {
-              spawnZombie(i % 2 === 0 ? 'runner' : 'crit_zombie', 530 + i * 14);
+            for (let i = 0; i < 9; i++) {
+              spawnZombie(
+                i % 3 === 0 ? 'armored' : i % 2 === 0 ? 'runner' : 'crit_zombie',
+                560 + i * 12
+              );
             }
           }
 
+          // Multi-zombie Wave Packs (2 to 3 zombies per wave!)
           sim.waveTimer -= dt;
           if (sim.waveTimer <= 0) {
             sim.waveTimer = sim.hordeTriggered
-              ? 1.4
-              : mission.waveInterval * (0.85 + Math.random() * 0.3);
+              ? 1.1
+              : mission.waveInterval * (0.78 + Math.random() * 0.25);
             const pool = mission.zombiePool;
-            const pick = pool[Math.floor(Math.random() * pool.length)];
-            spawnZombie(pick);
+            const packSize = sim.hordeTriggered ? 3 : Math.random() < 0.65 ? 2 : 3;
+            for (let p = 0; p < packSize; p++) {
+              const pick = pool[Math.floor(Math.random() * pool.length)];
+              spawnZombie(pick, sim.barricadeX - 24 - p * 18 - Math.random() * 20);
+            }
+          }
+
+          // Periodic Fast Rush Pack every ~19s
+          sim.rushPackTimer -= dt;
+          if (sim.rushPackTimer <= 0) {
+            sim.rushPackTimer = 18 + Math.random() * 5;
+            addFloatingText('¡OLEADA RÁPIDA!', 520, 175, 18, '#ef4444', true);
+            spawnZombie('runner', sim.barricadeX - 18);
+            spawnZombie('crit_zombie', sim.barricadeX - 34);
+            if (Math.random() < 0.6) {
+              spawnZombie('runner', sim.barricadeX - 48);
+            }
           }
 
           sim.skeletonTimer -= dt;
           if (sim.skeletonTimer <= 0) {
-            sim.skeletonTimer = 11 + Math.random() * 5;
-            const ambushX = 240 + Math.random() * 190;
+            sim.skeletonTimer = 9 + Math.random() * 4;
+            const ambushX = 240 + Math.random() * 230;
             const ambushY = ROAD_Y_MIN + 14 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 28);
             spawnZombie('skeleton', ambushX, ambushY);
+            if (Math.random() < 0.5) {
+              spawnZombie('skeleton', ambushX + 28, ambushY);
+            }
           }
 
-          // Sheriff Bill Roof Rifle Defense
+          // Sheriff Bill Roof Rifle Defense (Only fires when zombies get very close to the bus!)
           if (sim.billBarrageActiveTimer > 0) {
             sim.billBarrageActiveTimer -= dt;
-            if (Math.random() < 0.35) {
+            if (Math.random() < 0.32) {
               const targetZombies = sim.units.filter(
                 (u) => u.team === 'zombie' && u.state !== 'corpse' && u.hp > 0
               );
               if (targetZombies.length > 0) {
                 const target = targetZombies[Math.floor(Math.random() * targetZombies.length)];
-                const dmg = Math.round((18 + progress.billDamageBonus) * (1 - target.bulletResist));
+                const dmg = Math.round((16 + progress.billDamageBonus) * (1 - target.bulletResist));
                 target.hp -= dmg;
                 target.whiteFlashTimer = 0.09;
-                target.vx += 18;
+                target.vx += 15;
                 sim.billFiringVisual = 0.1;
                 soundFX.playRifle();
                 spawnBloodParticles(target.x, target.y, 12, 6);
@@ -760,17 +792,17 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             sim.billShotTimer -= dt;
             if (sim.billShotTimer <= 0) {
               const closeZombie = sim.units
-                .filter((u) => u.team === 'zombie' && u.state !== 'corpse' && u.x < 340 && u.hp > 0)
+                .filter((u) => u.team === 'zombie' && u.state !== 'corpse' && u.x < 250 && u.hp > 0)
                 .sort((a, b) => a.x - b.x)[0];
               if (closeZombie) {
-                sim.billShotTimer = 2.0;
+                sim.billShotTimer = 2.6;
                 sim.billFiringVisual = 0.14;
                 soundFX.playRifle();
                 scareCrows();
-                const dmg = Math.round((24 + progress.billDamageBonus) * (1 - closeZombie.bulletResist));
+                const dmg = Math.round((18 + progress.billDamageBonus) * (1 - closeZombie.bulletResist));
                 closeZombie.hp -= dmg;
                 closeZombie.whiteFlashTimer = 0.1;
-                closeZombie.vx += 20;
+                closeZombie.vx += 16;
                 spawnBloodParticles(closeZombie.x, closeZombie.y, 12, 8);
                 addFloatingText(`${dmg}`, closeZombie.x, closeZombie.y, 20, '#fde047');
               } else {
@@ -885,8 +917,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               } else {
                 if (u.infectedZombieType) {
                   u.state = 'corpse';
-                  u.corpseTimer = 4.2;
-                  u.corpseMaxTimer = 4.2;
+                  u.corpseTimer = 2.5;
+                  u.corpseMaxTimer = 2.5;
                   u.isPlayerControlled = false;
                 } else {
                   sim.units.splice(i, 1);
@@ -1064,6 +1096,22 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   sim.barricadeHp = Math.max(0, sim.barricadeHp - dmg);
                   sim.barricadeShake = 0.25;
                   addFloatingText(`${dmg}`, sim.barricadeX - 18, u.y, 22, '#fde047', true, 'WACK!');
+
+                  // Trigger Barricade Breach Defenders at 75%, 50%, and 25% HP!
+                  const thresholds = [0.75, 0.5, 0.25];
+                  const nextThresh = thresholds[sim.barricadeThresholdIdx];
+                  if (
+                    nextThresh !== undefined &&
+                    sim.barricadeHp > 0 &&
+                    sim.barricadeHp / sim.maxBarricadeHp <= nextThresh
+                  ) {
+                    sim.barricadeThresholdIdx += 1;
+                    sim.screenShake = 6;
+                    addFloatingText('¡CONTRAATAQUE!', sim.barricadeX - 45, 195, 24, '#ef4444', true);
+                    spawnZombie('runner', sim.barricadeX - 14);
+                    spawnZombie('crit_zombie', sim.barricadeX - 28);
+                    spawnZombie('armored', sim.barricadeX - 20);
+                  }
 
                   if (sim.barricadeHp <= 0 && sim.phase === 'combat') {
                     sim.phase = 'bus_ramming';
@@ -1422,7 +1470,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             }
           }
         }}
-        className="absolute inset-0 w-full h-full object-fill pixel-canvas cursor-crosshair"
+        className="absolute inset-0 w-full h-full object-cover pixel-canvas cursor-crosshair"
       />
 
       {/* ===================================================================== */}
@@ -1864,28 +1912,32 @@ const UnitSlotMiniPortrait: React.FC<{ type: SurvivorType; active: boolean }> = 
 
   return (
     <svg
-      viewBox="0 0 16 18"
-      className={`w-8 h-9 sm:w-9 sm:h-10 ${
+      viewBox="0 0 16 24"
+      className={`w-7 h-10 sm:w-8 sm:h-11 ${
         active ? 'opacity-100' : 'brightness-0 opacity-45'
       }`}
       style={{ shapeRendering: 'crispEdges' }}
     >
       {/* 1px Black Outline Silhouette */}
-      <rect x="4" y="1" width="8" height="4" fill="#14110f" />
-      <rect x="3" y="4" width="10" height="6" fill="#14110f" />
-      <rect x="2" y="10" width="12" height="7" fill="#14110f" />
+      <rect x="4" y="1" width="7" height="4" fill="#14110f" />
+      <rect x="3" y="4" width="9" height="6" fill="#14110f" />
+      <rect x="2" y="10" width="10" height="8" fill="#14110f" />
+      <rect x="3" y="18" width="8" height="5" fill="#14110f" />
       {/* Hat / Helmet */}
-      <rect x="5" y="2" width="6" height="2" fill={hatColor} />
-      <rect x="4" y="3" width="9" height="1" fill={hatColor} />
+      <rect x="5" y="2" width="5" height="2" fill={hatColor} />
+      <rect x="4" y="3" width="8" height="1" fill={hatColor} />
       {/* Face & Eyes */}
-      <rect x="4" y="4" width="7" height="5" fill="#f5b882" />
-      <rect x="9" y="5" width="1" height="2" fill="#18181b" />
+      <rect x="4" y="4" width="6" height="5" fill="#f5b882" />
+      <rect x="8" y="5" width="1" height="2" fill="#18181b" />
       {/* Torso & Overalls */}
-      <rect x="3" y="10" width="9" height="6" fill={shirtColor} />
-      <rect x="4" y="12" width="7" height="4" fill={overallsColor} />
+      <rect x="3" y="10" width="8" height="7" fill={shirtColor} />
+      <rect x="4" y="12" width="6" height="5" fill={overallsColor} />
+      {/* Slender Legs */}
+      <rect x="4" y="18" width="2" height="4" fill="#1e293b" />
+      <rect x="8" y="18" width="2" height="4" fill="#1e293b" />
       {/* Weapon Silhouette on Right */}
-      <rect x="12" y="7" width="2" height="8" fill="#14110f" />
-      <rect x="12" y="8" width="1" height="6" fill="#94a3b8" />
+      <rect x="11" y="8" width="2" height="9" fill="#14110f" />
+      <rect x="11" y="9" width="1" height="7" fill="#94a3b8" />
     </svg>
   );
 };
