@@ -300,6 +300,120 @@ const MECHANIC_MATRIX = [
   '...OOO....OOO...',
 ];
 
+const HOUND_MATRIX = [
+  '..........OO..OO.',
+  '.........OmO.OmO.',
+  '........OmmmmmmO.',
+  '........OmmKmmmOO',
+  '.OO....OOmmmmWWWW',
+  'OmmOOOORRmmmmRRRR',
+  '.OmmmmmmmmmmmmOO.',
+  '..OmmmmddmmmmO...',
+  '..OmmmmddddddO...',
+  '..OmmOO....OOmmO.',
+  '..OmmO......OmmO.',
+  '..OOO........OOO.',
+];
+
+const SNIPER_MATRIX = [
+  '....OOOOOO......',
+  '...OrrrrrrO.....',
+  '..OrrrrrrrrOO...',
+  '..OOssssssssO...',
+  '...OssssKsssO...',
+  '...OssssssshO...',
+  '...OOrrrrrrOO...',
+  '....OrrrrrrO....',
+  '..OOggggggggOO..',
+  '.OggddddddddddO.',
+  '.OggddYYYYddggO.',
+  '.OggddddddddddO.',
+  '.OsshddddddhssO.',
+  '..OOIIIIIIIIOO..',
+  '...OkkkkkkkkO...',
+  '...OkkOOOOkkO...',
+  '...OkkO..OkkO...',
+  '...OkkO..OkkO...',
+  '...OkkO..OkkO...',
+  '...OkkO..OkkO...',
+  '...OkkO..OkkO...',
+  '...OOO....OOO...',
+];
+
+const FLAMETHROWER_MATRIX = [
+  '....OOOOOO......',
+  '...OooooooO.....',
+  '..OooooooooO....',
+  '..OOkkkkkkkkO...',
+  '..OkkWWWWWWkkO..',
+  '..OkkKKKKKKkkO..',
+  '...OOkkkkkkOO...',
+  '.OOORROOOOOOO...',
+  'ORRRRROooooooooO',
+  'ORRRRROooYYYYooO',
+  'ORRRRROooooooooO',
+  'ORRRRROooYYYYooO',
+  '.OOORROooooooooO',
+  '..OOddddddddOO..',
+  '...OkkkkkkkkO...',
+  '...OkkOOOOkkO...',
+  '...OkkO..OkkO...',
+  '...OkkO..OkkO...',
+  '...OkkO..OkkO...',
+  '...OkkO..OkkO...',
+  '...OOO....OOO...',
+];
+
+const TURRET_MATRIX = [
+  '....OOOOOOOO....',
+  '...OkkkkkkkkO...',
+  '..OkkYYYYYYkkO..',
+  '.OkkkkRRRRkkkkO.',
+  '.OkkkkkkkkkkkkO.',
+  '..OOddddddddddOO',
+  '....OkkkkkkkkO..',
+  '...OkkkkkkkkkkO.',
+  '..OkkkOOOOOkkkO.',
+  '.OkkkO....OkkkO.',
+  'OkkkO......OkkkO',
+  'OOOO........OOOO',
+];
+
+const DRONE_MATRIX = [
+  'OOOOO......OOOOO',
+  '..O..........O..',
+  '.OkkkkkkkkkkkkO.',
+  'OkkWWWWccRRRRkkO',
+  'OkkkkkkkkkkkkkkO',
+  '.OOddddRRRRddOO.',
+  '...OkkO..OkkO...',
+  '..OO........OO..',
+];
+
+const JUGGERNAUT_MATRIX = [
+  '....OOOOOOOO....',
+  '...OkkkkkkkkO...',
+  '..OkkYYYYYYkkO..',
+  '..OkkKKKKKKkkO..',
+  '..OkkkkkkkkkkO..',
+  '.OOkkkkkkkkkkOO.',
+  'OkkkkkkkkkkkkkkO',
+  'OkkKKKKKKKKKKkkO',
+  'OkkKKYYYYYYKKkkO',
+  'OkkKKKKKKKKKKkkO',
+  'OkkKKccccccKKkkO',
+  'OkkkkkkkkkkkkkkO',
+  '.OOddddddddddOO.',
+  '..OkkkkkkkkkkO..',
+  '..OkkkkkkkkkkO..',
+  '..OkkkkOOOOkkO..',
+  '..OkkkO....OkkO.',
+  '..OkkkO....OkkO.',
+  '..OkkkO....OkkO.',
+  '..OkkkO....OkkO.',
+  '..OOOO......OOOO',
+];
+
 const ZOMBIE_WALKER_MATRIX = [
   '....OOOOOO......',
   '...OzzzzzzO.....',
@@ -1012,10 +1126,66 @@ export function renderUnitSprite(
   const legStride = Math.round(walkCycle * 3);
 
   // =======================================================
-  // TALL, SLENDER, HIGH-DETAIL SURVIVORS (~36px Total Height)
+  // TALL, SLENDER, HIGH-DETAIL SURVIVORS & TACTICAL UNITS
   // =======================================================
   if (unit.team === 'survivor') {
-    // Articulated Lower Boots & Stride (6px tall below matrix)
+    // 1. FLYING COMBAT DRONE MQ-9 (Hovers in the air at Z ~ 36)
+    if (unit.subType === 'drone') {
+      const hoverZ = 34 + Math.round(Math.sin(time * 7 + unit.animTime) * 2.5);
+      const droneY = y - hoverZ;
+
+      // Spinning Rotor Blades
+      const bladeW = Math.sin(time * 45) > 0 ? 7 : 3;
+      pxRect(ctx, x - 6 - Math.floor(bladeW / 2), droneY - 12, bladeW, 1, '#e2e8f0');
+      pxRect(ctx, x + 6 - Math.floor(bladeW / 2), droneY - 12, bladeW, 1, '#e2e8f0');
+
+      drawPixelMatrix(ctx, DRONE_MATRIX, BASE_PALETTE, x, droneY - 2, dir, flash);
+
+      // Red Laser Target Scanner + Aerial Machine Gun Burst
+      ctx.strokeStyle =
+        unit.state === 'attack' ? 'rgba(250, 204, 21, 0.9)' : 'rgba(239, 68, 68, 0.45)';
+      ctx.lineWidth = unit.state === 'attack' ? 1.5 : 1;
+      ctx.beginPath();
+      ctx.moveTo(x + dir * 4, droneY - 3);
+      ctx.lineTo(x + dir * 75, y - 4);
+      ctx.stroke();
+
+      if (unit.state === 'attack' && unit.attackProgress < 0.5) {
+        pxRect(ctx, x + dir * 6, droneY - 4, 6 * dir, 4, '#fde047');
+      }
+
+      renderUnitLevelAndHealthBar(ctx, x, droneY - 18, unit.level, unit.hp, unit.maxHp, true);
+      return;
+    }
+
+    // 2. AUTOMATED GATLING TURRET (Stationary Tripod Sentry)
+    if (unit.subType === 'turret') {
+      drawPixelMatrix(ctx, TURRET_MATRIX, BASE_PALETTE, x, y - z, dir, flash);
+      const recoilX = unit.state === 'attack' ? -1 * dir : 0;
+      // Multi-barrel rotary Gatling gun
+      pxOutlinedRect(ctx, x + dir * 3 + recoilX, y - z - 11, 15 * dir, 4, flash ? '#fff' : '#27272a');
+      pxRect(ctx, x + dir * 5 + recoilX, y - z - 10, 12 * dir, 1, '#94a3b8');
+      if (unit.state === 'attack') {
+        pxRect(ctx, x + dir * 18, y - z - 13, 9 * dir, 7, '#fde047');
+        pxRect(ctx, x + dir * 20, y - z - 11, 11 * dir, 3, '#ffffff');
+      }
+      renderUnitLevelAndHealthBar(ctx, x, y - z - 20, unit.level, unit.hp, unit.maxHp, true);
+      return;
+    }
+
+    // 3. K-9 ATTACK DOG "REX" (Fast 4-legged lunge & bite)
+    if (unit.subType === 'hound') {
+      const lungeX = unit.state === 'attack' ? Math.round(Math.sin(unit.attackProgress * Math.PI) * 7) * dir : 0;
+      const leapZ = unit.state === 'attack' ? Math.round(Math.sin(unit.attackProgress * Math.PI) * 5) : 0;
+      // 4 animated paws
+      pxOutlinedRect(ctx, x - 5 + legStride, y - z - leapZ - 4, 2, 4, flash ? '#fff' : '#451a03');
+      pxOutlinedRect(ctx, x + 3 - legStride, y - z - leapZ - 4, 2, 4, flash ? '#fff' : '#451a03');
+      drawPixelMatrix(ctx, HOUND_MATRIX, BASE_PALETTE, x + lungeX, drawY - leapZ - 3, dir, flash);
+      renderUnitLevelAndHealthBar(ctx, x, drawY - leapZ - 21, unit.level, unit.hp, unit.maxHp, true);
+      return;
+    }
+
+    // 4. HUMAN SURVIVORS (Tall 36–38px bodies + Articulated Lower Boots)
     pxOutlinedRect(ctx, x - 4 + legStride, y - z - 6, 3, 6, flash ? '#fff' : '#1c1917');
     pxOutlinedRect(ctx, x + 1 - legStride, y - z - 6, 3, 6, flash ? '#fff' : '#1c1917');
 
@@ -1028,13 +1198,51 @@ export function renderUnitSprite(
         ? BUILDER_MATRIX
         : unit.subType === 'policeman'
         ? POLICEMAN_MATRIX
+        : unit.subType === 'sniper'
+        ? SNIPER_MATRIX
+        : unit.subType === 'flamethrower'
+        ? FLAMETHROWER_MATRIX
+        : unit.subType === 'juggernaut'
+        ? JUGGERNAUT_MATRIX
         : MECHANIC_MATRIX;
 
     drawPixelMatrix(ctx, matrix, BASE_PALETTE, x, drawY - 5, dir, flash);
 
     // Weapon & Attack Animation (Positioned at chest/shoulder height on tall body)
     const swing = unit.state === 'attack' ? Math.sin(unit.attackProgress * Math.PI) : 0;
-    if (unit.subType === 'farmer' || unit.subType === 'policeman') {
+    if (unit.subType === 'sniper') {
+      const recoilX = unit.state === 'attack' ? -3 * dir : 0;
+      // Long Precision Sniper Rifle + Scope
+      pxOutlinedRect(
+        ctx,
+        x + dir * 2 + recoilX,
+        drawY - 19,
+        19 * dir,
+        3,
+        flash ? '#fff' : '#18181b'
+      );
+      pxOutlinedRect(ctx, x + dir * 6 + recoilX, drawY - 22, 6 * dir, 2, '#334155');
+      // Red Laser Sight Beam
+      ctx.strokeStyle = 'rgba(239, 68, 68, 0.55)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x + dir * 21, drawY - 18);
+      ctx.lineTo(x + dir * 180, drawY - 18);
+      ctx.stroke();
+
+      if (unit.state === 'attack' && unit.attackProgress < 0.35) {
+        pxRect(ctx, x + dir * 21, drawY - 22, 10 * dir, 7, '#fde047');
+        pxRect(ctx, x + dir * 23, drawY - 20, 14 * dir, 3, '#ffffff');
+      }
+    } else if (unit.subType === 'flamethrower') {
+      pxOutlinedRect(ctx, x + dir * 2, drawY - 18, 13 * dir, 4, flash ? '#fff' : '#27272a');
+      if (unit.state === 'attack') {
+        // Blazing Multi-Layered Flame Cone
+        pxRect(ctx, x + dir * 15, drawY - 21, 18 * dir, 8, '#dc2626');
+        pxRect(ctx, x + dir * 15, drawY - 19, 14 * dir, 5, '#f97316');
+        pxRect(ctx, x + dir * 15, drawY - 18, 9 * dir, 3, '#fde047');
+      }
+    } else if (unit.subType === 'farmer' || unit.subType === 'policeman') {
       const recoilX = unit.state === 'attack' ? -3 * dir : 0;
       const reloadTilt = unit.state === 'reload' ? 3 : 0;
       pxOutlinedRect(
@@ -1060,23 +1268,29 @@ export function renderUnitSprite(
     } else {
       const reachX = Math.round(swing * 10) * dir;
       const reachY = Math.round(swing * 6);
-      const handleColor = unit.subType === 'mechanic' ? '#64748b' : '#78350f';
-      const headColor = unit.subType === 'builder' ? '#dc2626' : '#cbd5e1';
+      const handleColor =
+        unit.subType === 'mechanic' || unit.subType === 'juggernaut' ? '#64748b' : '#78350f';
+      const headColor =
+        unit.subType === 'builder'
+          ? '#dc2626'
+          : unit.subType === 'juggernaut'
+          ? '#facc15'
+          : '#cbd5e1';
 
       pxOutlinedRect(
         ctx,
         x + dir * 3 + reachX,
         drawY - 20 + reachY,
-        9 * dir,
+        10 * dir,
         2,
         flash ? '#fff' : handleColor
       );
       pxOutlinedRect(
         ctx,
-        x + dir * 10 + reachX,
-        drawY - 23 + reachY,
-        4 * dir,
-        7,
+        x + dir * 11 + reachX,
+        drawY - 24 + reachY,
+        (unit.subType === 'juggernaut' ? 6 : 4) * dir,
+        unit.subType === 'juggernaut' ? 9 : 7,
         flash ? '#fff' : headColor
       );
     }

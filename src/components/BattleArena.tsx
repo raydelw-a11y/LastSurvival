@@ -37,6 +37,7 @@ interface BattleArenaProps {
   progress: PlayerProgress;
   onVictory: (stars: number, coinsEarned: number, zombiesKilled: number) => void;
   onRetreat: () => void;
+  onLevelUpCommander?: (newLevel: number, newXp: number) => void;
 }
 
 interface InternalUnit extends RenderUnit {
@@ -56,6 +57,10 @@ interface InternalUnit extends RenderUnit {
   reloadTimer: number;
   knockback: number;
   bulletResist: number;
+  armorPiercing: number;
+  isStationary: boolean;
+  isFlying: boolean;
+  isFlame: boolean;
   barricadeMultiplier: number;
   infectedZombieType?: ZombieType;
   critChance: number;
@@ -65,37 +70,61 @@ interface InternalUnit extends RenderUnit {
   courageDropChance?: number;
 }
 
-const SURVIVOR_ORDER: SurvivorType[] = ['redneck', 'farmer', 'builder', 'policeman', 'mechanic'];
+const SURVIVOR_ORDER: SurvivorType[] = [
+  'redneck',
+  'farmer',
+  'builder',
+  'mechanic',
+  'hound',
+  'policeman',
+  'sniper',
+  'flamethrower',
+  'turret',
+  'drone',
+  'juggernaut',
+];
+
+const INITIAL_UNIT_COOLDOWNS: Record<SurvivorType, number> = {
+  redneck: 0,
+  farmer: 0,
+  builder: 0,
+  mechanic: 0,
+  hound: 0,
+  policeman: 0,
+  sniper: 0,
+  flamethrower: 0,
+  turret: 0,
+  drone: 0,
+  juggernaut: 0,
+};
 
 export const BattleArena: React.FC<BattleArenaProps> = ({
   mission,
   progress,
   onVictory,
   onRetreat,
+  onLevelUpCommander,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const decalCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // HUD Reactive State matching Screenshot
+  // HUD Reactive State matching Screenshot + Live Commander Leveling
   const [courage, setCourage] = useState<number>(16);
   const [rage, setRage] = useState<number>(4);
+  const [commanderLevel, setCommanderLevel] = useState<number>(progress.busLevel || 1);
+  const [commanderXp, setCommanderXp] = useState<number>(progress.commanderXp || 0);
   const [busHp, setBusHp] = useState<number>(200 + progress.busHpBonus);
   const maxBusHp = 200 + progress.busHpBonus;
   const [barricadeHp, setBarricadeHp] = useState<number>(mission.barricadeHp);
-  const [unitCooldowns, setUnitCooldowns] = useState<Record<SurvivorType, number>>({
-    redneck: 0,
-    farmer: 0,
-    builder: 0,
-    policeman: 0,
-    mechanic: 0,
-  });
+  const [unitCooldowns, setUnitCooldowns] =
+    useState<Record<SurvivorType, number>>(INITIAL_UNIT_COOLDOWNS);
   const [itemCooldowns, setItemCooldowns] = useState<Record<TacticalItemType, number>>({
     blue_barrel: 0,
     red_barrel: 0,
     medkit: 0,
   });
   const [furyBuffCount, setFuryBuffCount] = useState<number>(1);
-  const [timeRemaining, setTimeRemaining] = useState<number>(145); // 02:25 like screenshot!
+  const [timeRemaining, setTimeRemaining] = useState<number>(145);
   const [hordeTriggered, setHordeTriggered] = useState<boolean>(false);
   const [paused, setPaused] = useState<boolean>(false);
   const [draggingItem, setDraggingItem] = useState<TacticalItemType | null>(null);
@@ -109,6 +138,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     time: 0,
     courage: 16,
     rage: 4,
+    commanderLevel: progress.busLevel || 1,
+    commanderXp: progress.commanderXp || 0,
     busHp: 200 + progress.busHpBonus,
     maxBusHp: 200 + progress.busHpBonus,
     busDamagedEver: false,
@@ -125,13 +156,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     billFiringVisual: 0,
     billBarrageCharge: 45,
     billBarrageActiveTimer: 0,
-    unitCooldowns: {
-      redneck: 0,
-      farmer: 0,
-      builder: 0,
-      policeman: 0,
-      mechanic: 0,
-    } as Record<SurvivorType, number>,
+    unitCooldowns: { ...INITIAL_UNIT_COOLDOWNS } as Record<SurvivorType, number>,
     itemCooldowns: {
       blue_barrel: 0,
       red_barrel: 0,
@@ -291,6 +316,10 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         reloadTimer: 0,
         knockback: 12,
         bulletResist: cfg.bulletResist ?? 0,
+        armorPiercing: 0,
+        isStationary: false,
+        isFlying: false,
+        isFlame: false,
         barricadeMultiplier: 1,
         critChance: cfg.critChance,
         critMultiplier: cfg.critMultiplier,
@@ -316,6 +345,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       const sim = simRef.current;
       if (sim.phase !== 'combat' || paused) return;
       const cfg = SURVIVOR_CONFIGS[type];
+      if (!freeInitial && sim.commanderLevel < cfg.unlockLevel) return;
       if (!freeInitial && (sim.courage < cfg.cost || sim.unitCooldowns[type] > 0)) return;
 
       if (!freeInitial) {
@@ -336,6 +366,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
       const spawnY =
         customY ?? ROAD_Y_MIN + 14 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 28);
+      const defaultSpawnX = cfg.isStationary
+        ? sim.busX + 185 + Math.random() * 80
+        : sim.busX + 106;
 
       if (cfg.repairsBusOnSpawn && !freeInitial) {
         const heal = cfg.repairsBusOnSpawn;
@@ -349,10 +382,10 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         team: 'survivor',
         subType: type,
         level: actualLevel,
-        x: customX ?? sim.busX + 106,
+        x: customX ?? defaultSpawnX,
         y: spawnY,
         z: freeInitial ? 0 : 6,
-        vx: freeInitial ? 0 : 22,
+        vx: freeInitial || cfg.isStationary ? 0 : 22,
         vy: 0,
         vz: freeInitial ? 0 : 18,
         hp,
@@ -370,6 +403,10 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         reloadTimer: 0,
         knockback: cfg.knockback,
         bulletResist: cfg.bulletResist ?? 0,
+        armorPiercing: cfg.armorPiercing ?? 0,
+        isStationary: !!cfg.isStationary,
+        isFlying: !!cfg.isFlying,
+        isFlame: !!cfg.isFlame,
         barricadeMultiplier: cfg.barricadeMultiplier ?? 1,
         infectedZombieType: cfg.infectedZombieType,
         critChance: (cfg.fortune / 100) * (isLucky ? 1.6 : 1),
@@ -897,6 +934,29 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 const rageGain = u.rageReward ?? 4;
                 sim.rage = Math.min(100, sim.rage + rageGain);
 
+                // Award Commander XP and Level-Up Live in Battle to Unlock New Units!
+                sim.commanderXp += 24;
+                if (sim.commanderXp >= 100 && sim.commanderLevel < 10) {
+                  sim.commanderXp -= 100;
+                  sim.commanderLevel += 1;
+                  setCommanderLevel(sim.commanderLevel);
+                  soundFX.playCouragePickup();
+                  const unlockedUnit = SURVIVOR_ORDER.map((k) => SURVIVOR_CONFIGS[k]).find(
+                    (c) => c.unlockLevel === sim.commanderLevel
+                  );
+                  addFloatingText(
+                    unlockedUnit
+                      ? `¡NIVEL ${sim.commanderLevel}: ${unlockedUnit.name.toUpperCase()}!`
+                      : `¡SUBIDA A NIVEL ${sim.commanderLevel}!`,
+                    360,
+                    165,
+                    28,
+                    '#fde047',
+                    true
+                  );
+                  onLevelUpCommander?.(sim.commanderLevel, sim.commanderXp);
+                }
+
                 if (u.explodesOnDeath) {
                   triggerExplosion(u.x, u.y, 44, 34, false);
                 }
@@ -1019,39 +1079,73 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
                   if (u.isRanged) {
                     u.ammo -= 1;
-                    soundFX.playShotgun();
-                    sim.screenShake = Math.max(sim.screenShake, 2.5);
-                    sim.units.forEach((z) => {
-                      if (
-                        z.team === 'zombie' &&
-                        z.state !== 'corpse' &&
-                        z.hp > 0 &&
-                        (z.x - u.x) * u.facing >= -6 &&
-                        Math.abs(z.x - u.x) <= u.attackRange + 15 &&
-                        Math.abs(z.y - u.y) <= 36
-                      ) {
-                        const isCrit = Math.random() < u.critChance;
-                        const totalPelletDmg = Math.round(
-                          u.damage *
-                            u.pellets *
-                            (isCrit ? u.critMultiplier : 1) *
-                            (1 - z.bulletResist)
-                        );
-                        z.hp -= totalPelletDmg;
-                        z.whiteFlashTimer = 0.1;
-                        z.vx += u.facing * u.knockback;
-                        spawnBloodParticles(z.x, z.y, 12, 12);
-                        addFloatingText(
-                          `${totalPelletDmg}?`,
-                          z.x,
-                          z.y,
-                          20,
-                          '#fde047',
-                          true,
-                          'WACK!'
-                        );
-                      }
-                    });
+                    if (u.subType === 'sniper' || u.subType === 'turret' || u.subType === 'drone') {
+                      soundFX.playRifle();
+                    } else {
+                      soundFX.playShotgun();
+                    }
+                    sim.screenShake = Math.max(sim.screenShake, 2.2);
+
+                    if (u.pellets === 1 && !u.isFlame) {
+                      // Precision single-target shot (Sniper, Turret, Drone)
+                      const isCrit = Math.random() < u.critChance;
+                      const effectiveResist = closestZ.bulletResist * (1 - u.armorPiercing);
+                      const shotDmg = Math.round(
+                        u.damage * (isCrit ? u.critMultiplier : 1) * (1 - effectiveResist)
+                      );
+                      closestZ.hp -= shotDmg;
+                      closestZ.whiteFlashTimer = 0.1;
+                      closestZ.vx += u.facing * u.knockback;
+                      spawnBloodParticles(closestZ.x, closestZ.y, 12, 14);
+                      addFloatingText(
+                        `${shotDmg}?`,
+                        closestZ.x,
+                        closestZ.y,
+                        22,
+                        '#fde047',
+                        true,
+                        isCrit ? 'CRIT!' : 'WACK!'
+                      );
+                    } else {
+                      // Cone AoE shot (Shotguns & Flamethrower)
+                      sim.units.forEach((z) => {
+                        if (
+                          (z.x - u.x) * u.facing >= -6 &&
+                          Math.abs(z.x - u.x) <= u.attackRange + 15 &&
+                          Math.abs(z.y - u.y) <= 36
+                        ) {
+                          if (u.isFlame && z.state === 'corpse') {
+                            z.hp = -999;
+                            z.corpseTimer = -999;
+                            addFloatingText('CALCINADO', z.x, z.y, 14, '#f97316', true);
+                          } else if (z.team === 'zombie' && z.state !== 'corpse' && z.hp > 0) {
+                            const isCrit = Math.random() < u.critChance;
+                            const effectiveResist = u.isFlame
+                              ? 0
+                              : z.bulletResist * (1 - u.armorPiercing);
+                            const totalPelletDmg = Math.round(
+                              u.damage *
+                                u.pellets *
+                                (isCrit ? u.critMultiplier : 1) *
+                                (1 - effectiveResist)
+                            );
+                            z.hp -= totalPelletDmg;
+                            z.whiteFlashTimer = 0.1;
+                            z.vx += u.facing * u.knockback;
+                            spawnBloodParticles(z.x, z.y, 12, 10);
+                            addFloatingText(
+                              `${totalPelletDmg}?`,
+                              z.x,
+                              z.y,
+                              20,
+                              u.isFlame ? '#f97316' : '#fde047',
+                              true,
+                              u.isFlame ? 'BURN!' : 'WACK!'
+                            );
+                          }
+                        }
+                      });
+                    }
                   } else {
                     const isFirstHitCrit = !!u.firstHitReady;
                     const isCrit = isFirstHitCrit || Math.random() < u.critChance;
@@ -1162,7 +1256,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               let closestS: InternalUnit | null = null;
               let bestDist = Infinity;
               for (const other of sim.units) {
-                if (other.team === 'survivor' && other.state !== 'corpse' && other.hp > 0) {
+                if (
+                  other.team === 'survivor' &&
+                  !other.isFlying &&
+                  other.state !== 'corpse' &&
+                  other.hp > 0
+                ) {
                   const d = Math.hypot(other.x - u.x, (other.y - u.y) * 1.5);
                   if (d < bestDist) {
                     bestDist = d;
@@ -1279,6 +1378,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             uiSyncAccumulator = 0;
             setCourage(Math.floor(sim.courage));
             setRage(Math.floor(sim.rage));
+            setCommanderLevel(sim.commanderLevel);
+            setCommanderXp(Math.floor(sim.commanderXp));
             setBusHp(Math.max(0, Math.round(sim.busHp)));
             setBarricadeHp(Math.max(0, Math.round(sim.barricadeHp)));
             setUnitCooldowns({ ...sim.unitCooldowns });
@@ -1543,24 +1644,68 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             </div>
           </div>
 
-          {/* Small Blue Drop + 3 Green Pips (toggles Mobile Touch WASD Pad / Cycles Unit) */}
-          <button
-            onClick={() => {
-              setShowDpad((s) => !s);
-              cycleSelectedSurvivor();
-            }}
-            className="flex flex-col items-center w-7 mt-0.5 cursor-pointer group"
-            title="Cambiar unidad WASD / Mostrar D-Pad Táctil"
-          >
-            <div className="w-4 h-4 rounded-full bg-slate-900 border border-sky-400 flex items-center justify-center text-[9px]">
-              💧
+          {/* Commander Level & XP Progress Bar + WASD Toggle */}
+          <div className="flex items-center gap-1.5 mt-0.5">
+            <button
+              onClick={() => {
+                setShowDpad((s) => !s);
+                cycleSelectedSurvivor();
+              }}
+              className="flex flex-col items-center w-6 cursor-pointer group"
+              title="Cambiar unidad WASD / Mostrar D-Pad Táctil"
+            >
+              <div className="w-4 h-4 rounded-full bg-slate-900 border border-sky-400 flex items-center justify-center text-[9px]">
+                💧
+              </div>
+              <div className="flex gap-0.5 mt-0.5">
+                <span className="w-1.5 h-1 bg-emerald-400 border border-black" />
+                <span className="w-1.5 h-1 bg-emerald-400 border border-black" />
+                <span className="w-1.5 h-1 bg-zinc-700 border border-black" />
+              </div>
+            </button>
+
+            <div className="flex flex-col bg-zinc-950/85 border border-yellow-500/70 rounded px-1.5 py-0.5 shadow">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-pixel text-[8px] text-yellow-300">NV.{commanderLevel}</span>
+                {commanderLevel < 7 && (
+                  <button
+                    onClick={() => {
+                      const sim = simRef.current;
+                      sim.commanderLevel = Math.min(7, sim.commanderLevel + 1);
+                      sim.commanderXp = 0;
+                      setCommanderLevel(sim.commanderLevel);
+                      setCommanderXp(0);
+                      soundFX.playCouragePickup();
+                      const unlockedUnit = SURVIVOR_ORDER.map((k) => SURVIVOR_CONFIGS[k]).find(
+                        (c) => c.unlockLevel === sim.commanderLevel
+                      );
+                      addFloatingText(
+                        unlockedUnit
+                          ? `¡DESBLOQUEADO: ${unlockedUnit.name.toUpperCase()}!`
+                          : `¡NIVEL ${sim.commanderLevel}!`,
+                        360,
+                        165,
+                        28,
+                        '#fde047',
+                        true
+                      );
+                      onLevelUpCommander?.(sim.commanderLevel, 0);
+                    }}
+                    className="px-1 rounded bg-emerald-600 hover:bg-emerald-500 text-[8px] font-extrabold text-white cursor-pointer"
+                    title="Subir Nivel de Comandante para desbloquear la siguiente unidad"
+                  >
+                    +NV
+                  </button>
+                )}
+              </div>
+              <div className="w-20 h-1.5 bg-zinc-800 rounded-full overflow-hidden mt-0.5 border border-black">
+                <div
+                  className="h-full bg-gradient-to-r from-sky-400 to-yellow-400 transition-all"
+                  style={{ width: `${Math.min(100, commanderXp)}%` }}
+                />
+              </div>
             </div>
-            <div className="flex gap-0.5 mt-0.5">
-              <span className="w-1.5 h-1 bg-emerald-400 border border-black" />
-              <span className="w-1.5 h-1 bg-emerald-400 border border-black" />
-              <span className="w-1.5 h-1 bg-zinc-700 border border-black" />
-            </div>
-          </button>
+          </div>
         </div>
       </div>
 
@@ -1588,10 +1733,10 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       <div className="absolute top-2 right-3 z-20 flex items-center gap-2">
         <button
           onClick={onRetreat}
-          className="px-2 py-0.5 rounded bg-zinc-900/75 hover:bg-zinc-800 border border-zinc-600 text-[10px] font-bold text-zinc-200"
+          className="px-2 py-0.5 rounded bg-zinc-900/75 hover:bg-zinc-800 border border-zinc-600 text-[10px] font-bold text-zinc-200 cursor-pointer"
           title="Volver al Mapa de Carretera"
         >
-          Mapa
+          🗺️ Mapa (12)
         </button>
 
         <div className="relative flex items-center">
@@ -1686,57 +1831,86 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       )}
 
       {/* ===================================================================== */}
-      {/* BOTTOM-CENTER FLOATING 6-SLOT SQUARE DECK (Exact match to screenshot!) */}
+      {/* BOTTOM-CENTER FLOATING SCROLLABLE 11-UNIT + BARREL TACTICAL DECK      */}
       {/* ===================================================================== */}
-      <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 z-20 flex items-end gap-1.5">
-        {SURVIVOR_ORDER.map((sType, idx) => {
+      <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 z-20 flex items-end gap-1 max-w-[98vw] overflow-x-auto px-2 py-0.5">
+        {SURVIVOR_ORDER.map((sType) => {
           const cfg = SURVIVOR_CONFIGS[sType];
+          const isUnlocked = commanderLevel >= cfg.unlockLevel;
           const cd = unitCooldowns[sType];
-          const canAfford = courage >= cfg.cost && cd <= 0;
-          const lvl = idx === 4 ? 4 : 5; // Matching levels 5, 5, 5, 5, 4 in screenshot!
+          const canAfford = isUnlocked && courage >= cfg.cost && cd <= 0;
+          const lvl = progress.unitLevels[sType] || 1;
 
           return (
             <button
               key={sType}
-              onClick={() => deploySurvivor(sType)}
-              disabled={!canAfford}
-              className={`relative w-12 h-12 sm:w-14 sm:h-14 rounded-xs transition select-none flex flex-col justify-between p-1 ${
-                canAfford
-                  ? 'bg-[#3b3829]/85 border border-[#787459] shadow-lg cursor-pointer hover:scale-105'
+              onClick={() => {
+                if (isUnlocked) {
+                  deploySurvivor(sType);
+                } else {
+                  addFloatingText(
+                    `DESBLOQUEA EN NIVEL ${cfg.unlockLevel}`,
+                    360,
+                    210,
+                    18,
+                    '#fde047',
+                    true
+                  );
+                }
+              }}
+              disabled={isUnlocked && !canAfford}
+              className={`shrink-0 relative w-11 h-12 sm:w-12 sm:h-13 rounded-xs transition select-none flex flex-col justify-between p-1 ${
+                !isUnlocked
+                  ? 'bg-zinc-950/85 border border-zinc-800 opacity-75 cursor-pointer'
+                  : canAfford
+                  ? 'bg-[#3b3829]/90 border border-[#96916f] shadow-lg cursor-pointer hover:scale-105'
                   : 'bg-[#2a271d]/80 border border-[#3d392b] cursor-not-allowed'
               }`}
-              title={`${cfg.name} (Coste: ${cfg.cost} Valor)`}
+              title={
+                isUnlocked
+                  ? `${cfg.name} (${cfg.roleTitle} — Coste: ${cfg.cost} Valor)`
+                  : `🔒 ${cfg.name}: Se desbloquea al subir a Nivel ${cfg.unlockLevel}`
+              }
             >
               {/* Cooldown Fill Sweep */}
-              {cd > 0 && (
+              {isUnlocked && cd > 0 && (
                 <div
                   className="absolute bottom-0 left-0 right-0 bg-black/60 pointer-events-none"
                   style={{ height: `${Math.min(100, (cd / cfg.prepTime) * 100)}%` }}
                 />
               )}
 
-              {/* Top-Right Level Badge ("5") */}
-              <div className="w-full flex justify-end z-10">
-                <span
-                  className={`px-1 text-[9px] font-extrabold leading-tight rounded-xs ${
-                    canAfford
-                      ? 'bg-[#2b6cb0] text-white border border-black'
-                      : 'text-[#8c856b]'
-                  }`}
-                >
-                  {lvl}
+              {/* Top-Right Level or Unlock Badge */}
+              <div className="w-full flex justify-between items-center z-10">
+                <span className="text-[7px] font-bold text-zinc-300 truncate max-w-[28px]">
+                  {cfg.name.split(' ')[0]}
                 </span>
+                {isUnlocked ? (
+                  <span
+                    className={`px-1 text-[8px] font-extrabold leading-tight rounded-xs ${
+                      canAfford
+                        ? 'bg-[#2b6cb0] text-white border border-black'
+                        : 'text-[#8c856b]'
+                    }`}
+                  >
+                    {lvl}
+                  </span>
+                ) : (
+                  <span className="px-0.5 text-[7px] font-extrabold bg-amber-950 text-amber-300 border border-amber-700 rounded-xs">
+                    🔒{cfg.unlockLevel}
+                  </span>
+                )}
               </div>
 
-              {/* Center Pixel Portrait (Bright when ready, dark silhouette when unavailable!) */}
+              {/* Center Pixel Portrait */}
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                 <UnitSlotMiniPortrait type={sType} active={canAfford} />
               </div>
 
-              {/* Bottom Cost Row: Blue Water Drop + Cost ("15" / "20") */}
+              {/* Bottom Cost Row: Blue Water Drop + Cost */}
               <div className="w-full flex items-center justify-between z-10 mt-auto">
                 <span
-                  className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[8px] ${
+                  className={`w-3 h-3 rounded-full flex items-center justify-center text-[7px] ${
                     canAfford
                       ? 'bg-slate-900 border border-sky-400 text-sky-300'
                       : 'bg-zinc-900/70 text-zinc-600'
@@ -1745,8 +1919,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   💧
                 </span>
                 <span
-                  className={`font-tactical font-extrabold text-xs leading-none ${
-                    canAfford ? 'text-white' : 'text-[#524e3c]'
+                  className={`font-tactical font-extrabold text-[11px] leading-none ${
+                    canAfford ? 'text-white' : 'text-[#6e6952]'
                   }`}
                   style={
                     canAfford
@@ -1761,7 +1935,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           );
         })}
 
-        {/* SLOT 6: TACTICAL BARREL SLOT (Curved Green Drop Arrow + Red "6" Cost like screenshot!) */}
+        {/* TACTICAL BARREL SLOT (Curved Green Drop Arrow + Red "6" Cost) */}
         {(() => {
           const rCost = getEffectiveRageCost('blue_barrel');
           const cd = itemCooldowns.blue_barrel;
@@ -1778,11 +1952,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               }}
               onClick={selectDraggingBarrel}
               disabled={!canAfford}
-              className={`relative w-12 h-12 sm:w-14 sm:h-14 rounded-xs transition select-none flex flex-col justify-between p-1 ${
+              className={`shrink-0 relative w-11 h-12 sm:w-12 sm:h-13 rounded-xs transition select-none flex flex-col justify-between p-1 ${
                 isSelected
                   ? 'bg-emerald-950/90 border-2 border-lime-400 scale-105'
                   : canAfford
-                  ? 'bg-[#3b3829]/85 border border-[#787459] cursor-grab hover:scale-105'
+                  ? 'bg-[#3b3829]/90 border border-[#96916f] cursor-grab hover:scale-105'
                   : 'bg-[#2a271d]/80 border border-[#3d392b] cursor-not-allowed'
               }`}
               title="Arrastra o toca para lanzar Barril (6 Furia)"
@@ -1798,13 +1972,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               </div>
 
               <div className="w-full flex items-center justify-between z-10 mt-auto">
-                {/* Curved drop arrow onto green target circle (matching slot 6 in screenshot!) */}
                 <div className="flex flex-col items-center">
                   <span className="text-[9px] text-zinc-300 leading-none">⤵</span>
                   <span className="w-3 h-1 rounded-full bg-lime-500 border border-black" />
                 </div>
                 <span
-                  className={`font-tactical font-extrabold text-xs leading-none ${
+                  className={`font-tactical font-extrabold text-[11px] leading-none ${
                     canAfford ? 'text-[#ff5a5a]' : 'text-[#572822]'
                   }`}
                   style={{ textShadow: '1px 1px 0 #000' }}
@@ -1851,7 +2024,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   }
                   className="w-full py-2.5 rounded-lg bg-yellow-500 hover:bg-yellow-400 text-zinc-950 font-extrabold text-xs uppercase tracking-wider"
                 >
-                  Continuar →
+                  Ir al Mapa Grande →
                 </button>
               </>
             ) : (
@@ -1876,11 +2049,52 @@ function barHpDisplay(hp: number) {
   return Math.max(0, Math.round(hp));
 }
 
-// Detailed Pixel-Art Portrait for the 6 Bottom Deck Slots
+// Detailed Pixel-Art Portrait for all 11 Units in the Bottom Deck
 const UnitSlotMiniPortrait: React.FC<{ type: SurvivorType; active: boolean }> = ({
   type,
   active,
 }) => {
+  const cls = `w-6 h-9 sm:w-7 sm:h-10 ${active ? 'opacity-100' : 'brightness-0 opacity-45'}`;
+
+  if (type === 'hound') {
+    return (
+      <svg viewBox="0 0 16 20" className={cls} style={{ shapeRendering: 'crispEdges' }}>
+        <rect x="2" y="9" width="11" height="5" fill="#78350f" />
+        <rect x="10" y="6" width="4" height="4" fill="#9a3412" />
+        <rect x="11" y="4" width="1" height="2" fill="#451a03" />
+        <rect x="13" y="4" width="1" height="2" fill="#451a03" />
+        <rect x="9" y="9" width="2" height="4" fill="#dc2626" />
+        <rect x="3" y="14" width="2" height="4" fill="#451a03" />
+        <rect x="10" y="14" width="2" height="4" fill="#451a03" />
+      </svg>
+    );
+  }
+
+  if (type === 'turret') {
+    return (
+      <svg viewBox="0 0 16 20" className={cls} style={{ shapeRendering: 'crispEdges' }}>
+        <rect x="4" y="5" width="7" height="5" fill="#334155" />
+        <rect x="9" y="6" width="6" height="3" fill="#94a3b8" />
+        <rect x="5" y="6" width="3" height="2" fill="#facc15" />
+        <rect x="6" y="10" width="3" height="4" fill="#1e293b" />
+        <rect x="3" y="14" width="3" height="4" fill="#475569" />
+        <rect x="9" y="14" width="3" height="4" fill="#475569" />
+      </svg>
+    );
+  }
+
+  if (type === 'drone') {
+    return (
+      <svg viewBox="0 0 16 20" className={cls} style={{ shapeRendering: 'crispEdges' }}>
+        <rect x="1" y="4" width="5" height="1" fill="#e2e8f0" />
+        <rect x="10" y="4" width="5" height="1" fill="#e2e8f0" />
+        <rect x="3" y="6" width="10" height="4" fill="#334155" />
+        <rect x="9" y="7" width="3" height="2" fill="#ef4444" />
+        <rect x="5" y="10" width="6" height="3" fill="#1e293b" />
+      </svg>
+    );
+  }
+
   const hatColor =
     type === 'redneck'
       ? '#0284c7'
@@ -1890,6 +2104,12 @@ const UnitSlotMiniPortrait: React.FC<{ type: SurvivorType; active: boolean }> = 
       ? '#eab308'
       : type === 'policeman'
       ? '#1e3a8a'
+      : type === 'sniper'
+      ? '#b91c1c'
+      : type === 'flamethrower'
+      ? '#ea580c'
+      : type === 'juggernaut'
+      ? '#09090b'
       : '#334155';
 
   const shirtColor =
@@ -1901,41 +2121,37 @@ const UnitSlotMiniPortrait: React.FC<{ type: SurvivorType; active: boolean }> = 
       ? '#cbd5e1'
       : type === 'policeman'
       ? '#172554'
+      : type === 'sniper'
+      ? '#3f3f46'
+      : type === 'flamethrower'
+      ? '#c2410c'
+      : type === 'juggernaut'
+      ? '#1e293b'
       : '#0369a1';
 
   const overallsColor =
     type === 'redneck' || type === 'farmer'
       ? '#1d4ed8'
-      : type === 'builder'
+      : type === 'builder' || type === 'juggernaut'
       ? '#facc15'
+      : type === 'sniper'
+      ? '#991b1b'
       : '#09090b';
 
   return (
-    <svg
-      viewBox="0 0 16 24"
-      className={`w-7 h-10 sm:w-8 sm:h-11 ${
-        active ? 'opacity-100' : 'brightness-0 opacity-45'
-      }`}
-      style={{ shapeRendering: 'crispEdges' }}
-    >
-      {/* 1px Black Outline Silhouette */}
+    <svg viewBox="0 0 16 24" className={cls} style={{ shapeRendering: 'crispEdges' }}>
       <rect x="4" y="1" width="7" height="4" fill="#14110f" />
       <rect x="3" y="4" width="9" height="6" fill="#14110f" />
       <rect x="2" y="10" width="10" height="8" fill="#14110f" />
       <rect x="3" y="18" width="8" height="5" fill="#14110f" />
-      {/* Hat / Helmet */}
       <rect x="5" y="2" width="5" height="2" fill={hatColor} />
       <rect x="4" y="3" width="8" height="1" fill={hatColor} />
-      {/* Face & Eyes */}
       <rect x="4" y="4" width="6" height="5" fill="#f5b882" />
       <rect x="8" y="5" width="1" height="2" fill="#18181b" />
-      {/* Torso & Overalls */}
       <rect x="3" y="10" width="8" height="7" fill={shirtColor} />
       <rect x="4" y="12" width="6" height="5" fill={overallsColor} />
-      {/* Slender Legs */}
       <rect x="4" y="18" width="2" height="4" fill="#1e293b" />
       <rect x="8" y="18" width="2" height="4" fill="#1e293b" />
-      {/* Weapon Silhouette on Right */}
       <rect x="11" y="8" width="2" height="9" fill="#14110f" />
       <rect x="11" y="9" width="1" height="7" fill="#94a3b8" />
     </svg>

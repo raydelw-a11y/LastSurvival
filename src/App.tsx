@@ -6,18 +6,19 @@ import { BattleArena } from './components/BattleArena';
 import { soundFX } from './engine/SoundFX';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '7:16 AM - 11/09/2026';
+const FALLBACK_TIMESTAMP = '7:29 AM - 11/09/2026';
 export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 
-const STORAGE_KEY = 'last_survival_dead_ahead_v2';
+const STORAGE_KEY = 'last_survival_dead_ahead_v3';
 
 const INITIAL_PROGRESS: PlayerProgress = {
-  coins: 143,
+  coins: 195,
   fuel: 20,
   maxFuel: 20,
   supplies: 3,
   busLevel: 1,
+  commanderXp: 0,
   busHpBonus: 0,
   billDamageBonus: 0,
   spikedBumper: false,
@@ -26,11 +27,17 @@ const INITIAL_PROGRESS: PlayerProgress = {
     redneck: 1,
     farmer: 1,
     builder: 1,
-    policeman: 1,
     mechanic: 1,
+    hound: 1,
+    policeman: 1,
+    sniper: 1,
+    flamethrower: 1,
+    turret: 1,
+    drone: 1,
+    juggernaut: 1,
   },
   missionStars: {},
-  unlockedMissions: [1, 2],
+  unlockedMissions: [1, 2, 3],
   discoveredCaches: [],
 };
 
@@ -165,10 +172,21 @@ export function App() {
     }));
   };
 
-  const handleUpgradeBusStat = (kind: 'hp' | 'bill' | 'bumper' | 'armor', cost: number) => {
+  const handleUpgradeBusStat = (
+    kind: 'hp' | 'bill' | 'bumper' | 'armor' | 'commander_level',
+    cost: number
+  ) => {
     if (progress.coins < cost) return;
     soundFX.playCouragePickup();
     setProgress((prev) => {
+      if (kind === 'commander_level') {
+        return {
+          ...prev,
+          coins: prev.coins - cost,
+          busLevel: Math.min(10, (prev.busLevel || 1) + 1),
+          commanderXp: 0,
+        };
+      }
       if (kind === 'hp') {
         return { ...prev, coins: prev.coins - cost, busHpBonus: prev.busHpBonus + 50 };
       }
@@ -185,6 +203,14 @@ export function App() {
         busHpBonus: prev.busHpBonus + 80,
       };
     });
+  };
+
+  const handleLevelUpCommanderLive = (newLevel: number, newXp: number) => {
+    setProgress((prev) => ({
+      ...prev,
+      busLevel: Math.max(prev.busLevel || 1, newLevel),
+      commanderXp: newXp,
+    }));
   };
 
   const handleCollectCache = (cacheId: string, coins: number, fuel: number) => {
@@ -212,6 +238,7 @@ export function App() {
           progress={progress}
           onVictory={handleVictory}
           onRetreat={() => setActiveBattleMission(null)}
+          onLevelUpCommander={handleLevelUpCommanderLive}
         />
       ) : (
         <RoadMapHub
