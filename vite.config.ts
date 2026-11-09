@@ -17,6 +17,7 @@ const dateStr = now.toLocaleDateString('en-US', {
 const buildTimestamp = `${timeStr} - ${dateStr}`;
 
 export default defineConfig({
+  base: './',
   plugins: [react()],
   define: {
     __BUILD_TIMESTAMP__: JSON.stringify(buildTimestamp),

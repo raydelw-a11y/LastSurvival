@@ -5,7 +5,7 @@ import { RoadMapHub } from './components/RoadMapHub';
 import { BattleArena } from './components/BattleArena';
 import { soundFX } from './engine/SoundFX';
 
-const FALLBACK_TIMESTAMP = '1:48 AM - 11/09/2026';
+const FALLBACK_TIMESTAMP = '6:36 AM - 11/09/2026';
 const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 

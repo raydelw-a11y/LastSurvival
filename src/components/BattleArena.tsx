@@ -1806,11 +1806,67 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           <div className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 bg-amber-950/95 border-2 border-amber-400 px-4 py-1.5 rounded-full text-xs font-bold text-amber-200 shadow-lg flex items-center gap-2">
             <Crosshair className="w-4 h-4 text-amber-400 animate-spin" />
             <span>
-              Haz clic o suelta en cualquier punto de la carretera para lanzar{' '}
+              Toca cualquier punto de la carretera para lanzar{' '}
               <strong className="text-white">{TACTICAL_ITEM_CONFIGS[draggingItem].name}</strong>
             </span>
           </div>
         )}
+
+        {/* MOBILE / TOUCH ON-SCREEN WASD D-PAD */}
+        <div className="absolute bottom-3 left-3 z-30 grid grid-cols-3 gap-1 w-28 h-28 opacity-80 hover:opacity-100 select-none touch-none">
+          <div />
+          <button
+            type="button"
+            onPointerDown={() => simRef.current.keysPressed.add('w')}
+            onPointerUp={() => simRef.current.keysPressed.delete('w')}
+            onPointerLeave={() => simRef.current.keysPressed.delete('w')}
+            onPointerCancel={() => simRef.current.keysPressed.delete('w')}
+            className="bg-zinc-900/90 active:bg-emerald-600 border border-zinc-600 rounded-lg flex items-center justify-center text-white font-bold text-xs shadow-md"
+          >
+            ▲
+          </button>
+          <div />
+          <button
+            type="button"
+            onPointerDown={() => simRef.current.keysPressed.add('a')}
+            onPointerUp={() => simRef.current.keysPressed.delete('a')}
+            onPointerLeave={() => simRef.current.keysPressed.delete('a')}
+            onPointerCancel={() => simRef.current.keysPressed.delete('a')}
+            className="bg-zinc-900/90 active:bg-emerald-600 border border-zinc-600 rounded-lg flex items-center justify-center text-white font-bold text-xs shadow-md"
+          >
+            ◀
+          </button>
+          <button
+            type="button"
+            onClick={cycleSelectedSurvivor}
+            className="bg-emerald-950/90 active:bg-emerald-700 border border-emerald-500 rounded-lg flex items-center justify-center text-emerald-300 font-bold text-[8px] shadow-md"
+            title="Cambiar superviviente controlado"
+          >
+            TAB
+          </button>
+          <button
+            type="button"
+            onPointerDown={() => simRef.current.keysPressed.add('d')}
+            onPointerUp={() => simRef.current.keysPressed.delete('d')}
+            onPointerLeave={() => simRef.current.keysPressed.delete('d')}
+            onPointerCancel={() => simRef.current.keysPressed.delete('d')}
+            className="bg-zinc-900/90 active:bg-emerald-600 border border-zinc-600 rounded-lg flex items-center justify-center text-white font-bold text-xs shadow-md"
+          >
+            ▶
+          </button>
+          <div />
+          <button
+            type="button"
+            onPointerDown={() => simRef.current.keysPressed.add('s')}
+            onPointerUp={() => simRef.current.keysPressed.delete('s')}
+            onPointerLeave={() => simRef.current.keysPressed.delete('s')}
+            onPointerCancel={() => simRef.current.keysPressed.delete('s')}
+            className="bg-zinc-900/90 active:bg-emerald-600 border border-zinc-600 rounded-lg flex items-center justify-center text-white font-bold text-xs shadow-md"
+          >
+            ▼
+          </button>
+          <div />
+        </div>
       </div>
 
       {/* BOTTOM TACTICAL CARD DECK (Sheriff Bill Barrage + 5 Survivors + 3 Rage Tactical Items) */}
