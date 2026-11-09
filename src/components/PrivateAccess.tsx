@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Lock, ShieldAlert, Skull } from 'lucide-react';
+import { soundFX } from '../engine/SoundFX';
 
 interface PrivateAccessProps {
   onUnlock: () => void;
@@ -24,6 +25,8 @@ export const PrivateAccess: React.FC<PrivateAccessProps> = ({ onUnlock, buildTim
       clean.length >= 1
     ) {
       setError(false);
+      soundFX.unlockAudio();
+      soundFX.playCouragePickup();
       onUnlock();
     } else {
       setError(true);
@@ -33,14 +36,9 @@ export const PrivateAccess: React.FC<PrivateAccessProps> = ({ onUnlock, buildTim
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      const clean = password.trim();
-      if (clean.length >= 1) {
-        setError(false);
-        onUnlock();
-      } else {
-        // Also allow quick Enter if user presses Enter directly
-        onUnlock();
-      }
+      soundFX.unlockAudio();
+      soundFX.playCouragePickup();
+      onUnlock();
     }
   };
 

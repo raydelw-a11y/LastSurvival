@@ -1440,14 +1440,36 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       {/* TOP-LEFT FLOATING HUD: Pause "||", Courage (16), Rage (4) & Water Pips */}
       {/* ===================================================================== */}
       <div className="absolute top-1.5 left-3 z-20 flex items-start gap-1.5">
-        {/* White Pause Icon "||" */}
-        <button
-          onClick={() => setPaused((p) => !p)}
-          className="mt-0.5 text-white/90 hover:text-white font-pixel text-xs drop-shadow-[0_1px_1px_rgba(0,0,0,0.9)] px-1"
-          title="Pausar / Menú"
-        >
-          {paused ? '▶' : '||'}
-        </button>
+        <div className="flex flex-col items-center gap-1">
+          {/* White Pause Icon "||" */}
+          <button
+            onClick={() => {
+              soundFX.unlockAudio();
+              setPaused((p) => !p);
+            }}
+            className="mt-0.5 text-white/90 hover:text-white font-pixel text-xs drop-shadow-[0_1px_1px_rgba(0,0,0,0.9)] px-1"
+            title="Pausar / Menú"
+          >
+            {paused ? '▶' : '||'}
+          </button>
+
+          {/* Quick Sound Activate/Mute Toggle */}
+          <button
+            onClick={() => {
+              if (soundFX.muted) {
+                soundFX.muted = false;
+                soundFX.unlockAudio();
+                soundFX.playCouragePickup();
+              } else {
+                soundFX.muted = true;
+              }
+            }}
+            className="text-xs px-1 drop-shadow-[0_1px_1px_rgba(0,0,0,0.9)]"
+            title="Activar / Silenciar Sonido"
+          >
+            🔊
+          </button>
+        </div>
 
         <div className="flex flex-col gap-1.5">
           {/* Blue Courage Bar (16) */}
