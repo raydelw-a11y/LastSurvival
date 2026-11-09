@@ -7,16 +7,42 @@ class SoundSystem {
   private bgmInterval: number | null = null;
   private bgmStep: number = 0;
   public muted: boolean = false;
+  public appPaused: boolean = false;
 
   constructor() {
     if (typeof window !== 'undefined') {
       const unlockEvents = ['touchstart', 'touchend', 'pointerdown', 'mousedown', 'click', 'keydown'];
       const handleGesture = () => {
-        this.unlockAudio();
+        if (!this.appPaused) {
+          this.unlockAudio();
+        }
       };
       unlockEvents.forEach((evt) => {
         window.addEventListener(evt, handleGesture, { passive: true, capture: true });
       });
+
+      const handleHide = () => {
+        if (document.visibilityState === 'hidden') {
+          this.suspendForBackground();
+        }
+      };
+      document.addEventListener('visibilitychange', handleHide);
+      window.addEventListener('blur', () => this.suspendForBackground());
+      window.addEventListener('pagehide', () => this.suspendForBackground());
+    }
+  }
+
+  public suspendForBackground() {
+    this.appPaused = true;
+    if (this.ctx && this.ctx.state === 'running') {
+      this.ctx.suspend().catch(() => {});
+    }
+  }
+
+  public resumeFromBackground() {
+    this.appPaused = false;
+    if (!this.muted && this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume().catch(() => {});
     }
   }
 
@@ -71,7 +97,8 @@ class SoundSystem {
   }
 
   private getContext(): AudioContext | null {
-    if (this.muted) return null;
+    if (this.muted || this.appPaused) return null;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return null;
     if (!this.ctx && typeof window !== 'undefined') {
       const AudioCtx =
         window.AudioContext ||
@@ -91,7 +118,7 @@ class SoundSystem {
         compressor.connect(this.ctx.destination);
       }
     }
-    if (this.ctx && this.ctx.state === 'suspended') {
+    if (this.ctx && this.ctx.state === 'suspended' && !this.appPaused) {
       this.ctx.resume().catch(() => {});
     }
     return this.ctx;
@@ -109,7 +136,8 @@ class SoundSystem {
     const bassNotes = [110, 110, 130.81, 110, 146.83, 130.81, 98, 98];
 
     this.bgmInterval = window.setInterval(() => {
-      if (this.muted) return;
+      if (this.muted || this.appPaused) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       const ctx = this.getContext();
       const dest = this.getDest();
       if (!ctx || !dest || ctx.state !== 'running') return;

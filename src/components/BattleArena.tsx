@@ -127,11 +127,51 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   const [timeRemaining, setTimeRemaining] = useState<number>(145);
   const [hordeTriggered, setHordeTriggered] = useState<boolean>(false);
   const [paused, setPaused] = useState<boolean>(false);
+  const pausedRef = useRef<boolean>(false);
   const [draggingItem, setDraggingItem] = useState<TacticalItemType | null>(null);
   const [battleResult, setBattleResult] = useState<'none' | 'victory' | 'defeat'>('none');
   const [starsEarned, setStarsEarned] = useState<number>(3);
   const [zombiesKilledCount, setZombiesKilledCount] = useState<number>(0);
   const [showDpad, setShowDpad] = useState<boolean>(false);
+
+  const pauseBattle = useCallback(() => {
+    if (simRef.current.phase === 'victory' || simRef.current.phase === 'defeat') return;
+    pausedRef.current = true;
+    setPaused(true);
+    simRef.current.keysPressed.clear();
+    soundFX.suspendForBackground();
+  }, []);
+
+  const resumeBattle = useCallback(() => {
+    pausedRef.current = false;
+    setPaused(false);
+    soundFX.resumeFromBackground();
+    soundFX.unlockAudio();
+  }, []);
+
+  // Automatically pause the battle & audio if the user leaves the app, switches tabs, or locks the screen
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden' || document.hidden) {
+        pauseBattle();
+      }
+    };
+    const handleWindowBlur = () => {
+      pauseBattle();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    document.addEventListener('freeze', handleWindowBlur);
+    window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('pagehide', handleWindowBlur);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      document.removeEventListener('freeze', handleWindowBlur);
+      window.removeEventListener('blur', handleWindowBlur);
+      window.removeEventListener('pagehide', handleWindowBlur);
+    };
+  }, [pauseBattle]);
 
   // Mutable Simulation Ref
   const simRef = useRef({
@@ -343,7 +383,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   const deploySurvivor = useCallback(
     (type: SurvivorType, freeInitial = false, customX?: number, customY?: number) => {
       const sim = simRef.current;
-      if (sim.phase !== 'combat' || paused) return;
+      if (sim.phase !== 'combat' || pausedRef.current) return;
       const cfg = SURVIVOR_CONFIGS[type];
       if (!freeInitial && sim.commanderLevel < cfg.unlockLevel) return;
       if (!freeInitial && (sim.courage < cfg.cost || sim.unitCooldowns[type] > 0)) return;
@@ -433,7 +473,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
       sim.units.push(newUnit);
     },
-    [addFloatingText, paused, progress.unitLevels, scareCrows]
+    [addFloatingText, progress.unitLevels, scareCrows]
   );
 
   const triggerExplosion = useCallback(
@@ -501,7 +541,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   const deployTacticalItem = useCallback(
     (type: TacticalItemType, targetX: number, targetY: number) => {
       const sim = simRef.current;
-      if (sim.phase !== 'combat' || paused) return;
+      if (sim.phase !== 'combat' || pausedRef.current) return;
       const cfg = TACTICAL_ITEM_CONFIGS[type];
       const rCost = getEffectiveRageCost(type);
       if (sim.rage < rCost || sim.itemCooldowns[type] > 0) return;
@@ -548,13 +588,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         whiteFlashTimer: 0,
       });
     },
-    [addFloatingText, paused, spawnBloodParticles]
+    [addFloatingText, spawnBloodParticles]
   );
 
   // Activate Top-Center Fury Bottle Buff (gives golden halo to all units + Bill Rifle Barrage)
   const triggerFuryWhiskeyBuff = useCallback(() => {
     const sim = simRef.current;
-    if (sim.phase !== 'combat' || paused) return;
+    if (sim.phase !== 'combat' || pausedRef.current) return;
     if (furyBuffCount > 0) {
       setFuryBuffCount((c) => Math.max(0, c - 1));
     }
@@ -566,7 +606,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     });
     soundFX.playCouragePickup();
     addFloatingText('¡FURIA ACTIVADA!', 280, 195, 25, '#fde047', true);
-  }, [addFloatingText, furyBuffCount, paused]);
+  }, [addFloatingText, furyBuffCount]);
 
   const cycleSelectedSurvivor = useCallback(() => {
     const sim = simRef.current;
@@ -700,7 +740,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       lastTime = now;
       const sim = simRef.current;
 
-      if (!paused && sim.phase !== 'victory' && sim.phase !== 'defeat') {
+      if (!pausedRef.current && sim.phase !== 'victory' && sim.phase !== 'defeat') {
         let dt = rawDt;
         if (sim.hitStopTimer > 0) {
           sim.hitStopTimer -= rawDt;
@@ -1528,14 +1568,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     return () => cancelAnimationFrame(animationFrameId);
   }, [
     addFloatingText,
-    deploySurvivor,
     initDecalCanvas,
     mission.barricadeHp,
     mission.biome,
     mission.skeletonAmbush,
     mission.waveInterval,
     mission.zombiePool,
-    paused,
     progress.billDamageBonus,
     progress.spikedBumper,
     progress.weldedArmor,
@@ -1582,11 +1620,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           {/* White Pause Icon "||" */}
           <button
             onClick={() => {
-              soundFX.unlockAudio();
-              setPaused((p) => !p);
+              if (paused) {
+                resumeBattle();
+              } else {
+                pauseBattle();
+              }
             }}
-            className="mt-0.5 text-white/90 hover:text-white font-pixel text-xs drop-shadow-[0_1px_1px_rgba(0,0,0,0.9)] px-1"
-            title="Pausar / Menú"
+            className="mt-0.5 text-white/90 hover:text-white font-pixel text-xs drop-shadow-[0_1px_1px_rgba(0,0,0,0.9)] px-1 cursor-pointer"
+            title="Pausar / Reanudar Combate"
           >
             {paused ? '▶' : '||'}
           </button>
@@ -1989,6 +2030,37 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           );
         })()}
       </div>
+
+      {/* PAUSE MODAL OVERLAY (Auto-triggered when leaving app / switching tabs / pressing ||) */}
+      {paused && battleResult === 'none' && (
+        <div className="absolute inset-0 z-40 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="max-w-xs w-full bg-zinc-900/95 border-2 border-amber-500 rounded-xl p-5 text-center shadow-2xl">
+            <div className="font-pixel text-sm sm:text-base text-amber-400 mb-1.5">
+              ⏸ JUEGO EN PAUSA
+            </div>
+            <p className="text-[11px] text-zinc-300 mb-4 leading-relaxed">
+              Combate y sonido en espera segura. Toca reanudar cuando estés listo para continuar defendiendo el autobús.
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={resumeBattle}
+                className="w-full py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-extrabold text-xs uppercase tracking-wider cursor-pointer shadow-lg"
+              >
+                ▶ Reanudar Combate
+              </button>
+              <button
+                onClick={() => {
+                  soundFX.resumeFromBackground();
+                  onRetreat();
+                }}
+                className="w-full py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 text-zinc-200 font-bold text-xs cursor-pointer"
+              >
+                🗺️ Salir al Mapa de Campaña
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* VICTORY OR DEFEAT MODAL OVERLAY */}
       {battleResult !== 'none' && (

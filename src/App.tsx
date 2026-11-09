@@ -6,7 +6,7 @@ import { BattleArena } from './components/BattleArena';
 import { soundFX } from './engine/SoundFX';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '7:29 AM - 11/09/2026';
+const FALLBACK_TIMESTAMP = '7:35 AM - 11/09/2026';
 export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 
@@ -121,6 +121,7 @@ export function App() {
   }
 
   const handleLaunchMission = (mission: MissionNode) => {
+    soundFX.resumeFromBackground();
     soundFX.playUnitSpawn();
     setProgress((prev) => ({
       ...prev,
