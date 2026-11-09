@@ -638,22 +638,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   useEffect(() => {
     initDecalCanvas();
 
-    // Seed initial scene to look immediately like the action-packed screenshot!
+    // Start cleanly with NO player units outside the bus — only zombies near the right barricade!
     simRef.current.units = [];
-    deploySurvivor('builder', true, 212, 242);
-    deploySurvivor('redneck', true, 272, 236);
-    // Pre-stamp blood pool in center road like screenshot
-    stampBloodDecal(295, 250, 22, '#991b1b');
-    stampBloodDecal(200, 246, 14, '#991b1b');
-    // Spawn cluster of Level [7] zombies + Giant Red Bloated zombie on right
-    for (let i = 0; i < 8; i++) {
-      spawnZombie(
-        i % 3 === 0 ? 'runner' : 'walker',
-        345 + i * 19 + (Math.random() - 0.5) * 8,
-        215 + (i % 4) * 16
-      );
-    }
-    spawnZombie('bloated', 492, 238);
+    spawnZombie('walker', 465, 224);
+    spawnZombie('walker', 505, 258);
+    spawnZombie('bloated', 522, 238);
 
     let animationFrameId: number;
     let lastTime = performance.now();
@@ -1839,48 +1828,64 @@ function barHpDisplay(hp: number) {
   return Math.max(0, Math.round(hp));
 }
 
-// Mini Pixel Portrait for the 6 Bottom Deck Slots (Full color when ready, dark silhouette when unavailable)
+// Detailed Pixel-Art Portrait for the 6 Bottom Deck Slots
 const UnitSlotMiniPortrait: React.FC<{ type: SurvivorType; active: boolean }> = ({
   type,
   active,
 }) => {
-  if (!active) {
-    // Dark silhouette matching slots 2, 3, 4, 5 in screenshot
-    return (
-      <div className="flex flex-col items-center opacity-70 mt-1">
-        <div className="w-3.5 h-3.5 rounded-t-sm bg-[#1f1d14]" />
-        <div className="w-4 h-5 bg-[#1f1d14] -mt-0.5" />
-      </div>
-    );
-  }
-
   const hatColor =
     type === 'redneck'
-      ? 'bg-sky-500'
+      ? '#0284c7'
       : type === 'builder'
-      ? 'bg-yellow-400'
+      ? '#facc15'
       : type === 'farmer'
-      ? 'bg-amber-500'
+      ? '#eab308'
       : type === 'policeman'
-      ? 'bg-blue-900'
-      : 'bg-slate-600';
+      ? '#1e3a8a'
+      : '#334155';
 
-  const bodyColor =
+  const shirtColor =
     type === 'redneck'
-      ? 'bg-[#f5b882]'
+      ? '#f5b882'
       : type === 'builder'
-      ? 'bg-orange-500'
+      ? '#6b653b'
       : type === 'farmer'
-      ? 'bg-stone-300'
+      ? '#cbd5e1'
       : type === 'policeman'
-      ? 'bg-blue-800'
-      : 'bg-sky-700';
+      ? '#172554'
+      : '#0369a1';
+
+  const overallsColor =
+    type === 'redneck' || type === 'farmer'
+      ? '#1d4ed8'
+      : type === 'builder'
+      ? '#facc15'
+      : '#09090b';
 
   return (
-    <div className="flex flex-col items-center mt-0.5 drop-shadow-[0_1px_1px_rgba(0,0,0,0.95)]">
-      <div className={`w-4 h-1.5 ${hatColor} border border-black`} />
-      <div className="w-3.5 h-3 bg-[#f5b882] border-x border-black" />
-      <div className={`w-4 h-4 ${bodyColor} border border-black`} />
-    </div>
+    <svg
+      viewBox="0 0 16 18"
+      className={`w-8 h-9 sm:w-9 sm:h-10 ${
+        active ? 'opacity-100' : 'brightness-0 opacity-45'
+      }`}
+      style={{ shapeRendering: 'crispEdges' }}
+    >
+      {/* 1px Black Outline Silhouette */}
+      <rect x="4" y="1" width="8" height="4" fill="#14110f" />
+      <rect x="3" y="4" width="10" height="6" fill="#14110f" />
+      <rect x="2" y="10" width="12" height="7" fill="#14110f" />
+      {/* Hat / Helmet */}
+      <rect x="5" y="2" width="6" height="2" fill={hatColor} />
+      <rect x="4" y="3" width="9" height="1" fill={hatColor} />
+      {/* Face & Eyes */}
+      <rect x="4" y="4" width="7" height="5" fill="#f5b882" />
+      <rect x="9" y="5" width="1" height="2" fill="#18181b" />
+      {/* Torso & Overalls */}
+      <rect x="3" y="10" width="9" height="6" fill={shirtColor} />
+      <rect x="4" y="12" width="7" height="4" fill={overallsColor} />
+      {/* Weapon Silhouette on Right */}
+      <rect x="12" y="7" width="2" height="8" fill="#14110f" />
+      <rect x="12" y="8" width="1" height="6" fill="#94a3b8" />
+    </svg>
   );
 };

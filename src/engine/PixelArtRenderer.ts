@@ -117,7 +117,7 @@ function pxOutlinedRect(
   w: number,
   h: number,
   fill: string,
-  outline = '#181410'
+  outline = '#14110f'
 ) {
   const rx = Math.round(x);
   const ry = Math.round(y);
@@ -129,152 +129,384 @@ function pxOutlinedRect(
   ctx.fillRect(rx, ry, rw, rh);
 }
 
-// Draw an authentic Dead Ahead style Oil Drum ("OIL")
+// Render a 2D pixel art character matrix with horizontal flip & white hit-flash support
+function drawPixelMatrix(
+  ctx: CanvasRenderingContext2D,
+  rows: string[],
+  palette: Record<string, string>,
+  centerX: number,
+  bottomY: number,
+  facing: 1 | -1 = 1,
+  flashWhite = false
+) {
+  const h = rows.length;
+  const w = rows[0]?.length || 0;
+  const startX = Math.round(centerX - w / 2);
+  const startY = Math.round(bottomY - h);
+
+  for (let r = 0; r < h; r++) {
+    const row = rows[r];
+    for (let c = 0; c < w; c++) {
+      const ch = row[c];
+      if (ch === '.' || ch === ' ') continue;
+      const color = flashWhite ? '#ffffff' : palette[ch];
+      if (!color) continue;
+      const drawCol = facing === 1 ? c : w - 1 - c;
+      ctx.fillStyle = color;
+      ctx.fillRect(startX + drawCol, startY + r, 1, 1);
+    }
+  }
+}
+
+// ============================================================================
+// HIGH-DETAIL PIXEL ART MATRICES (16x24 Head+Torso Sprites with 1px Outlines)
+// ============================================================================
+
+const REDNECK_MATRIX = [
+  '....OOOOOO......',
+  '...ObbbbbbO.....',
+  '..ObbWWWWbbOOO..',
+  '..ObbbbbbbbbbO..',
+  '..OOssssssssO...',
+  '...OssssKsssO...',
+  '...OssssssmmO...',
+  '....OOssssOO....',
+  '...OssOOOOssO...',
+  '..OssBssssBssO..',
+  '..OssBssssBssO..',
+  '..OssBBBBBBssO..',
+  '..OshBBBBBBhsO..',
+  '...OObbbbbbOO...',
+  '....ObbbbbbO....',
+  '....ObbOObbO....',
+];
+
+const FARMER_MATRIX = [
+  '....OOOOOO......',
+  '...OyyyyyyO.....',
+  '.OOyyyyyyyyOO...',
+  'OddddddddddddO..',
+  '..OOssssssssO...',
+  '...OssssKsssO...',
+  '...OssWWWWWWo...',
+  '...OssWWWWWWo...',
+  '...OccccccccO...',
+  '..OcccBssBcccO..',
+  '..OcccBBBBcccO..',
+  '..OsshBBBBhssO..',
+  '...OObbbbbbOO...',
+  '....ObbbbbbO....',
+  '....ObbOObbO....',
+];
+
+const BUILDER_MATRIX = [
+  '....OOOOOO......',
+  '...OYYYYYYO.....',
+  '..OYYWWWWYYO....',
+  '.OddddddddddO...',
+  '..OOssssssssO...',
+  '...OssssKsssO...',
+  '...OssssssmmO...',
+  '..OOggggggggOO..',
+  '.OggggggggggggO.',
+  '.OggYYYYYYYYggO.',
+  '.OggggggggggggO.',
+  '.OsshgggggghssO.',
+  '..OOddddddddOO..',
+  '...OddddddddO...',
+  '...OddOOOOddO...',
+];
+
+const POLICEMAN_MATRIX = [
+  '....OOOOOO......',
+  '..OOuuuuuuOO....',
+  '.OuuuuuuuuuuOO..',
+  '..OOOIYIOOOO....',
+  '...OssssKKssO...',
+  '...OssssssmmO...',
+  '..OOuuuuuuuuOO..',
+  '.OuuKKKKKKKKuuO.',
+  '.OuuKKKKYKKKuuO.',
+  '.OuuKKKKKKKKuuO.',
+  '.OsshKKKKKKhssO.',
+  '..OOuuuuuuuuOO..',
+  '...OuuuuuuuuO...',
+  '...OuuOOOOuuO...',
+];
+
+const MECHANIC_MATRIX = [
+  '....OOOOOO......',
+  '...OkkkkkkO.....',
+  '..OOkkkkkkOO....',
+  '...OssssssssO...',
+  '...OssssKsssO...',
+  '...OssssmmmmO...',
+  '..OOccccccccOO..',
+  '.OccccccccccccO.',
+  '.Occcccccccccco.',
+  '.OsshccccccchsO.',
+  '..OOccccccccOO..',
+  '...OccccccccO...',
+  '...OccOOOOccO...',
+];
+
+const ZOMBIE_WALKER_MATRIX = [
+  '....OOOOOO......',
+  '...OzzzzzzO.....',
+  '..OzzhhhhzzO....',
+  '..OzzRzzzKzO....',
+  '..OzzRRRRzzO....',
+  '...OzzRRRRzO....',
+  '..OOttttttttOO..',
+  '.OzzzzttttRRttO.',
+  '.OzzzztttRRRttO.',
+  '..OOOOttttttttO.',
+  '....OttttttttO..',
+  '....OdkkkkkkdO..',
+  '....OdkkkkkkdO..',
+  '....OdkOOOOdkO..',
+];
+
+const ZOMBIE_BLOATED_MATRIX = [
+  '.....OOOOOO.....',
+  '....OzzzzzzO....',
+  '...OzzRzzzKzO...',
+  '...OzzRRRRzzO...',
+  '..OOooooooooOO..',
+  '.OooooooooooooO.',
+  'OooYYYYYYYYYYooO',
+  'OooooRRRRRRooooO',
+  'OooYYYYYYYYYYooO',
+  'OooooRRRRRRooooO',
+  'OooooooooooooooO',
+  '.OooooooooooooO.',
+  '..OOddddddddOO..',
+  '...OddOOOOddO...',
+];
+
+const BASE_PALETTE: Record<string, string> = {
+  O: '#14110f',
+  s: '#f5b882',
+  h: '#d99b66',
+  m: '#9a5b3e',
+  K: '#18181b',
+  W: '#f8fafc',
+  b: '#0284c7',
+  B: '#1d4ed8',
+  y: '#eab308',
+  Y: '#facc15',
+  d: '#57534e',
+  c: '#cbd5e1',
+  g: '#6b653b',
+  u: '#1e3a8a',
+  I: '#09090b',
+  k: '#334155',
+  z: '#7fa655',
+  R: '#b91c1c',
+  t: '#475569',
+  o: '#c2410c',
+};
+
 function renderOilDrum(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
   bodyColor = '#3f4739',
-  topColor = '#525c4b'
+  topColor = '#58634f',
+  highlightColor = '#6b7860'
 ) {
-  pxOutlinedRect(ctx, x, y, 18, 24, bodyColor);
-  pxOutlinedRect(ctx, x, y - 2, 18, 4, topColor);
-  pxRect(ctx, x, y + 7, 18, 2, '#242920');
-  pxRect(ctx, x, y + 16, 18, 2, '#242920');
-  // Small golden "OIL" mark
-  pxRect(ctx, x + 4, y + 11, 8, 3, '#a18a49');
+  const rx = Math.round(x);
+  const ry = Math.round(y);
+  // Drop shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.fillRect(rx - 2, ry + 20, 22, 5);
+
+  pxOutlinedRect(ctx, rx, ry, 18, 22, bodyColor);
+  // Cylindrical shading highlight & shadow
+  pxRect(ctx, rx + 2, ry, 4, 22, highlightColor);
+  pxRect(ctx, rx + 14, ry, 3, 22, '#232920');
+  // Top rim
+  pxOutlinedRect(ctx, rx, ry - 2, 18, 4, topColor);
+  pxRect(ctx, rx + 3, ry - 1, 8, 2, highlightColor);
+  // Horizontal ribs
+  pxRect(ctx, rx - 1, ry + 7, 20, 2, '#1c2019');
+  pxRect(ctx, rx - 1, ry + 15, 20, 2, '#1c2019');
+  // "OIL" stencil mark
+  pxRect(ctx, rx + 4, ry + 10, 8, 3, '#b59a4f');
 }
 
 export function renderBiomeBackground(
   ctx: CanvasRenderingContext2D,
   _biome: BiomeType,
-  _time: number
+  time: number
 ) {
-  // 1. Iconic Dead Ahead Yellow-Green Apocalyptic Sky (exact match to screenshot)
-  pxRect(ctx, 0, 0, LOGICAL_WIDTH, 26, '#cfd66b');
-  pxRect(ctx, 0, 26, LOGICAL_WIDTH, 22, '#dce378');
-  pxRect(ctx, 0, 48, LOGICAL_WIDTH, 24, '#e6ec87');
-  pxRect(ctx, 0, 72, LOGICAL_WIDTH, 32, '#d2da71');
+  // 1. Multi-Banded Apocalyptic Yellow-Olive Sky with Dithered Horizon
+  pxRect(ctx, 0, 0, LOGICAL_WIDTH, 22, '#c8d162');
+  pxRect(ctx, 0, 22, LOGICAL_WIDTH, 20, '#d7df71');
+  pxRect(ctx, 0, 42, LOGICAL_WIDTH, 22, '#e4eb82');
+  pxRect(ctx, 0, 64, LOGICAL_WIDTH, 34, '#eff496');
 
-  // Subtle horizontal cloud streaks in sky
-  pxRect(ctx, 60, 20, 190, 4, '#eaef96');
-  pxRect(ctx, 360, 32, 220, 5, '#eaef96');
-  pxRect(ctx, 140, 54, 280, 4, '#f1f5a6');
+  // Soft layered clouds
+  ctx.fillStyle = 'rgba(250, 253, 182, 0.65)';
+  ctx.fillRect(45, 16, 175, 5);
+  ctx.fillRect(70, 13, 110, 3);
+  ctx.fillRect(340, 28, 210, 6);
+  ctx.fillRect(370, 24, 140, 4);
+  ctx.fillRect(160, 48, 240, 4);
 
-  // 2. Dense Dark Pine Forest Horizon Line (Y: 56 to 118)
-  pxRect(ctx, 0, 96, LOGICAL_WIDTH, 24, '#2b3324');
-  for (let i = 0; i < 46; i++) {
-    const tx = i * 14 - 4;
-    const th = 26 + ((i * 19) % 24);
-    const ty = 104 - th;
-    const treeCol = i % 3 === 0 ? '#3e4a35' : i % 2 === 0 ? '#333d2b' : '#283022';
+  // 2. Distant Hazy Mountain / Treeline Silhouette
+  pxRect(ctx, 0, 88, LOGICAL_WIDTH, 28, '#3b4530');
+  for (let i = 0; i < 64; i++) {
+    const mx = i * 10;
+    const mh = 14 + ((i * 13) % 16);
+    pxRect(ctx, mx, 92 - mh, 10, mh, '#465239');
+  }
 
-    // Trunk
-    pxRect(ctx, tx + 6, ty + 6, 3, th, '#22261e');
-    // Layered pine branches
-    for (let b = 0; b < 4; b++) {
-      const bw = 6 + b * 4;
-      const by = ty + b * 6;
-      pxRect(ctx, tx + 7 - bw / 2, by, bw, 5, treeCol);
+  // 3. Detailed Layered Pine Forest (Y: 54 to 118)
+  for (let i = 0; i < 42; i++) {
+    const tx = i * 15 - 4;
+    const th = 28 + ((i * 23) % 24);
+    const ty = 108 - th;
+    const baseCol = i % 3 === 0 ? '#2f3827' : i % 2 === 0 ? '#262e20' : '#1f261a';
+    const lightCol = '#3d4933';
+
+    // Tree trunk
+    pxRect(ctx, tx + 6, ty + 6, 3, th, '#1b1f17');
+    // 5 tiers of notched pine boughs
+    for (let tier = 0; tier < 5; tier++) {
+      const bw = 4 + tier * 3.5;
+      const by = ty + tier * 5;
+      pxRect(ctx, tx + 7 - bw / 2, by, bw, 4, baseCol);
+      pxRect(ctx, tx + 7 - bw / 2, by, bw * 0.45, 2, lightCol);
     }
   }
 
-  // Dead bare tree trunks protruding in forest
-  const bareTrees = [96, 210, 395, 515];
-  bareTrees.forEach((bx) => {
-    pxRect(ctx, bx, 60, 3, 48, '#262b21');
-    pxRect(ctx, bx - 5, 68, 5, 2, '#262b21');
-    pxRect(ctx, bx + 3, 74, 5, 2, '#262b21');
+  // Dead Snag Trees sticking above canopy
+  [92, 206, 392, 512].forEach((bx) => {
+    pxRect(ctx, bx, 56, 3, 52, '#21261c');
+    pxRect(ctx, bx - 6, 66, 6, 2, '#21261c');
+    pxRect(ctx, bx + 3, 72, 6, 2, '#21261c');
+    pxRect(ctx, bx - 4, 80, 4, 2, '#21261c');
   });
 
-  // 3. Upper Olive-Brown Grassy Field (Y: 114 to 184)
-  pxRect(ctx, 0, 114, LOGICAL_WIDTH, 70, '#575233');
-  pxRect(ctx, 0, 114, LOGICAL_WIDTH, 8, '#46442b');
-  // Grass texture strokes
-  for (let gx = 8; gx < LOGICAL_WIDTH; gx += 22) {
-    pxRect(ctx, gx, 128 + ((gx * 3) % 38), 8, 2, '#444127');
-    pxRect(ctx, gx + 9, 142 + ((gx * 7) % 28), 6, 3, '#68623d');
+  // 4. Upper Olive Meadow & Tall Grass Clumps (Y: 112 to 184)
+  pxRect(ctx, 0, 112, LOGICAL_WIDTH, 72, '#575233');
+  pxRect(ctx, 0, 112, LOGICAL_WIDTH, 7, '#3f3d26');
+  pxRect(ctx, 0, 119, LOGICAL_WIDTH, 6, '#4b472c');
+
+  for (let gx = 6; gx < LOGICAL_WIDTH; gx += 16) {
+    const gy = 126 + ((gx * 7) % 46);
+    pxRect(ctx, gx, gy, 9, 2, '#454128');
+    pxRect(ctx, gx + 2, gy - 2, 5, 2, '#69633d');
   }
 
-  // Tall Wooden Tree / Utility Posts on Right (matching screenshot right side)
-  pxOutlinedRect(ctx, 430, 78, 5, 72, '#30291e');
-  pxOutlinedRect(ctx, 574, 0, 12, 192, '#2b241b');
-  pxRect(ctx, 576, 0, 4, 192, '#3d3326');
+  // Utility / Telegraph Poles on the Right
+  pxOutlinedRect(ctx, 430, 74, 5, 76, '#2d251b');
+  pxRect(ctx, 431, 74, 2, 76, '#423728');
+  pxOutlinedRect(ctx, 574, 0, 12, 192, '#261f17');
+  pxRect(ctx, 576, 0, 4, 192, '#3b3024');
+  pxRect(ctx, 582, 0, 2, 192, '#17130e');
 
-  // 4. Transition Grass Edge Above Dirt Road (Y: 180 to 192)
-  pxRect(ctx, 0, 180, LOGICAL_WIDTH, 12, '#6c653e');
-  for (let gx = 0; gx < LOGICAL_WIDTH; gx += 12) {
-    pxRect(ctx, gx, 186, 7, 6, '#575233');
-    pxRect(ctx, gx + 4, 190, 5, 4, '#7d603b');
+  // 5. Detailed Wrecked Silver/White SUV above the Road (X: 230, Y: 122)
+  renderWreckedSUV(ctx, 232, 120);
+
+  // 6. Upper Grass-to-Dirt Overhang Border (Y: 182 to 194)
+  pxRect(ctx, 0, 182, LOGICAL_WIDTH, 10, '#69623b');
+  for (let gx = 0; gx < LOGICAL_WIDTH; gx += 8) {
+    const h = 3 + ((gx * 3) % 4);
+    pxRect(ctx, gx, 189, 5, h, '#524d2e');
+    pxRect(ctx, gx + 2, 187, 4, 3, '#787045');
   }
 
-  // 5. Main Dusty Dirt / Country Road (Y: 192 to 296 - warm ochre brown like screenshot)
-  pxRect(ctx, 0, 192, LOGICAL_WIDTH, 104, '#9e7247');
-  pxRect(ctx, 0, 192, LOGICAL_WIDTH, 8, '#8c6239');
-  pxRect(ctx, 0, 286, LOGICAL_WIDTH, 10, '#855c34');
+  // 7. Textured Dirt & Gravel Country Road (Y: 192 to 296)
+  pxRect(ctx, 0, 192, LOGICAL_WIDTH, 104, '#9c7146');
+  // Upper & lower darker road wheel ruts
+  pxRect(ctx, 0, 192, LOGICAL_WIDTH, 7, '#825b35');
+  pxRect(ctx, 0, 212, LOGICAL_WIDTH, 8, '#91673e');
+  pxRect(ctx, 0, 266, LOGICAL_WIDTH, 9, '#91673e');
+  pxRect(ctx, 0, 287, LOGICAL_WIDTH, 9, '#805933');
 
-  // Road dirt patches, pebbles & ruts
-  for (let rx = 20; rx < LOGICAL_WIDTH; rx += 34) {
-    pxRect(ctx, rx, 208 + ((rx * 13) % 64), 16, 4, '#8f643b');
-    pxRect(ctx, rx + 12, 225 + ((rx * 7) % 48), 10, 3, '#ab7e52');
-    pxRect(ctx, rx + 5, 240 + ((rx * 11) % 36), 3, 2, '#5c4028');
+  // Detailed gravel stones, cracks & dust patches
+  for (let rx = 12; rx < LOGICAL_WIDTH; rx += 26) {
+    const ry = 202 + ((rx * 17) % 74);
+    pxRect(ctx, rx, ry, 14, 3, '#8a6038');
+    pxRect(ctx, rx + 3, ry + 1, 8, 2, '#ad8054');
+    pxRect(ctx, rx + 15, 210 + ((rx * 11) % 62), 3, 2, '#5c3f24');
+    pxRect(ctx, rx + 8, 235 + ((rx * 19) % 44), 2, 2, '#b88b5e');
   }
 
-  // 6. Wrecked White/Silver SUV in Upper-Middle Roadside (exact match to screenshot!)
-  const cx = 232;
-  const cy = 122;
-  // Ground shadow under wrecked SUV
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
-  ctx.fillRect(cx - 4, cy + 44, 104, 16);
-  // Tilted SUV Body
-  pxOutlinedRect(ctx, cx, cy + 16, 92, 30, '#8d949e');
-  pxRect(ctx, cx + 2, cy + 28, 88, 16, '#686e78'); // Darker lower door panel
-  // SUV Cabin Roof
-  pxOutlinedRect(ctx, cx + 6, cy, 64, 20, '#b8c0cc');
-  pxRect(ctx, cx + 8, cy + 2, 58, 4, '#d8dee8');
-  // Smashed Dark Windows
-  pxOutlinedRect(ctx, cx + 10, cy + 5, 22, 13, '#1e2024');
-  pxOutlinedRect(ctx, cx + 36, cy + 5, 26, 13, '#1e2024');
-  // Crumbled Front Hood & Engine Bay on right
-  pxOutlinedRect(ctx, cx + 70, cy + 14, 26, 26, '#4b4e54');
-  pxRect(ctx, cx + 74, cy + 18, 18, 10, '#27272a');
-  // Missing wheel arches (resting on bricks/axles)
-  pxOutlinedRect(ctx, cx + 10, cy + 36, 18, 12, '#18181b');
-  pxOutlinedRect(ctx, cx + 64, cy + 36, 18, 12, '#18181b');
-
-  // 7. Bottom Olive Grass Shoulder & Dark Foreground Trench (Y: 294 to 360)
-  pxRect(ctx, 0, 294, LOGICAL_WIDTH, 16, '#575233');
-  for (let gx = 0; gx < LOGICAL_WIDTH; gx += 14) {
-    pxRect(ctx, gx, 291, 8, 5, '#68623d');
-    pxRect(ctx, gx + 6, 295, 6, 6, '#46442b');
+  // 8. Bottom Grass Verge & Foreground Trench (Y: 294 to 360)
+  pxRect(ctx, 0, 294, LOGICAL_WIDTH, 14, '#595334');
+  for (let gx = 0; gx < LOGICAL_WIDTH; gx += 9) {
+    const sway = Math.round(Math.sin(time * 2 + gx) * 0.6);
+    pxRect(ctx, gx + sway, 291, 6, 4, '#6e6741');
+    pxRect(ctx, gx + 3, 295, 5, 5, '#454128');
   }
-  pxRect(ctx, 0, 308, LOGICAL_WIDTH, 52, '#3d392b');
-  pxRect(ctx, 0, 324, LOGICAL_WIDTH, 36, '#322f24');
+  pxRect(ctx, 0, 308, LOGICAL_WIDTH, 52, '#3a3628');
+  pxRect(ctx, 0, 322, LOGICAL_WIDTH, 38, '#2d2a1f');
 }
 
-// Foreground Left Military Truck & Oil Drums (drawn after entities for depth, matching screenshot!)
+function renderWreckedSUV(ctx: CanvasRenderingContext2D, cx: number, cy: number) {
+  // Ground shadow
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.48)';
+  ctx.beginPath();
+  ctx.ellipse(cx + 48, cy + 48, 54, 11, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Rear & side chassis (tilted slightly)
+  pxOutlinedRect(ctx, cx, cy + 16, 94, 28, '#949ca8');
+  pxRect(ctx, cx + 2, cy + 17, 90, 5, '#cbd5e1'); // Upper door crease highlight
+  pxRect(ctx, cx + 2, cy + 28, 90, 15, '#646b75'); // Lower door shadow
+  pxRect(ctx, cx + 6, cy + 38, 82, 5, '#474c54'); // Rusted rocker panel
+
+  // Roof & Pillars
+  pxOutlinedRect(ctx, cx + 6, cy, 66, 18, '#b8c1ce');
+  pxRect(ctx, cx + 8, cy + 1, 60, 4, '#e2e8f0');
+
+  // Smashed Windows with jagged glass shards
+  pxOutlinedRect(ctx, cx + 10, cy + 5, 22, 12, '#18181b');
+  pxRect(ctx, cx + 11, cy + 6, 5, 3, '#64748b');
+  pxOutlinedRect(ctx, cx + 36, cy + 5, 28, 12, '#18181b');
+  pxRect(ctx, cx + 56, cy + 6, 6, 4, '#64748b');
+
+  // Door handles & panel lines
+  pxRect(ctx, cx + 33, cy + 16, 1, 26, '#1e293b');
+  pxRect(ctx, cx + 64, cy + 16, 1, 26, '#1e293b');
+  pxRect(ctx, cx + 26, cy + 22, 4, 2, '#1e293b');
+  pxRect(ctx, cx + 56, cy + 22, 4, 2, '#1e293b');
+
+  // Crumbled Front Hood & Exposed Engine Block
+  pxOutlinedRect(ctx, cx + 70, cy + 13, 28, 26, '#525861');
+  pxRect(ctx, cx + 73, cy + 16, 20, 10, '#18181b');
+  pxRect(ctx, cx + 76, cy + 18, 6, 6, '#3f3f46');
+
+  // Empty Dark Wheel Wells
+  pxOutlinedRect(ctx, cx + 8, cy + 33, 20, 14, '#141417');
+  pxOutlinedRect(ctx, cx + 66, cy + 33, 20, 14, '#141417');
+}
+
 export function renderForegroundLeftProps(ctx: CanvasRenderingContext2D) {
   const tx = -4;
   const ty = 224;
 
-  // Military Truck Cab
-  pxOutlinedRect(ctx, tx, ty, 52, 42, '#4b4d38');
-  pxOutlinedRect(ctx, tx + 4, ty + 4, 46, 8, '#5c5e44'); // Roof visor
-  // Dark Windshield & Cabin Interior
-  pxOutlinedRect(ctx, tx + 8, ty + 14, 36, 24, '#1b1d17');
-  // Truck Hood & Heavy Grille
-  pxOutlinedRect(ctx, tx, ty + 40, 68, 46, '#3f4230');
-  pxRect(ctx, tx + 2, ty + 42, 62, 8, '#52553e');
-  pxOutlinedRect(ctx, tx + 42, ty + 52, 22, 26, '#26281e');
-  // Vertical radiator bars
-  for (let gx = tx + 45; gx <= tx + 60; gx += 4) {
-    pxRect(ctx, gx, ty + 55, 2, 20, '#3f4230');
-  }
-  // Truck Wheel
-  pxOutlinedRect(ctx, tx + 10, ty + 72, 26, 24, '#1c1d18');
-  pxRect(ctx, tx + 16, ty + 78, 14, 12, '#383a30');
+  // Military Truck Cab in bottom-left foreground
+  pxOutlinedRect(ctx, tx, ty, 54, 44, '#484a36');
+  pxOutlinedRect(ctx, tx + 2, ty + 2, 48, 7, '#5c5f46');
+  pxOutlinedRect(ctx, tx + 8, ty + 13, 36, 23, '#171a14');
+  pxRect(ctx, tx + 10, ty + 15, 10, 6, '#2c3025'); // Glass reflection
 
-  // Clustered Olive Oil Drums in front of truck (matching bottom-left of screenshot)
+  // Truck Hood & Heavy Radiator Grille
+  pxOutlinedRect(ctx, tx, ty + 40, 70, 46, '#3d402e');
+  pxRect(ctx, tx + 2, ty + 42, 64, 7, '#52563e');
+  pxOutlinedRect(ctx, tx + 42, ty + 51, 24, 26, '#22241a');
+  for (let gx = tx + 45; gx <= tx + 62; gx += 4) {
+    pxRect(ctx, gx, ty + 54, 2, 20, '#3d402e');
+  }
+  // Truck Wheel Arch & Tire
+  pxOutlinedRect(ctx, tx + 8, ty + 70, 28, 26, '#181a14');
+  pxOutlinedRect(ctx, tx + 14, ty + 76, 16, 14, '#36382c');
+
+  // Clustered Olive Oil Drums in front of truck
   renderOilDrum(ctx, 54, 298, '#3f4534', '#555c47');
   renderOilDrum(ctx, 74, 294, '#464d3b', '#5d664e');
   renderOilDrum(ctx, 64, 310, '#363b2d', '#4b523f');
@@ -296,60 +528,62 @@ export function renderArmoredBus(
 ) {
   const x = Math.round(busX);
   const y = Math.round(busY);
-  const engineBob = Math.round(Math.sin(time * 16) * 0.6);
+  const engineBob = Math.round(Math.sin(time * 16) * 0.5);
 
-  // Ground shadow under bus
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.48)';
-  ctx.fillRect(x - 10, y + 72, 162, 14);
+  // Ground Shadow
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.52)';
+  ctx.beginPath();
+  ctx.ellipse(x + 74, y + 76, 82, 10, 0, 0, Math.PI * 2);
+  ctx.fill();
 
-  // Main School Bus Body (extending from left edge like screenshot)
-  pxOutlinedRect(ctx, x, y + engineBob, 122, 68, '#d4a72c');
-  // Upper bright yellow roof curve
-  pxOutlinedRect(ctx, x + 2, y - 6 + engineBob, 114, 9, '#e8be3b');
-  // Lower weathered yellow panel with mud splatter
-  pxRect(ctx, x + 1, y + 38 + engineBob, 120, 29, '#b88c21');
-  pxRect(ctx, x + 4, y + 58 + engineBob, 114, 8, '#785c26'); // Muddy lower skirt
+  // Main School Bus Body
+  pxOutlinedRect(ctx, x, y + engineBob, 124, 68, '#d9ab2b');
+  // Rounded Roof Cap with specular highlight
+  pxOutlinedRect(ctx, x + 2, y - 6 + engineBob, 116, 9, '#ecc342');
+  pxRect(ctx, x + 4, y - 5 + engineBob, 110, 3, '#f7d969');
 
-  // Roof Luggage Rack on left + Red Barrel strapped on top (exact match to screenshot!)
-  pxOutlinedRect(ctx, x + 2, y - 34 + engineBob, 20, 26, '#b91c1c');
-  pxRect(ctx, x + 2, y - 26 + engineBob, 20, 2, '#7f1d1d');
-  pxRect(ctx, x + 2, y - 16 + engineBob, 20, 2, '#7f1d1d');
-  pxRect(ctx, x + 8, y - 22 + engineBob, 5, 5, '#facc15'); // Hazard label on roof barrel
-  // Black metal roof rack bars
-  pxRect(ctx, x, y - 12 + engineBob, 56, 2, '#1c1917');
-  for (let rx = x + 4; rx <= x + 52; rx += 12) {
+  // Lower Shaded Body Panel + Mud/Weathering
+  pxRect(ctx, x + 1, y + 36 + engineBob, 122, 31, '#b88b1e');
+  pxRect(ctx, x + 1, y + 57 + engineBob, 122, 10, '#7c5d1c');
+
+  // Roof Luggage Rack on left + Red Barrel strapped on top
+  renderOilDrum(ctx, x + 4, y - 30 + engineBob, '#b91c1c', '#dc2626', '#ef4444');
+  pxRect(ctx, x, y - 12 + engineBob, 58, 2, '#1c1917');
+  for (let rx = x + 4; rx <= x + 54; rx += 12) {
     pxRect(ctx, rx, y - 12 + engineBob, 2, 6, '#1c1917');
   }
 
-  // Nose / Hood protruding right
-  pxOutlinedRect(ctx, x + 118, y + 26 + engineBob, 30, 42, '#d4a72c');
-  pxRect(ctx, x + 118, y + 27 + engineBob, 28, 8, '#e8be3b');
-  // Blood splatter on front nose of the yellow bus (like screenshot)
-  pxRect(ctx, x + 136, y + 34 + engineBob, 10, 18, '#991b1b');
-  pxRect(ctx, x + 130, y + 42 + engineBob, 8, 12, '#7f1d1d');
-  // Front Grille & Headlight
-  pxOutlinedRect(ctx, x + 144, y + 34 + engineBob, 5, 22, '#27272a');
-  pxOutlinedRect(ctx, x + 143, y + 54 + engineBob, 6, 6, '#fef08a');
+  // Protruding Front Engine Hood
+  pxOutlinedRect(ctx, x + 120, y + 26 + engineBob, 30, 42, '#d9ab2b');
+  pxRect(ctx, x + 120, y + 27 + engineBob, 28, 7, '#ecc342');
+  // Blood splatter on front nose of the bus
+  pxRect(ctx, x + 136, y + 33 + engineBob, 12, 19, '#991b1b');
+  pxRect(ctx, x + 130, y + 40 + engineBob, 9, 14, '#7f1d1d');
+
+  // Front Grille & Glowing Headlight
+  pxOutlinedRect(ctx, x + 145, y + 34 + engineBob, 5, 22, '#27272a');
+  pxOutlinedRect(ctx, x + 144, y + 54 + engineBob, 6, 6, '#fef08a');
 
   // Black Side Trim Stripes & "BOARD OF EDUCATION" Stencil
-  pxRect(ctx, x, y + 34 + engineBob, 92, 2, '#1c1917');
-  pxRect(ctx, x, y + 48 + engineBob, 92, 3, '#1c1917');
+  pxRect(ctx, x, y + 33 + engineBob, 94, 2, '#1c1917');
+  pxRect(ctx, x, y + 48 + engineBob, 94, 3, '#1c1917');
   ctx.fillStyle = '#1c1917';
   ctx.font = 'bold 6px monospace';
   ctx.textAlign = 'left';
   ctx.fillText('BOARD OF EDUCATION', x + 4, y + 43 + engineBob);
 
-  // Bus Windows with vertical frames
+  // Bus Windows with glass reflection & frames
   for (let wx = x + 6; wx <= x + 74; wx += 17) {
-    pxOutlinedRect(ctx, wx, y + 8 + engineBob, 14, 20, '#3f3d32');
-    pxRect(ctx, wx + 2, y + 10 + engineBob, 10, 8, '#575446');
+    pxOutlinedRect(ctx, wx, y + 8 + engineBob, 14, 20, '#2e2d24');
+    pxRect(ctx, wx + 2, y + 10 + engineBob, 10, 7, '#4a483b');
+    pxRect(ctx, wx + 3, y + 11 + engineBob, 4, 3, '#6b6857');
     if (weldedArmor) {
       pxRect(ctx, wx, y + 14 + engineBob, 14, 3, '#71717a');
       pxRect(ctx, wx, y + 21 + engineBob, 14, 3, '#71717a');
     }
   }
 
-  // Folding Passenger Door (Right side of cabin)
+  // Folding Accordion Passenger Door
   const doorOpen = doorOpenTimer > 0;
   pxOutlinedRect(
     ctx,
@@ -357,58 +591,52 @@ export function renderArmoredBus(
     y + 8 + engineBob,
     20,
     56,
-    doorOpen ? '#14120e' : '#85681a'
+    doorOpen ? '#0c0a09' : '#85681a'
   );
   if (!doorOpen) {
-    // Twin vertical glass panes in folding door
-    pxOutlinedRect(ctx, x + 97, y + 12 + engineBob, 5, 22, '#3f3d32');
-    pxOutlinedRect(ctx, x + 105, y + 12 + engineBob, 5, 22, '#3f3d32');
+    pxOutlinedRect(ctx, x + 97, y + 12 + engineBob, 5, 22, '#2e2d24');
+    pxOutlinedRect(ctx, x + 105, y + 12 + engineBob, 5, 22, '#2e2d24');
     pxOutlinedRect(ctx, x + 97, y + 38 + engineBob, 5, 20, '#6b5314');
     pxOutlinedRect(ctx, x + 105, y + 38 + engineBob, 5, 20, '#6b5314');
   }
 
-  // Front Heavy Tire
-  pxOutlinedRect(ctx, x + 118, y + 52, 24, 24, '#1c1917');
-  pxOutlinedRect(ctx, x + 123, y + 57, 14, 14, '#44403c');
-  pxRect(ctx, x + 127, y + 61, 6, 6, '#78716c');
+  // Detailed Front Wheel & Tire Tread
+  pxOutlinedRect(ctx, x + 118, y + 52, 24, 24, '#18181b');
+  pxOutlinedRect(ctx, x + 122, y + 56, 16, 16, '#3f3f46');
+  pxOutlinedRect(ctx, x + 126, y + 60, 8, 8, '#71717a');
 
   if (spikedBumper) {
-    pxOutlinedRect(ctx, x + 147, y + 52 + engineBob, 9, 4, '#dc2626');
-    pxOutlinedRect(ctx, x + 149, y + 58 + engineBob, 11, 4, '#e4e4e7');
-    pxOutlinedRect(ctx, x + 147, y + 64 + engineBob, 9, 4, '#dc2626');
+    pxOutlinedRect(ctx, x + 149, y + 52 + engineBob, 9, 4, '#dc2626');
+    pxOutlinedRect(ctx, x + 151, y + 58 + engineBob, 11, 4, '#e4e4e7');
+    pxOutlinedRect(ctx, x + 149, y + 64 + engineBob, 9, 4, '#dc2626');
   }
 
-  // Dark Smoke Rising Behind Bus Hood (like screenshot)
-  const smokePhase = (time * 18) % 24;
-  ctx.fillStyle = 'rgba(28, 25, 23, 0.55)';
+  // Rising Dark Smoke Plume behind hood
+  const smokePhase = (time * 16) % 24;
+  ctx.fillStyle = 'rgba(28, 25, 23, 0.5)';
   ctx.beginPath();
-  ctx.arc(x + 132, y + 12 - smokePhase, 14, 0, Math.PI * 2);
-  ctx.arc(x + 124, y - 6 - smokePhase * 1.1, 18, 0, Math.PI * 2);
+  ctx.arc(x + 132, y + 10 - smokePhase, 13, 0, Math.PI * 2);
+  ctx.arc(x + 124, y - 8 - smokePhase * 1.1, 17, 0, Math.PI * 2);
   ctx.fill();
 
   // =======================================================
-  // SHERIFF BILL IN THE OPEN ROOF HATCH (White Cowboy Hat + Long Rifle)
+  // SHERIFF BILL IN THE OPEN ROOF HATCH
   // =======================================================
   const bx = x + 82;
   const by = y - 18 + engineBob;
 
-  // Open Hatch Cover folded back
-  pxOutlinedRect(ctx, bx - 6, by + 10, 22, 4, '#e8be3b');
-
-  // Bill Torso & Arms aiming rifle
+  pxOutlinedRect(ctx, bx - 6, by + 10, 22, 4, '#ecc342');
   pxOutlinedRect(ctx, bx, by + 2, 12, 10, '#57534e');
-  pxRect(ctx, bx + 2, by + 3, 10, 5, '#fed7aa'); // Forearm holding rifle
+  pxRect(ctx, bx + 2, by + 3, 10, 5, '#f5b882');
+  pxOutlinedRect(ctx, bx + 1, by - 6, 9, 8, '#f5b882');
+  pxRect(ctx, bx + 3, by - 2, 7, 3, '#451a03');
 
-  // Bill Head
-  pxOutlinedRect(ctx, bx + 1, by - 6, 9, 8, '#fdba74');
-  pxRect(ctx, bx + 3, by - 2, 7, 3, '#451a03'); // Beard
-
-  // Iconic White/Cream Cowboy Hat (exact match to screenshot)
+  // White Cowboy Hat
   pxOutlinedRect(ctx, bx - 4, by - 9, 18, 4, '#e7e5e4');
   pxOutlinedRect(ctx, bx, by - 13, 10, 5, '#f5f5f4');
-  pxRect(ctx, bx, by - 9, 10, 2, '#78350f'); // Hat band
+  pxRect(ctx, bx, by - 9, 10, 2, '#78350f');
 
-  // Long Hunting Rifle angled slightly down toward road
+  // Hunting Rifle
   pxOutlinedRect(ctx, bx + 6, by + 3, 24, 3, '#1c1917');
   pxRect(ctx, bx + 2, by + 4, 7, 3, '#78350f');
   if (billFiringTimer > 0) {
@@ -416,7 +644,7 @@ export function renderArmoredBus(
     pxRect(ctx, bx + 32, by + 3, 16, 3, '#ffffff');
   }
 
-  // Floating Bus Health Bar right in front of Bill (matching screenshot `[red | black]` bar!)
+  // Bus Health Bar right in front of Bill
   const barW = 48;
   const barX = bx + 24;
   const barY = by + 15;
@@ -436,44 +664,39 @@ export function renderBarricade(
   const shakeX = shakeTimer > 0 ? Math.round((Math.random() - 0.5) * 6) : 0;
   const bx = Math.round(x + shakeX);
 
-  // Ground shadow
   ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
   ctx.fillRect(bx - 42, ROAD_Y_MIN - 4, 88, ROAD_Y_MAX - ROAD_Y_MIN + 26);
 
-  // 1. Metal Bed Frames / Racks & Yellow/Black Striped Hazard Barriers
+  // Metal Racks & Striped Hazard Barriers
   pxOutlinedRect(ctx, bx - 6, 152, 22, 42, '#27272a');
   for (let ry = 158; ry <= 188; ry += 6) {
     pxRect(ctx, bx - 4, ry, 18, 2, '#52525b');
   }
 
-  // Yellow & Black Hazard Concrete Barrier
   pxOutlinedRect(ctx, bx + 4, 184, 28, 18, '#eab308');
   pxRect(ctx, bx + 8, 184, 5, 18, '#18181b');
   pxRect(ctx, bx + 18, 184, 5, 18, '#18181b');
 
-  // 2. Blue & Olive Oil Drums in Upper Barricade
   if (ratio > 0.25) {
-    renderOilDrum(ctx, bx - 18, 198, '#294257', '#3b5d7a');
-    renderOilDrum(ctx, bx + 2, 210, '#574c35', '#736548');
+    renderOilDrum(ctx, bx - 18, 198, '#294257', '#3b5d7a', '#4d779c');
+    renderOilDrum(ctx, bx + 2, 210, '#574c35', '#736548', '#8a7957');
   }
 
-  // 3. Iconic Red Overturned Car Hood / Door & Stacked Tires (matching screenshot right side!)
+  // Red Overturned Car Hood / Wrecked Door
   if (ratio > 0.15) {
     pxOutlinedRect(ctx, bx - 22, 232, 34, 44, '#b91c1c');
-    pxRect(ctx, bx - 18, 236, 26, 16, '#dc2626');
+    pxRect(ctx, bx - 19, 235, 28, 16, '#dc2626');
+    pxRect(ctx, bx - 16, 238, 12, 6, '#ef4444');
     pxRect(ctx, bx - 14, 256, 22, 16, '#7f1d1d');
   }
 
-  // Yellow & Black Crate + Wooden Boxes + Oil Drum at bottom right
   pxOutlinedRect(ctx, bx - 44, 252, 24, 26, '#ca8a04');
   pxRect(ctx, bx - 44, 262, 24, 14, '#27272a');
-  renderOilDrum(ctx, bx - 54, 276, '#333b42', '#49545e');
+  renderOilDrum(ctx, bx - 54, 276, '#333b42', '#49545e', '#5d6b78');
 
-  // Stacked Rubber Tires
   pxOutlinedRect(ctx, bx - 34, 278, 20, 10, '#18181b');
   pxOutlinedRect(ctx, bx - 32, 286, 20, 10, '#27272a');
 
-  // Barbed Wire Coils & Lower Metal Rack
   ctx.strokeStyle = '#71717a';
   ctx.lineWidth = 1.5;
   for (let wx = bx - 8; wx <= bx + 18; wx += 8) {
@@ -484,7 +707,6 @@ export function renderBarricade(
   pxOutlinedRect(ctx, bx + 22, 248, 22, 46, '#27272a');
 }
 
-// Draw the iconic Dead Ahead Red Level Badge "[7]" + Red Health Bar above units & zombies!
 function renderUnitLevelAndHealthBar(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -498,21 +720,18 @@ function renderUnitLevelAndHealthBar(
   const bx = Math.round(x - 14);
   const by = Math.round(topY);
 
-  // Red square badge with white level number (exact match to `[7]` in screenshot)
   const badgeCol = isSurvivor ? '#dc2626' : '#b91c1c';
-  pxOutlinedRect(ctx, bx, by - 2, 9, 9, badgeCol, '#181410');
+  pxOutlinedRect(ctx, bx, by - 2, 9, 9, badgeCol, '#14110f');
   ctx.fillStyle = '#ffffff';
   ctx.font = 'bold 6px monospace';
   ctx.textAlign = 'center';
   ctx.fillText(String(level), bx + 4.5, by + 5);
 
-  // Health Bar attached to the right of the badge
   const barW = 19;
-  pxOutlinedRect(ctx, bx + 10, by, barW, 4, '#181410', '#181410');
+  pxOutlinedRect(ctx, bx + 10, by, barW, 4, '#14110f', '#14110f');
   pxRect(ctx, bx + 10, by, Math.round(barW * ratio), 4, '#ef4444');
 }
 
-// Draw the Dotted Golden Inspiration / Lucky Halo Circle (matching screenshot above Builder!)
 function renderGoldenDottedHalo(ctx: CanvasRenderingContext2D, cx: number, cy: number, time: number) {
   const dots = 12;
   const radius = 11;
@@ -533,38 +752,34 @@ export function renderUnitSprite(
   const y = Math.round(unit.y);
   const z = Math.round(unit.z);
 
-  // 1. Subtle WASD Selection Indicator under controlled survivor
   if (unit.isPlayerControlled && unit.state !== 'corpse') {
     ctx.strokeStyle = 'rgba(250, 204, 21, 0.85)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.ellipse(x, y, 12, 5, 0, 0, Math.PI * 2);
+    ctx.ellipse(x, y, 11, 4.5, 0, 0, Math.PI * 2);
     ctx.stroke();
   }
 
-  // 2. Ground Shadow
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.38)';
+  // Ground Shadow
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.42)';
   ctx.beginPath();
-  ctx.ellipse(x, y, 9, 4, 0, 0, Math.PI * 2);
+  ctx.ellipse(x, y, 8, 3.5, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // 3. Handle Infected Corpse Lying on Road (matching corpse in screenshot!)
+  // Infected Corpse Lying on Road
   if (unit.state === 'corpse') {
     const twitchX = Math.sin(time * 35) * 1.2;
     const cx = Math.round(x + twitchX);
-    // Pool of blood under corpse
     pxRect(ctx, cx - 16, y - 3, 30, 6, '#991b1b');
-    // Lying body & helmet/head
     pxOutlinedRect(ctx, cx - 12, y - 7, 16, 6, '#3f422e');
-    pxOutlinedRect(ctx, cx + 3, y - 8, 8, 7, '#84a955');
-    // Rising green infection spores
+    pxOutlinedRect(ctx, cx + 3, y - 8, 8, 7, '#7fa655');
     const sporeY = Math.round((time * 22) % 14);
     pxRect(ctx, cx - 4, y - 10 - sporeY, 2, 2, '#a3e635');
     pxRect(ctx, cx + 4, y - 6 - ((sporeY + 6) % 14), 2, 2, '#bef264');
     return;
   }
 
-  // 4. Skeleton Emerging from Ground
+  // Skeleton Emerging
   if (unit.state === 'emerging') {
     pxOutlinedRect(ctx, x - 10, y - 3, 20, 5, '#5c4028');
     const emergeH = Math.min(24, Math.round(unit.animTime * 18));
@@ -574,155 +789,73 @@ export function renderUnitSprite(
 
   const isMoving = unit.state === 'march' || unit.state === 'spawning';
   const walkCycle = isMoving ? Math.sin(unit.animTime * 14) : 0;
-  const bobY = isMoving ? Math.abs(Math.round(walkCycle * 2)) : 0;
+  const bobY = isMoving ? Math.abs(Math.round(walkCycle * 1.8)) : 0;
   const drawY = y - z - bobY;
   const flash = unit.whiteFlashTimer > 0;
-  const c = (normal: string) => (flash ? '#ffffff' : normal);
   const dir = unit.facing;
+  const legOffset = Math.round(walkCycle * 3);
 
   // =======================================================
-  // SURVIVOR SPRITES
+  // DETAILED PIXEL-ART SURVIVORS
   // =======================================================
   if (unit.team === 'survivor') {
-    const legOffset = Math.round(walkCycle * 3);
+    // Animated Boots/Feet
+    pxOutlinedRect(ctx, x - 5 + legOffset, y - z - 5, 4, 5, flash ? '#fff' : '#1c1917');
+    pxOutlinedRect(ctx, x + 1 - legOffset, y - z - 5, 4, 5, flash ? '#fff' : '#1c1917');
 
-    // Legs / Boots
-    const pantsColor =
-      unit.subType === 'policeman'
-        ? '#1e293b'
+    // Detailed Pixel Matrix Body + Head
+    const matrix =
+      unit.subType === 'redneck'
+        ? REDNECK_MATRIX
+        : unit.subType === 'farmer'
+        ? FARMER_MATRIX
         : unit.subType === 'builder'
-        ? '#6b633b'
-        : '#293b4a';
-    pxOutlinedRect(ctx, x - 5 + legOffset, y - z - 8, 4, 8, c(pantsColor));
-    pxOutlinedRect(ctx, x + 1 - legOffset, y - z - 8, 4, 8, c(pantsColor));
+        ? BUILDER_MATRIX
+        : unit.subType === 'policeman'
+        ? POLICEMAN_MATRIX
+        : MECHANIC_MATRIX;
 
-    // Torso by Class
-    if (unit.subType === 'redneck') {
-      // Bare chest / overalls like iconic Redneck portrait in screenshot!
-      pxOutlinedRect(ctx, x - 6, drawY - 20, 12, 12, c('#f5b882'));
-      pxRect(ctx, x - 5, drawY - 14, 10, 6, c('#2563eb')); // Blue denim overalls bottom
-      pxRect(ctx, x - 4, drawY - 20, 2, 6, c('#2563eb')); // Strap
-      pxRect(ctx, x + 2, drawY - 20, 2, 6, c('#2563eb')); // Strap
-    } else if (unit.subType === 'farmer') {
-      pxOutlinedRect(ctx, x - 6, drawY - 20, 12, 12, c('#d6d3d1'));
-      pxRect(ctx, x - 4, drawY - 16, 8, 8, c('#1e40af'));
-    } else if (unit.subType === 'builder') {
-      // Olive-khaki armored vest like the Builder in the screenshot
-      pxOutlinedRect(ctx, x - 7, drawY - 21, 14, 13, c('#787143'));
-      pxRect(ctx, x - 5, drawY - 19, 10, 6, c('#3f3d24'));
-    } else if (unit.subType === 'policeman') {
-      pxOutlinedRect(ctx, x - 7, drawY - 21, 14, 13, c('#1e3a8a'));
-      pxOutlinedRect(ctx, x - 5, drawY - 19, 10, 9, c('#18181b'));
-      pxRect(ctx, x + 2, drawY - 18, 2, 2, c('#facc15'));
-    } else {
-      pxOutlinedRect(ctx, x - 6, drawY - 20, 12, 12, c('#0369a1'));
-      pxRect(ctx, x - 3, drawY - 18, 6, 8, c('#38bdf8'));
-    }
-
-    // Head + Hat/Helmet
-    pxOutlinedRect(ctx, x - 4, drawY - 29, 9, 9, c('#f5b882'));
-    pxRect(ctx, x + (dir > 0 ? 2 : -2), drawY - 26, 2, 2, c('#18181b'));
-
-    if (unit.subType === 'redneck') {
-      // Blue Trucker Cap (matching slot 1 Redneck in screenshot!)
-      pxOutlinedRect(ctx, x - 5, drawY - 33, 12, 4, c('#0284c7'));
-      pxRect(ctx, x - 2, drawY - 32, 4, 2, c('#f8fafc'));
-    } else if (unit.subType === 'farmer') {
-      pxOutlinedRect(ctx, x - 7, drawY - 31, 15, 3, c('#eab308'));
-      pxOutlinedRect(ctx, x - 4, drawY - 34, 9, 3, c('#ca8a04'));
-    } else if (unit.subType === 'builder') {
-      // Iconic Yellow Hard Hat with ridge
-      pxOutlinedRect(ctx, x - 6, drawY - 33, 13, 5, c('#eab308'));
-      pxRect(ctx, x - 4, drawY - 32, 8, 2, c('#fef08a'));
-    } else if (unit.subType === 'policeman') {
-      pxOutlinedRect(ctx, x - 6, drawY - 33, 13, 4, c('#172554'));
-      pxRect(ctx, x + 2, drawY - 32, 2, 2, c('#facc15'));
-    } else {
-      pxOutlinedRect(ctx, x - 5, drawY - 32, 10, 4, c('#334155'));
-    }
+    drawPixelMatrix(ctx, matrix, BASE_PALETTE, x, drawY - 4, dir, flash);
 
     // Weapon & Attack Animation
     const swing = unit.state === 'attack' ? Math.sin(unit.attackProgress * Math.PI) : 0;
     if (unit.subType === 'farmer' || unit.subType === 'policeman') {
       const recoilX = unit.state === 'attack' ? -3 * dir : 0;
-      const reloadTilt = unit.state === 'reload' ? 4 : 0;
-      pxOutlinedRect(ctx, x + dir * 2 + recoilX, drawY - 16 + reloadTilt, 14 * dir, 4, c('#27272a'));
-      pxRect(ctx, x + recoilX, drawY - 15 + reloadTilt, 6 * dir, 4, c('#78350f'));
+      const reloadTilt = unit.state === 'reload' ? 3 : 0;
+      pxOutlinedRect(ctx, x + dir * 2 + recoilX, drawY - 12 + reloadTilt, 13 * dir, 3, flash ? '#fff' : '#27272a');
+      pxRect(ctx, x + recoilX, drawY - 11 + reloadTilt, 5 * dir, 3, flash ? '#fff' : '#78350f');
       if (unit.state === 'attack' && unit.attackProgress < 0.35) {
-        pxRect(ctx, x + dir * 16, drawY - 19, 8 * dir, 9, '#fde047');
-        pxRect(ctx, x + dir * 18, drawY - 17, 10 * dir, 5, '#ffffff');
+        pxRect(ctx, x + dir * 15, drawY - 15, 8 * dir, 8, '#fde047');
+        pxRect(ctx, x + dir * 17, drawY - 13, 10 * dir, 4, '#ffffff');
       }
     } else {
-      const reachX = Math.round(swing * 12) * dir;
-      const reachY = Math.round(swing * 6);
+      const reachX = Math.round(swing * 10) * dir;
+      const reachY = Math.round(swing * 5);
       const handleColor = unit.subType === 'mechanic' ? '#64748b' : '#78350f';
-      const headColor = unit.subType === 'builder' ? '#991b1b' : '#cbd5e1';
+      const headColor = unit.subType === 'builder' ? '#dc2626' : '#cbd5e1';
 
-      pxOutlinedRect(ctx, x + dir * 3 + reachX, drawY - 18 + reachY, 10 * dir, 3, c(handleColor));
-      pxOutlinedRect(ctx, x + dir * 11 + reachX, drawY - 21 + reachY, 5 * dir, 7, c(headColor));
+      pxOutlinedRect(ctx, x + dir * 3 + reachX, drawY - 13 + reachY, 9 * dir, 2, flash ? '#fff' : handleColor);
+      pxOutlinedRect(ctx, x + dir * 10 + reachX, drawY - 16 + reachY, 4 * dir, 6, flash ? '#fff' : headColor);
     }
 
-    // Dotted Golden Halo Circle above Lucky Units (exact match to screenshot!)
     if (unit.isLucky) {
-      renderGoldenDottedHalo(ctx, x, drawY - 49, time);
+      renderGoldenDottedHalo(ctx, x, drawY - 34, time);
     }
 
-    // Level Badge [7] + Health Bar
-    renderUnitLevelAndHealthBar(ctx, x, drawY - 41, unit.level, unit.hp, unit.maxHp, true);
+    renderUnitLevelAndHealthBar(ctx, x, drawY - 26, unit.level, unit.hp, unit.maxHp, true);
   } else {
     // =======================================================
-    // ZOMBIE SPRITES (Matching green heads, red bloody mouths & Giant Red Bloated Paramedic/Fat Zombie)
+    // DETAILED PIXEL-ART ZOMBIES
     // =======================================================
-    const legOffset = Math.round(walkCycle * 3);
     const isBloated = unit.subType === 'bloated';
-    const isSkeleton = unit.subType === 'skeleton';
-    const isArmored = unit.subType === 'armored';
+    pxOutlinedRect(ctx, x - 5 + legOffset, y - z - 5, 4, 5, flash ? '#fff' : '#1c1917');
+    pxOutlinedRect(ctx, x + 1 - legOffset, y - z - 5, 4, 5, flash ? '#fff' : '#1c1917');
 
-    const skinColor = isSkeleton ? '#e7e5e4' : '#7fa655';
+    const matrix = isBloated ? ZOMBIE_BLOATED_MATRIX : ZOMBIE_WALKER_MATRIX;
+    drawPixelMatrix(ctx, matrix, BASE_PALETTE, x, drawY - 4, dir, flash);
 
-    // Legs
-    pxOutlinedRect(ctx, x - 5 + legOffset, y - z - 8, 4, 8, c('#2b303a'));
-    pxOutlinedRect(ctx, x + 1 - legOffset, y - z - 8, 4, 8, c('#2b303a'));
-
-    // Torso
-    const bodyW = isBloated ? 20 : 12;
-    const bodyH = isBloated ? 20 : 12;
-    const shirtColor = isBloated
-      ? '#c2410c' // Giant Red-Orange Hazmat/Paramedic Fat Zombie on right of screenshot!
-      : unit.subType === 'runner'
-      ? '#475569'
-      : isArmored
-      ? '#334155'
-      : '#64748b';
-    pxOutlinedRect(ctx, x - bodyW / 2, drawY - 8 - bodyH, bodyW, bodyH, c(shirtColor));
-
-    if (isBloated) {
-      // Yellow hazard stripes on the Giant Red Fat Zombie (matching screenshot right side!)
-      pxRect(ctx, x - 8, drawY - 22, 16, 3, c('#eab308'));
-      pxRect(ctx, x - 8, drawY - 14, 16, 3, c('#eab308'));
-      pxRect(ctx, x - 4, drawY - 26, 8, 14, c('#991b1b'));
-    } else {
-      // Bloody ribs/chest stain on regular zombies
-      pxRect(ctx, x - 4, drawY - 18, 6, 7, c('#b91c1c'));
-    }
-
-    // Zombie Round Green Head with bloody jaw & yellow-red eyes (matching screenshot!)
-    const headY = drawY - 9 - bodyH - 9;
-    pxOutlinedRect(ctx, x - 5, headY, 10, 10, c(skinColor));
-    pxRect(ctx, x - 4, headY + 3, 2, 2, c('#fde047')); // Left eye
-    pxRect(ctx, x - 5, headY + 6, 6, 3, c('#b91c1c')); // Bloody mouth/chin
-
-    if (isArmored) {
-      pxOutlinedRect(ctx, x - 6, headY - 3, 12, 5, c('#3f3f46'));
-      pxRect(ctx, x - 4, headY - 1, 4, 2, c('#ef4444'));
-    }
-
-    // Outstretched Zombie Arms
-    const clawSwing = unit.state === 'attack' ? Math.round(Math.sin(unit.attackProgress * Math.PI) * 6) : 0;
-    pxOutlinedRect(ctx, x - 10 - clawSwing, drawY - 18, 8, 4, c(skinColor));
-
-    // Level Badge [7] + Red Health Bar above Zombie
-    renderUnitLevelAndHealthBar(ctx, x, headY - 9, unit.level, unit.hp, unit.maxHp, false);
+    const topOffset = isBloated ? 28 : 26;
+    renderUnitLevelAndHealthBar(ctx, x, drawY - topOffset, unit.level, unit.hp, unit.maxHp, false);
   }
 }
 
@@ -749,25 +882,15 @@ export function renderTacticalObstacle(
     return;
   }
 
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.42)';
-  ctx.beginPath();
-  ctx.ellipse(x, y, 10, 5, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  const flash = obs.whiteFlashTimer > 0;
   const isRed = obs.type === 'red_barrel';
-  const mainCol = flash ? '#ffffff' : isRed ? '#b91c1c' : '#294257';
-  const rimCol = flash ? '#ffffff' : isRed ? '#7f1d1d' : '#1e3040';
-
-  const by = y - z;
-  pxOutlinedRect(ctx, x - 8, by - 22, 16, 22, mainCol);
-  pxRect(ctx, x - 8, by - 20, 16, 2, rimCol);
-  pxRect(ctx, x - 8, by - 12, 16, 2, rimCol);
-  pxRect(ctx, x - 8, by - 4, 16, 2, rimCol);
-
-  if (isRed && !flash) {
-    pxRect(ctx, x - 3, by - 15, 6, 6, '#facc15');
-  }
+  renderOilDrum(
+    ctx,
+    x - 9,
+    y - z - 22,
+    obs.whiteFlashTimer > 0 ? '#ffffff' : isRed ? '#b91c1c' : '#294257',
+    obs.whiteFlashTimer > 0 ? '#ffffff' : isRed ? '#dc2626' : '#3b5d7a',
+    obs.whiteFlashTimer > 0 ? '#ffffff' : isRed ? '#ef4444' : '#527da3'
+  );
 }
 
 export function renderDropPickup(
