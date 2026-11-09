@@ -101,7 +101,7 @@ export const PrivateAccess: React.FC<PrivateAccessProps> = ({ onUnlock, buildTim
       </div>
 
       {/* Global Verification Timestamp in Corner */}
-      <div className="fixed bottom-2 right-3 z-50 text-[10px] text-zinc-400/90 font-mono bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800 pointer-events-none">
+      <div className="fixed bottom-2 right-3 z-[9999] text-[10px] sm:text-[11px] text-yellow-300 font-mono font-semibold bg-black/85 px-2.5 py-0.5 rounded border border-yellow-500/60 shadow-lg pointer-events-none">
         Actualizado: {buildTimestamp}
       </div>
     </div>

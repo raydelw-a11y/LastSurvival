@@ -6,8 +6,8 @@ import { BattleArena } from './components/BattleArena';
 import { soundFX } from './engine/SoundFX';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '6:59 AM - 11/09/2026';
-const BUILD_TS =
+const FALLBACK_TIMESTAMP = '7:04 AM - 11/09/2026';
+export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 
 const STORAGE_KEY = 'last_survival_dead_ahead_v1';
@@ -226,8 +226,8 @@ export function App() {
         />
       )}
 
-      {/* Subtle Global Verification Timestamp in Bottom-Left Corner */}
-      <div className="fixed bottom-0.5 left-1.5 z-50 text-[8px] text-zinc-300/75 font-mono pointer-events-none drop-shadow">
+      {/* Global Verification Timestamp in Bottom-Right Corner (Safe from iOS landscape corners) */}
+      <div className="fixed bottom-2 right-3 z-[9999] text-[10px] sm:text-[11px] text-yellow-300 font-mono font-semibold bg-black/85 px-2.5 py-0.5 rounded border border-yellow-500/60 shadow-lg pointer-events-none">
         Actualizado: {BUILD_TS}
       </div>
     </div>
