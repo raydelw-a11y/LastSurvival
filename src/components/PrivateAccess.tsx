@@ -1,5 +1,11 @@
-import React, { useState } from 'react';
-import { Lock, ShieldAlert, Skull } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Lock, Radio, ShieldAlert } from 'lucide-react';
+import {
+  LOGICAL_HEIGHT,
+  LOGICAL_WIDTH,
+  renderArmoredBus,
+  renderBiomeBackground,
+} from '../engine/PixelArtRenderer';
 import { soundFX } from '../engine/SoundFX';
 
 interface PrivateAccessProps {
@@ -10,11 +16,34 @@ interface PrivateAccessProps {
 export const PrivateAccess: React.FC<PrivateAccessProps> = ({ onUnlock, buildTimestamp }) => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState(false);
+  const bgCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Live Atmospheric Night Highway Backdrop with Bill's Armored Bus Headlights!
+  useEffect(() => {
+    let rafId: number;
+    let lastDraw = 0;
+
+    const renderBackdrop = (now: number) => {
+      rafId = requestAnimationFrame(renderBackdrop);
+      if (now - lastDraw < 42) return;
+      lastDraw = now;
+
+      const ctx = bgCanvasRef.current?.getContext('2d');
+      if (!ctx) return;
+      const t = now * 0.001;
+      ctx.imageSmoothingEnabled = false;
+
+      renderBiomeBackground(ctx, 'graveyard', t, 3);
+      renderArmoredBus(ctx, 26, 118, 260, 260, t, 2.0, 0, true, true, 0);
+    };
+
+    rafId = requestAnimationFrame(renderBackdrop);
+    return () => cancelAnimationFrame(rafId);
+  }, []);
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const clean = password.trim().toLowerCase();
-    // Accept common project passwords or any non-empty code / quick access
     if (
       clean === '1234' ||
       clean === 'admin' ||
@@ -43,61 +72,95 @@ export const PrivateAccess: React.FC<PrivateAccessProps> = ({ onUnlock, buildTim
   };
 
   return (
-    <div className="relative min-h-screen w-full bg-zinc-950 flex items-center justify-center p-4 overflow-hidden select-none">
-      {/* Atmospheric apocalyptic background glow */}
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(234,179,8,0.12)_0%,rgba(9,9,11,0.95)_70%)]" />
+    <div className="relative min-h-screen w-full bg-zinc-950 flex items-center justify-center p-3 sm:p-5 overflow-hidden select-none">
+      {/* Live Pixel-Art Night Highway Backdrop */}
+      <canvas
+        ref={bgCanvasRef}
+        width={LOGICAL_WIDTH}
+        height={LOGICAL_HEIGHT}
+        className="pointer-events-none absolute inset-0 w-full h-full object-cover pixel-canvas opacity-45"
+      />
 
-      <div className="relative z-10 max-w-md w-full bg-zinc-900/95 border-2 border-yellow-500/80 rounded-2xl p-7 shadow-[0_0_50px_rgba(0,0,0,0.9)]">
-        <div className="flex flex-col items-center text-center mb-6">
-          <div className="w-16 h-16 rounded-2xl bg-yellow-500/15 border-2 border-yellow-400 flex items-center justify-center mb-3 shadow-inner">
-            <Skull className="w-9 h-9 text-yellow-400" />
+      {/* Dark Radial Vignette + Subtle CRT Scanlines */}
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(24,24,27,0.35)_0%,rgba(9,9,11,0.92)_80%)]" />
+      <div
+        className="pointer-events-none absolute inset-0 opacity-20"
+        style={{
+          backgroundImage:
+            'repeating-linear-gradient(0deg, rgba(0,0,0,0.65) 0px, rgba(0,0,0,0.65) 1px, transparent 1px, transparent 3px)',
+        }}
+      />
+
+      {/* Military Quarantine Radio Terminal Frame */}
+      <div className="relative z-10 max-w-md w-full bg-[#181914]/95 border-2 border-[#a39e74] rounded-xl overflow-hidden shadow-[0_0_60px_rgba(0,0,0,0.95)]">
+        {/* Top Hazard Stripe Bar */}
+        <div
+          className="h-2.5 w-full border-b border-black"
+          style={{
+            background:
+              'repeating-linear-gradient(-45deg, #eab308, #eab308 10px, #18181b 10px, #18181b 20px)',
+          }}
+        />
+
+        <div className="p-5 sm:p-6">
+          <div className="flex items-center justify-between text-[10px] font-mono text-amber-300/90 bg-black/60 border border-[#454231] rounded px-2.5 py-1 mb-4">
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+              <Radio className="w-3.5 h-3.5 text-amber-400" />
+              <span>FREQ 142.8 MHz — CONVOY DE BILL</span>
+            </span>
+            <span className="text-emerald-400 font-bold">EN LÍNEA</span>
           </div>
-          <span className="text-[11px] font-bold uppercase tracking-widest text-yellow-400 bg-yellow-950/70 border border-yellow-600/50 px-2.5 py-0.5 rounded-full mb-2">
-            Acceso Privado — Zona de Cuarentena
-          </span>
-          <h1 className="font-pixel text-lg sm:text-xl text-white tracking-tight">
-            DEAD AHEAD: LAST SURVIVAL
-          </h1>
-          <p className="text-xs text-zinc-400 mt-2">
-            Introduce la clave de superviviente o presiona <strong className="text-yellow-300">Enter</strong> para abordar el autobús blindado de Bill.
-          </p>
-        </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-xs font-bold uppercase tracking-wider text-zinc-300 mb-1.5">
-              Contraseña de Acceso
-            </label>
-            <div className="relative">
-              <Lock className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value);
-                  setError(false);
-                }}
-                onKeyDown={handleKeyDown}
-                placeholder="Ingresa tu clave (o presiona Enter)..."
-                autoFocus
-                className="w-full pl-10 pr-4 py-3 rounded-xl bg-zinc-950 border-2 border-zinc-700 focus:border-yellow-400 focus:outline-none text-sm text-white placeholder-zinc-500 transition"
-              />
-            </div>
-            {error && (
-              <div className="flex items-center gap-1.5 text-xs text-red-400 mt-1.5">
-                <ShieldAlert className="w-3.5 h-3.5" />
-                <span>Clave inválida. Intenta de nuevo.</span>
+          <div className="text-center mb-5">
+            <span className="inline-block text-[10px] font-extrabold uppercase tracking-widest text-yellow-300 bg-yellow-950/75 border border-yellow-600/60 px-2.5 py-0.5 rounded mb-2">
+              Acceso Privado — Zona de Cuarentena
+            </span>
+            <h1 className="font-pixel text-base sm:text-lg text-white tracking-tight drop-shadow">
+              DEAD AHEAD: LAST SURVIVAL
+            </h1>
+            <p className="text-xs text-zinc-300 mt-1.5 leading-relaxed">
+              Ingresa tu código de superviviente o presiona{' '}
+              <strong className="text-yellow-300">Enter</strong> para encender motores y desplegar el escuadrón.
+            </p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-3.5">
+            <div>
+              <label className="block text-[11px] font-extrabold uppercase tracking-wider text-zinc-300 mb-1">
+                Clave de Radio Militar
+              </label>
+              <div className="relative">
+                <Lock className="w-4 h-4 text-amber-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    setError(false);
+                  }}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Introduce clave o pulsa Enter..."
+                  autoFocus
+                  className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-zinc-950/95 border-2 border-[#524f3b] focus:border-yellow-400 focus:outline-none text-sm text-white placeholder-zinc-500 font-mono transition"
+                />
               </div>
-            )}
-          </div>
+              {error && (
+                <div className="flex items-center gap-1.5 text-xs text-red-400 mt-1.5">
+                  <ShieldAlert className="w-3.5 h-3.5" />
+                  <span>Código rechazado por el puesto de control.</span>
+                </div>
+              )}
+            </div>
 
-          <button
-            type="submit"
-            className="w-full py-3.5 rounded-xl bg-gradient-to-r from-yellow-500 to-amber-500 hover:from-yellow-400 hover:to-amber-400 text-zinc-950 font-extrabold text-sm uppercase tracking-wider shadow-lg transition transform active:scale-[0.99]"
-          >
-            Entrar a la Carretera (Enter)
-          </button>
-        </form>
+            <button
+              type="submit"
+              className="w-full py-3 rounded-lg bg-gradient-to-b from-yellow-400 to-amber-500 hover:from-yellow-300 hover:to-amber-400 border-2 border-black text-zinc-950 font-extrabold text-xs sm:text-sm uppercase tracking-wider shadow-lg transition transform active:scale-[0.99] cursor-pointer"
+            >
+              Abordar Autobús Blindado (Enter) →
+            </button>
+          </form>
+        </div>
       </div>
 
       {/* Global Verification Timestamp in Corner */}

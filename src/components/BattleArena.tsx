@@ -20,14 +20,20 @@ import {
   RenderObstacle,
   RenderParticle,
   RenderPickup,
+  RenderShell,
+  RenderTracer,
   RenderUnit,
   renderArmoredBus,
   renderBarricade,
   renderBiomeBackground,
+  renderCharacterPreview,
   renderCrow,
   renderDropPickup,
+  renderDynamicLightmap,
+  renderFireZone,
   renderForegroundLeftProps,
   renderTacticalObstacle,
+  renderTracersAndShells,
   renderUnitSprite,
 } from '../engine/PixelArtRenderer';
 import { soundFX } from '../engine/SoundFX';
@@ -57,7 +63,9 @@ interface InternalUnit extends RenderUnit {
   reloadTimer: number;
   knockback: number;
   bulletResist: number;
+  meleeResist: number;
   armorPiercing: number;
+  firstHitCritMult: number;
   isStationary: boolean;
   isFlying: boolean;
   isFlame: boolean;
@@ -84,6 +92,8 @@ const SURVIVOR_ORDER: SurvivorType[] = [
   'juggernaut',
 ];
 
+const TACTICAL_ORDER: TacticalItemType[] = ['blue_barrel', 'red_barrel', 'medkit'];
+
 const INITIAL_UNIT_COOLDOWNS: Record<SurvivorType, number> = {
   redneck: 0,
   farmer: 0,
@@ -108,13 +118,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const decalCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // HUD Reactive State matching Screenshot + Live Commander Leveling
-  const [courage, setCourage] = useState<number>(16);
-  const [rage, setRage] = useState<number>(4);
+  // HUD Reactive State — Tactical Sweet Spot: 28 Courage (+2.20/s) & 8 Rage (+reactive comeback)
+  const [courage, setCourage] = useState<number>(28);
+  const [rage, setRage] = useState<number>(8);
   const [commanderLevel, setCommanderLevel] = useState<number>(progress.busLevel || 1);
   const [commanderXp, setCommanderXp] = useState<number>(progress.commanderXp || 0);
-  const [busHp, setBusHp] = useState<number>(200 + progress.busHpBonus);
   const maxBusHp = 200 + progress.busHpBonus;
+  const [busHp, setBusHp] = useState<number>(maxBusHp);
   const [barricadeHp, setBarricadeHp] = useState<number>(mission.barricadeHp);
   const [unitCooldowns, setUnitCooldowns] =
     useState<Record<SurvivorType, number>>(INITIAL_UNIT_COOLDOWNS);
@@ -124,8 +134,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     medkit: 0,
   });
   const [furyBuffCount, setFuryBuffCount] = useState<number>(1);
-  const [timeRemaining, setTimeRemaining] = useState<number>(145);
+  const [timeRemaining, setTimeRemaining] = useState<number>(150);
   const [hordeTriggered, setHordeTriggered] = useState<boolean>(false);
+  const [rushWarningState, setRushWarningState] = useState<{ active: boolean; yPct: number }>({
+    active: false,
+    yPct: 65,
+  });
   const [paused, setPaused] = useState<boolean>(false);
   const pausedRef = useRef<boolean>(false);
   const [draggingItem, setDraggingItem] = useState<TacticalItemType | null>(null);
@@ -134,22 +148,85 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   const [zombiesKilledCount, setZombiesKilledCount] = useState<number>(0);
   const [showDpad, setShowDpad] = useState<boolean>(false);
 
+  const initialSector = mission.id <= 3 ? 1 : mission.id <= 6 ? 2 : mission.id <= 9 ? 3 : 4;
+
+  // Mutable Simulation Ref
+  const simRef = useRef({
+    time: 0,
+    courage: 28,
+    rage: 8,
+    commanderLevel: progress.busLevel || 1,
+    commanderXp: progress.commanderXp || 0,
+    busHp: maxBusHp,
+    maxBusHp,
+    busDamagedEver: false,
+    busX: -2,
+    busY: 100,
+    doorOpenTimer: 0,
+    barricadeHp: mission.barricadeHp,
+    maxBarricadeHp: mission.barricadeHp,
+    barricadeX: 614,
+    barricadeShake: 0,
+    barricadeThresholdIdx: 0,
+    rushPackTimer: initialSector === 1 ? 36 : initialSector === 2 ? 32 : initialSector === 3 ? 28 : 24,
+    rushWarningTimer: 0,
+    rushWarningY: 228,
+    waveCount: 0,
+    emptyRoadTimer: 0,
+    medkitTickTimer: 0,
+    billShotTimer: 1.6,
+    billFiringVisual: 0,
+    billBarrageActiveTimer: 0,
+    unitCooldowns: { ...INITIAL_UNIT_COOLDOWNS } as Record<SurvivorType, number>,
+    itemCooldowns: {
+      blue_barrel: 0,
+      red_barrel: 0,
+      medkit: 0,
+    } as Record<TacticalItemType, number>,
+    units: [] as InternalUnit[],
+    obstacles: [] as RenderObstacle[],
+    pickups: [] as RenderPickup[],
+    crows: [
+      { x: 310, y: 212, z: 0, vx: 0, vy: 0, vz: 0, flying: false, animOffset: 0 },
+      { x: 390, y: 238, z: 0, vx: 0, vy: 0, vz: 0, flying: false, animOffset: 1.7 },
+    ] as RenderCrow[],
+    particles: [] as RenderParticle[],
+    tracers: [] as RenderTracer[],
+    shells: [] as RenderShell[],
+    floatingTexts: [] as RenderFloatingText[],
+    fireZones: [] as RenderFireZone[],
+    keysPressed: new Set<string>(),
+    selectedUnitId: null as string | null,
+    mouseLogical: { x: 360, y: 228, insideRoad: false },
+    draggingItem: null as TacticalItemType | null,
+    waveTimer: initialSector === 1 ? 5.2 : initialSector === 2 ? 4.5 : 3.8,
+    skeletonTimer: mission.skeletonAmbush ? 14.0 : 9999,
+    timeRemaining: 150,
+    hordeTriggered: false,
+    screenShake: 0,
+    hitStopTimer: 0,
+    phase: 'combat' as 'combat' | 'bus_ramming' | 'victory' | 'defeat',
+    zombiesKilled: 0,
+  });
+
   const pauseBattle = useCallback(() => {
     if (simRef.current.phase === 'victory' || simRef.current.phase === 'defeat') return;
     pausedRef.current = true;
-    setPaused(true);
+    simRef.current.hitStopTimer = 0;
     simRef.current.keysPressed.clear();
+    setPaused(true);
     soundFX.suspendForBackground();
   }, []);
 
   const resumeBattle = useCallback(() => {
     pausedRef.current = false;
+    simRef.current.hitStopTimer = 0;
     setPaused(false);
     soundFX.resumeFromBackground();
     soundFX.unlockAudio();
   }, []);
 
-  // Automatically pause the battle & audio if the user leaves the app, switches tabs, or locks the screen
+  // Automatically pause the battle & audio if the user leaves the app, switches tabs, or locks screen
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden' || document.hidden) {
@@ -173,78 +250,45 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     };
   }, [pauseBattle]);
 
-  // Mutable Simulation Ref
-  const simRef = useRef({
-    time: 0,
-    courage: 16,
-    rage: 4,
-    commanderLevel: progress.busLevel || 1,
-    commanderXp: progress.commanderXp || 0,
-    busHp: 200 + progress.busHpBonus,
-    maxBusHp: 200 + progress.busHpBonus,
-    busDamagedEver: false,
-    busX: -2,
-    busY: 100,
-    doorOpenTimer: 0,
-    barricadeHp: mission.barricadeHp,
-    maxBarricadeHp: mission.barricadeHp,
-    barricadeX: 614,
-    barricadeShake: 0,
-    barricadeThresholdIdx: 0,
-    rushPackTimer: 18.0,
-    billShotTimer: 1.8,
-    billFiringVisual: 0,
-    billBarrageCharge: 45,
-    billBarrageActiveTimer: 0,
-    unitCooldowns: { ...INITIAL_UNIT_COOLDOWNS } as Record<SurvivorType, number>,
-    itemCooldowns: {
-      blue_barrel: 0,
-      red_barrel: 0,
-      medkit: 0,
-    } as Record<TacticalItemType, number>,
-    units: [] as InternalUnit[],
-    obstacles: [] as RenderObstacle[],
-    pickups: [] as RenderPickup[],
-    crows: [
-      { x: 310, y: 212, z: 0, vx: 0, vy: 0, vz: 0, flying: false, animOffset: 0 },
-      { x: 390, y: 238, z: 0, vx: 0, vy: 0, vz: 0, flying: false, animOffset: 1.7 },
-    ] as RenderCrow[],
-    particles: [] as RenderParticle[],
-    floatingTexts: [] as RenderFloatingText[],
-    fireZones: [] as RenderFireZone[],
-    keysPressed: new Set<string>(),
-    selectedUnitId: null as string | null,
-    mouseLogical: { x: 360, y: 228, insideRoad: false },
-    draggingItem: null as TacticalItemType | null,
-    waveTimer: 1.6,
-    skeletonTimer: mission.skeletonAmbush ? 8.0 : 9999,
-    timeRemaining: 145,
-    hordeTriggered: false,
-    screenShake: 0,
-    hitStopTimer: 0,
-    phase: 'combat' as 'combat' | 'bus_ramming' | 'victory' | 'defeat',
-    zombiesKilled: 0,
-  });
-
+  // Multi-tone organic pixel blood & blast crater decal stamper
   const stampBloodDecal = useCallback((x: number, y: number, radius = 8, color = '#991b1b') => {
     const dctx = decalCanvasRef.current?.getContext('2d');
     if (!dctx) return;
     const rx = Math.round(x);
     const ry = Math.round(Math.max(ROAD_Y_MIN - 4, Math.min(ROAD_Y_MAX + 6, y)));
-    dctx.fillStyle = color;
+    const isCrater = color === '#27272a';
+
+    dctx.fillStyle = isCrater ? 'rgba(20, 18, 16, 0.72)' : color;
     dctx.fillRect(
       rx - radius,
-      ry - Math.round(radius * 0.45),
+      ry - Math.round(radius * 0.42),
       radius * 2,
-      Math.max(3, Math.round(radius * 0.85))
+      Math.max(3, Math.round(radius * 0.82))
     );
-    dctx.fillStyle = '#7f1d1d';
+    dctx.fillStyle = isCrater ? '#18181b' : '#7f1d1d';
     dctx.fillRect(
-      rx - Math.round(radius * 0.7),
-      ry - Math.round(radius * 0.65),
-      Math.round(radius * 1.4),
-      Math.max(2, Math.round(radius * 1.1))
+      rx - Math.round(radius * 0.68),
+      ry - Math.round(radius * 0.62),
+      Math.round(radius * 1.36),
+      Math.max(2, Math.round(radius * 1.05))
     );
+    if (!isCrater && radius >= 6) {
+      // Micro splatter droplets around main puddle
+      dctx.fillStyle = '#b91c1c';
+      dctx.fillRect(rx + radius + 1, ry - 1, 2, 2);
+      dctx.fillRect(rx - radius - 3, ry + 1, 2, 1);
+    }
+  }, []);
+
+  const stampShellDecal = useCallback((x: number, y: number, color: string, w: number, h: number) => {
+    const dctx = decalCanvasRef.current?.getContext('2d');
+    if (!dctx) return;
+    const rx = Math.round(x);
+    const ry = Math.round(Math.max(ROAD_Y_MIN - 2, Math.min(ROAD_Y_MAX + 4, y)));
+    dctx.fillStyle = '#18181b';
+    dctx.fillRect(rx - 1, ry, w + 1, h);
+    dctx.fillStyle = color;
+    dctx.fillRect(rx, ry, w, h);
   }, []);
 
   const initDecalCanvas = useCallback(() => {
@@ -281,6 +325,81 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         maxLife: isComic ? 0.9 : 0.7,
         isComic,
       });
+    },
+    []
+  );
+
+  const spawnWeaponTracerAndShell = useCallback(
+    (
+      shooterX: number,
+      shooterY: number,
+      muzzleZ: number,
+      targetX: number,
+      targetY: number,
+      facing: 1 | -1,
+      weaponKind: 'shotgun' | 'sniper' | 'rifle' | 'rapid'
+    ) => {
+      const sim = simRef.current;
+      const mx = shooterX + facing * 13;
+      const my = shooterY - muzzleZ;
+
+      if (weaponKind === 'shotgun') {
+        for (let p = -1; p <= 2; p++) {
+          const spreadY = p * 5 + (Math.random() - 0.5) * 4;
+          sim.tracers.push({
+            x1: mx,
+            y1: my,
+            x2: targetX + (Math.random() - 0.5) * 14,
+            y2: targetY - 14 + spreadY,
+            color: 'rgba(251, 146, 60, 0.78)',
+            coreColor: '#fef08a',
+            width: 1.5,
+            life: 0.085,
+            maxLife: 0.085,
+          });
+        }
+      } else if (weaponKind === 'sniper') {
+        sim.tracers.push({
+          x1: mx + facing * 5,
+          y1: my,
+          x2: Math.min(LOGICAL_WIDTH - 10, targetX + facing * 18),
+          y2: targetY - 16,
+          color: 'rgba(56, 189, 248, 0.85)',
+          coreColor: '#ffffff',
+          width: 2.2,
+          life: 0.16,
+          maxLife: 0.16,
+          isSniper: true,
+        });
+      } else {
+        sim.tracers.push({
+          x1: mx,
+          y1: my,
+          x2: targetX,
+          y2: targetY - 15 + (Math.random() - 0.5) * 4,
+          color: weaponKind === 'rapid' ? 'rgba(245, 158, 11, 0.85)' : 'rgba(253, 224, 71, 0.85)',
+          coreColor: '#ffffff',
+          width: 1.6,
+          life: 0.095,
+          maxLife: 0.095,
+        });
+      }
+
+      if (sim.shells.length < 38) {
+        const isShotgun = weaponKind === 'shotgun';
+        sim.shells.push({
+          x: shooterX - facing * 2,
+          y: shooterY,
+          z: muzzleZ,
+          vx: -facing * (22 + Math.random() * 24),
+          vy: (Math.random() - 0.5) * 18,
+          vz: 58 + Math.random() * 38,
+          bounces: 0,
+          color: isShotgun ? '#dc2626' : '#facc15',
+          w: isShotgun ? 3 : 2,
+          h: 1,
+        });
+      }
     },
     []
   );
@@ -323,28 +442,38 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   }, []);
 
   const spawnZombie = useCallback(
-    (type: ZombieType, customX?: number, customY?: number, fromCorpse = false) => {
+    (
+      type: ZombieType,
+      customX?: number,
+      customY?: number,
+      fromCorpse = false,
+      hpScale = 1
+    ) => {
       const cfg = ZOMBIE_CONFIGS[type];
       const spawnX = customX ?? simRef.current.barricadeX - 30 - Math.random() * 45;
       const spawnY =
         customY ?? ROAD_Y_MIN + 8 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 16);
       const isEmerging = (cfg.emergesFromGround && customX !== undefined) || fromCorpse;
+      // Gentle late-campaign scaling (+3% HP per mission past M1) while keeping M1 crisp
+      const missionScale = 1 + Math.max(0, mission.id - 1) * 0.035;
+      const scaledMaxHp = Math.round(cfg.baseHp * missionScale);
+      const initialHp = Math.max(12, Math.round(scaledMaxHp * hpScale));
 
       const zUnit: InternalUnit = {
         id: `z_${Date.now()}_${Math.random()}`,
         team: 'zombie',
         subType: type,
-        level: 7, // Level [7] badge matching screenshot!
+        level: Math.min(12, mission.id + 1),
         x: spawnX,
         y: spawnY,
         z: 0,
         vx: 0,
         vy: 0,
         vz: 0,
-        hp: cfg.baseHp,
-        maxHp: cfg.baseHp,
+        hp: initialHp,
+        maxHp: scaledMaxHp,
         damage: cfg.baseDamage,
-        speed: cfg.speed * (0.92 + Math.random() * 0.16),
+        speed: cfg.speed * (0.93 + Math.random() * 0.14),
         attackRange: cfg.attackRange,
         attackCooldown: cfg.attackCooldown,
         attackTimer: 0,
@@ -356,7 +485,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         reloadTimer: 0,
         knockback: 12,
         bulletResist: cfg.bulletResist ?? 0,
+        meleeResist: 0,
         armorPiercing: 0,
+        firstHitCritMult: 1,
         isStationary: false,
         isFlying: false,
         isFlame: false,
@@ -371,13 +502,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         attackProgress: 0,
         reloadProgress: 0,
         whiteFlashTimer: 0,
+        critTelegraphTimer: 0,
         isLucky: false,
         isPlayerControlled: false,
         facing: -1,
       };
       simRef.current.units.push(zUnit);
     },
-    []
+    [mission.id]
   );
 
   const deploySurvivor = useCallback(
@@ -413,9 +545,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       if (cfg.repairsBusOnSpawn && !freeInitial) {
         const heal = cfg.repairsBusOnSpawn;
         sim.busHp = Math.min(sim.maxBusHp, sim.busHp + heal);
-        setBusHp(sim.busHp);
-        addFloatingText(`+${heal} HP`, sim.busX + 100, sim.busY + 12, 20, '#fde047', true);
+        setBusHp(Math.round(sim.busHp));
+        addFloatingText(`+${heal} BUS`, sim.busX + 108, sim.busY + 12, 22, '#4ade80', true);
       }
+
+      const quote =
+        cfg.quotes.length > 0 && Math.random() < 0.45
+          ? cfg.quotes[Math.floor(Math.random() * cfg.quotes.length)]
+          : undefined;
 
       const newUnit: InternalUnit = {
         id: `s_${Date.now()}_${Math.random()}`,
@@ -433,7 +570,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         damage,
         speed: cfg.speed * (isLucky ? 1.15 : 1),
         attackRange: cfg.attackRange,
-        attackCooldown: cfg.attackCooldown * (isLucky ? 0.8 : 1),
+        attackCooldown: cfg.attackCooldown * (isLucky ? 0.82 : 1),
         attackTimer: 0,
         isRanged: cfg.isRanged,
         pellets: cfg.pellets ?? 1,
@@ -443,13 +580,15 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         reloadTimer: 0,
         knockback: cfg.knockback,
         bulletResist: cfg.bulletResist ?? 0,
+        meleeResist: cfg.meleeResist ?? 0,
         armorPiercing: cfg.armorPiercing ?? 0,
+        firstHitCritMult: cfg.firstHitCritMultiplier ?? 3.0,
         isStationary: !!cfg.isStationary,
         isFlying: !!cfg.isFlying,
         isFlame: !!cfg.isFlame,
         barricadeMultiplier: cfg.barricadeMultiplier ?? 1,
         infectedZombieType: cfg.infectedZombieType,
-        critChance: (cfg.fortune / 100) * (isLucky ? 1.6 : 1),
+        critChance: (cfg.fortune / 100) * (isLucky ? 1.55 : 1),
         critMultiplier: 1.8,
         state: 'march',
         animTime: 0,
@@ -460,6 +599,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         isPlayerControlled: false,
         facing: 1,
         firstHitReady: !!cfg.firstHitCritMultiplier,
+        quoteText: quote,
+        quoteTimer: quote ? 2.1 : 0,
       };
 
       const hasAliveControlled = sim.units.some(
@@ -476,18 +617,27 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     [addFloatingText, progress.unitLevels, scareCrows]
   );
 
+  // Supports both player Red Barrel explosions and Bloated Zombie collateral explosions!
   const triggerExplosion = useCallback(
-    (x: number, y: number, radius: number, damage: number, leavesFire: boolean) => {
+    (
+      x: number,
+      y: number,
+      radius: number,
+      survivorDamage: number,
+      leavesFire: boolean,
+      zombieDamage?: number
+    ) => {
       const sim = simRef.current;
+      const zDmg = zombieDamage ?? survivorDamage;
       soundFX.playExplosion();
       sim.screenShake = 8;
       sim.hitStopTimer = 0.05;
-      stampBloodDecal(x, y, 14, '#27272a');
-      addFloatingText('BOOM!', x, y, 24, '#f97316', true);
+      stampBloodDecal(x, y, 15, '#27272a');
+      addFloatingText('BOOM!', x, y, 26, '#f97316', true);
 
-      for (let i = 0; i < 28; i++) {
+      for (let i = 0; i < 30; i++) {
         const ang = Math.random() * Math.PI * 2;
-        const spd = 25 + Math.random() * 90;
+        const spd = 25 + Math.random() * 92;
         sim.particles.push({
           x,
           y,
@@ -506,8 +656,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         sim.fireZones.push({
           x,
           y,
-          radius: radius * 0.85,
+          radius: radius * 0.88,
           duration: 6.5,
+          maxDuration: 6.5,
         });
       }
 
@@ -519,13 +670,20 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           if (u.state === 'corpse') {
             u.hp = -999;
             u.corpseTimer = -999;
+            addFloatingText('CALCINADO', u.x, u.y, 15, '#f97316', true);
           } else {
-            u.hp -= damage;
-            u.whiteFlashTimer = 0.12;
-            u.vx += (dx >= 0 ? 1 : -1) * 65;
-            addFloatingText(`${damage}`, u.x, u.y, 18, '#fde047', true, 'WACK!');
-            if (u.hp <= 0) {
-              u.infectedZombieType = undefined;
+            const appliedDmg = u.team === 'zombie' ? zDmg : survivorDamage;
+            if (appliedDmg > 0) {
+              u.hp -= appliedDmg;
+              u.whiteFlashTimer = 0.12;
+              u.vx += (dx >= 0 ? 1 : -1) * 68;
+              addFloatingText(`${appliedDmg}`, u.x, u.y, 18, '#fde047', true, 'WACK!');
+              if (u.team === 'survivor') {
+                sim.rage = Math.min(100, sim.rage + appliedDmg * 0.18);
+              }
+              if (u.hp <= 0) {
+                u.infectedZombieType = undefined;
+              }
             }
           }
         }
@@ -534,27 +692,39 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     [addFloatingText, stampBloodDecal]
   );
 
-  // Blue Barrel cost set to 6 Rage (matching slot 6 in screenshot!)
-  const getEffectiveRageCost = (type: TacticalItemType) =>
-    type === 'blue_barrel' ? 6 : TACTICAL_ITEM_CONFIGS[type].rageCost;
-
   const deployTacticalItem = useCallback(
     (type: TacticalItemType, targetX: number, targetY: number) => {
       const sim = simRef.current;
       if (sim.phase !== 'combat' || pausedRef.current) return;
       const cfg = TACTICAL_ITEM_CONFIGS[type];
-      const rCost = getEffectiveRageCost(type);
-      if (sim.rage < rCost || sim.itemCooldowns[type] > 0) return;
+      if (sim.rage < cfg.rageCost || sim.itemCooldowns[type] > 0) return;
 
-      const clampedX = Math.max(145, Math.min(sim.barricadeX - 24, targetX));
+      const clampedX = Math.max(142, Math.min(sim.barricadeX - 22, targetX));
       const clampedY = Math.max(ROAD_Y_MIN + 4, Math.min(ROAD_Y_MAX - 4, targetY));
 
-      sim.rage -= rCost;
+      sim.rage -= cfg.rageCost;
       sim.itemCooldowns[type] = cfg.prepTime;
       setRage(Math.floor(sim.rage));
       setItemCooldowns({ ...sim.itemCooldowns });
       setDraggingItem(null);
       sim.draggingItem = null;
+
+      if (type === 'medkit') {
+        soundFX.playCouragePickup();
+        addFloatingText('+BOTIQUÍN', clampedX, clampedY, 22, '#4ade80', true);
+        sim.obstacles.push({
+          id: `med_${Date.now()}_${Math.random()}`,
+          type: 'medkit',
+          x: clampedX,
+          y: clampedY,
+          z: 0,
+          hp: 1,
+          maxHp: 1,
+          whiteFlashTimer: 0,
+          healDuration: cfg.duration ?? 7.0,
+        });
+        return;
+      }
 
       soundFX.playBarricadeBash();
       sim.screenShake = 5;
@@ -568,9 +738,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             u.hp = -999;
             u.corpseTimer = -999;
             spawnBloodParticles(u.x, u.y, 4, 16);
-          } else {
+            addFloatingText('APLASTADO', u.x, u.y, 15, '#38bdf8', true);
+          } else if (u.team === 'zombie') {
             u.hp -= cfg.impactDamage;
             u.whiteFlashTimer = 0.12;
+            u.vx += 24;
             spawnBloodParticles(u.x, u.y, 8, 14);
             addFloatingText(`${cfg.impactDamage}`, u.x, u.y, 18, '#fde047', true, 'WACK!');
           }
@@ -595,10 +767,15 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   const triggerFuryWhiskeyBuff = useCallback(() => {
     const sim = simRef.current;
     if (sim.phase !== 'combat' || pausedRef.current) return;
+    if (furyBuffCount <= 0 && sim.rage < 25) return;
+
     if (furyBuffCount > 0) {
       setFuryBuffCount((c) => Math.max(0, c - 1));
+    } else {
+      sim.rage -= 25;
+      setRage(Math.floor(sim.rage));
     }
-    sim.billBarrageActiveTimer = 3.2;
+    sim.billBarrageActiveTimer = 3.6;
     sim.units.forEach((u) => {
       if (u.team === 'survivor' && u.state !== 'corpse') {
         u.isLucky = true;
@@ -629,17 +806,31 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       if (key === '1') deploySurvivor('redneck');
       else if (key === '2') deploySurvivor('farmer');
       else if (key === '3') deploySurvivor('builder');
-      else if (key === '4') deploySurvivor('policeman');
-      else if (key === '5') deploySurvivor('mechanic');
-      else if (key === '6' || key === 'q') {
+      else if (key === '4') deploySurvivor('mechanic');
+      else if (key === '5') deploySurvivor('hound');
+      else if (key === '6') deploySurvivor('policeman');
+      else if (key === '7') deploySurvivor('sniper');
+      else if (key === '8') deploySurvivor('flamethrower');
+      else if (key === '9') deploySurvivor('turret');
+      else if (key === '0') deploySurvivor('drone');
+      else if (key === 'q') {
         const m = simRef.current.mouseLogical;
-        deployTacticalItem('blue_barrel', m.insideRoad ? m.x : 330, m.insideRoad ? m.y : 242);
+        deployTacticalItem('blue_barrel', m.insideRoad ? m.x : 340, m.insideRoad ? m.y : 234);
+      } else if (key === 'x' || key === 'r') {
+        const m = simRef.current.mouseLogical;
+        deployTacticalItem('red_barrel', m.insideRoad ? m.x : 395, m.insideRoad ? m.y : 234);
+      } else if (key === 'e') {
+        const m = simRef.current.mouseLogical;
+        deployTacticalItem('medkit', m.insideRoad ? m.x : 255, m.insideRoad ? m.y : 232);
       } else if (key === 'tab') {
         e.preventDefault();
         cycleSelectedSurvivor();
       } else if (key === ' ') {
         e.preventDefault();
         triggerFuryWhiskeyBuff();
+      } else if (key === 'escape') {
+        if (pausedRef.current) resumeBattle();
+        else pauseBattle();
       }
     };
 
@@ -653,7 +844,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [cycleSelectedSurvivor, deploySurvivor, deployTacticalItem, triggerFuryWhiskeyBuff]);
+  }, [
+    cycleSelectedSurvivor,
+    deploySurvivor,
+    deployTacticalItem,
+    pauseBattle,
+    resumeBattle,
+    triggerFuryWhiskeyBuff,
+  ]);
 
   const getLogicalCoords = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
@@ -675,7 +873,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     const sim = simRef.current;
     for (let i = sim.pickups.length - 1; i >= 0; i--) {
       const p = sim.pickups[i];
-      if (Math.hypot(p.x - lx, p.y - ly) <= 28) {
+      if (Math.hypot(p.x - lx, p.y - ly) <= 30) {
         soundFX.playCouragePickup();
         if (p.kind === 'courage') {
           sim.courage = Math.min(100, sim.courage + p.amount);
@@ -684,6 +882,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         } else {
           sim.rage = Math.min(100, sim.rage + p.amount);
           setRage(Math.floor(sim.rage));
+          addFloatingText(`+${p.amount} IRA`, p.x, p.y, 16, '#f87171', true);
         }
         sim.pickups.splice(i, 1);
       }
@@ -701,12 +900,25 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     simRef.current.mouseLogical = coords;
     tryCollectPickupsAt(coords.x, coords.y);
 
-    if (simRef.current.draggingItem) {
-      deployTacticalItem(simRef.current.draggingItem, coords.x, coords.y);
+    const sim = simRef.current;
+    if (sim.draggingItem) {
+      deployTacticalItem(sim.draggingItem, coords.x, coords.y);
       return;
     }
 
-    const sim = simRef.current;
+    // Tactical Counterplay: Tapping a deployed Red Barrel detonates it on command!
+    const clickedRedBarrelIdx = sim.obstacles.findIndex(
+      (o) =>
+        o.type === 'red_barrel' &&
+        Math.hypot(o.x - coords.x, o.y - 10 - coords.y) <= 22
+    );
+    if (clickedRedBarrelIdx !== -1) {
+      const rb = sim.obstacles[clickedRedBarrelIdx];
+      sim.obstacles.splice(clickedRedBarrelIdx, 1);
+      triggerExplosion(rb.x, rb.y, 54, 18, true, 78);
+      return;
+    }
+
     const clickedSurvivor = sim.units.find(
       (u) =>
         u.team === 'survivor' &&
@@ -719,17 +931,52 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     }
   };
 
-  // Main 60 FPS Simulation & Render Loop
+  // Main 60 FPS Simulation & Multi-Layer Render Loop
   useEffect(() => {
     initDecalCanvas();
 
-    // Start cleanly with NO player units outside the bus — 5 tough zombies guarding the barricade!
+    // Fair Mission-Scaled Opening Guard (NO Bloated/Crit/Armored wall in Mission 1!)
     simRef.current.units = [];
-    spawnZombie('walker', 505, 206);
-    spawnZombie('walker', 535, 248);
-    spawnZombie('runner', 558, 218);
-    spawnZombie('crit_zombie', 575, 258);
-    spawnZombie('bloated', 590, 232);
+    if (mission.id === 1) {
+      // Staggered 105px apart so player's first Redneck fights 1v1 cleanly!
+      spawnZombie('walker', 485, 212);
+      spawnZombie('walker', 590, 248);
+    } else if (mission.id === 2) {
+      spawnZombie('walker', 490, 210);
+      spawnZombie('walker', 555, 250);
+      spawnZombie('runner', 595, 228);
+    } else if (mission.id === 3) {
+      spawnZombie('walker', 490, 208);
+      spawnZombie('walker', 545, 250);
+      spawnZombie('runner', 585, 224);
+      spawnZombie('skeleton', 520, 236);
+    } else if (mission.id === 4) {
+      spawnZombie('walker', 495, 212);
+      spawnZombie('walker', 545, 252);
+      spawnZombie('runner', 575, 222);
+      spawnZombie('armored', 598, 240);
+    } else if (mission.id <= 6) {
+      spawnZombie('walker', 495, 208);
+      spawnZombie('runner', 540, 248);
+      spawnZombie('crit_zombie', 575, 220);
+      spawnZombie('armored', 598, 242);
+    } else if (mission.id <= 9) {
+      spawnZombie('walker', 490, 208);
+      spawnZombie('runner', 532, 248);
+      spawnZombie('crit_zombie', 562, 218);
+      spawnZombie('armored', 585, 252);
+      spawnZombie('bloated', 602, 232);
+    } else {
+      spawnZombie('runner', 495, 210);
+      spawnZombie('runner', 532, 250);
+      spawnZombie('crit_zombie', 564, 220);
+      spawnZombie('armored', 586, 252);
+      spawnZombie('bloated', 602, 232);
+    }
+
+    const sector = mission.id <= 3 ? 1 : mission.id <= 6 ? 2 : mission.id <= 9 ? 3 : 4;
+    const maxActiveZombies =
+      mission.id === 1 ? 7 : sector === 1 ? 8 : sector === 2 ? 10 : sector === 3 ? 12 : 15;
 
     let animationFrameId: number;
     let lastTime = performance.now();
@@ -771,11 +1018,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
           if (sim.busX > LOGICAL_WIDTH + 40) {
             sim.phase = 'victory';
-            const stars = !sim.busDamagedEver
-              ? 3
-              : sim.busHp >= sim.maxBusHp * 0.5
-              ? 2
-              : 1;
+            // Rewarding 3-star threshold (>= 85% Bus HP — synergizes with Mechanic repairs!)
+            const stars =
+              sim.busHp >= sim.maxBusHp * 0.85
+                ? 3
+                : sim.busHp >= sim.maxBusHp * 0.45
+                ? 2
+                : 1;
             setStarsEarned(stars);
             setZombiesKilledCount(sim.zombiesKilled);
             setBattleResult('victory');
@@ -783,13 +1032,15 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         }
 
         if (sim.phase === 'combat') {
-          sim.courage = Math.min(100, sim.courage + dt * 1.65);
+          // Consensus Economy: +2.20 Courage/s
+          sim.courage = Math.min(100, sim.courage + dt * 2.2);
+
           SURVIVOR_ORDER.forEach((k) => {
             if (sim.unitCooldowns[k] > 0) {
               sim.unitCooldowns[k] = Math.max(0, sim.unitCooldowns[k] - dt);
             }
           });
-          (['blue_barrel', 'red_barrel', 'medkit'] as TacticalItemType[]).forEach((k) => {
+          TACTICAL_ORDER.forEach((k) => {
             if (sim.itemCooldowns[k] > 0) {
               sim.itemCooldowns[k] = Math.max(0, sim.itemCooldowns[k] - dt);
             }
@@ -801,7 +1052,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             setHordeTriggered(true);
             soundFX.playSiren();
             sim.screenShake = 9;
-            for (let i = 0; i < 9; i++) {
+            addFloatingText('¡HORDA FINAL!', 360, 165, 28, '#ef4444', true);
+            for (let i = 0; i < 7; i++) {
               spawnZombie(
                 i % 3 === 0 ? 'armored' : i % 2 === 0 ? 'runner' : 'crit_zombie',
                 560 + i * 12
@@ -809,44 +1061,94 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             }
           }
 
-          // Multi-zombie Wave Packs (2 to 3 zombies per wave!)
-          sim.waveTimer -= dt;
+          // Count alive zombies for Dynamic Pressure Cap & Anti-Dead-Air Pacing
+          let aliveZombies = 0;
+          for (let i = 0; i < sim.units.length; i++) {
+            if (sim.units[i].team === 'zombie' && sim.units[i].hp > 0) {
+              aliveZombies++;
+            }
+          }
+
+          if (aliveZombies === 0) {
+            sim.emptyRoadTimer += dt;
+          } else {
+            sim.emptyRoadTimer = 0;
+          }
+
+          const waveDrainRate = sim.hordeTriggered
+            ? 1.35
+            : aliveZombies >= maxActiveZombies
+            ? 0.25
+            : sim.emptyRoadTimer > 1.8
+            ? 1.65
+            : 1.0;
+
+          // Sinusoidal 4-Wave Threat Director (Normal -> Normal -> Climax -> Breather Valley)
+          sim.waveTimer -= dt * waveDrainRate;
           if (sim.waveTimer <= 0) {
+            const phaseIdx = sim.waveCount % 4;
+            sim.waveCount += 1;
+
+            const isBreather = phaseIdx === 3 && !sim.hordeTriggered;
+            const isClimax = phaseIdx === 2 || sim.hordeTriggered;
+
             sim.waveTimer = sim.hordeTriggered
-              ? 1.1
-              : mission.waveInterval * (0.78 + Math.random() * 0.25);
+              ? 2.1
+              : mission.waveInterval * (0.9 + Math.random() * 0.2) + (isBreather ? 2.2 : 0);
+
             const pool = mission.zombiePool;
-            const packSize = sim.hordeTriggered ? 3 : Math.random() < 0.65 ? 2 : 3;
-            for (let p = 0; p < packSize; p++) {
+            let packSize = sector <= 2 ? 2 : 2 + (Math.random() < 0.45 ? 1 : 0);
+            if (isClimax) packSize += 1;
+            if (isBreather) packSize = Math.max(1, packSize - 1);
+
+            const roomLeft = sim.hordeTriggered
+              ? 6
+              : Math.max(1, maxActiveZombies + 2 - aliveZombies);
+            const finalCount = Math.min(packSize, roomLeft);
+
+            for (let p = 0; p < finalCount; p++) {
               const pick = pool[Math.floor(Math.random() * pool.length)];
-              spawnZombie(pick, sim.barricadeX - 24 - p * 18 - Math.random() * 20);
+              spawnZombie(pick, sim.barricadeX - 20 - p * 20 - Math.random() * 18);
             }
           }
 
-          // Periodic Fast Rush Pack every ~19s
-          sim.rushPackTimer -= dt;
-          if (sim.rushPackTimer <= 0) {
-            sim.rushPackTimer = 18 + Math.random() * 5;
-            addFloatingText('¡OLEADA RÁPIDA!', 520, 175, 18, '#ef4444', true);
-            spawnZombie('runner', sim.barricadeX - 18);
-            spawnZombie('crit_zombie', sim.barricadeX - 34);
-            if (Math.random() < 0.6) {
-              spawnZombie('runner', sim.barricadeX - 48);
+          // Telegraphed Fast Rush Pack (2.8s Lane Warning BEFORE Runners enter!)
+          if (sim.rushWarningTimer > 0) {
+            sim.rushWarningTimer -= dt;
+            if (sim.rushWarningTimer <= 0) {
+              addFloatingText('¡CORREDORES!', 545, sim.rushWarningY - 12, 20, '#ef4444', true);
+              spawnZombie('runner', sim.barricadeX - 14, sim.rushWarningY - 6);
+              if (sector === 1) {
+                spawnZombie('runner', sim.barricadeX - 34, sim.rushWarningY + 8);
+              } else {
+                spawnZombie('crit_zombie', sim.barricadeX - 32, sim.rushWarningY + 8);
+                if (sector >= 3 && aliveZombies < maxActiveZombies) {
+                  spawnZombie('runner', sim.barricadeX - 48, sim.rushWarningY);
+                }
+              }
+            }
+          } else {
+            sim.rushPackTimer -= dt;
+            if (sim.rushPackTimer <= 0 && aliveZombies < maxActiveZombies) {
+              sim.rushPackTimer = (sector === 1 ? 30 : sector === 2 ? 26 : 23) + Math.random() * 5;
+              sim.rushWarningY = ROAD_Y_MIN + 18 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 36);
+              sim.rushWarningTimer = 2.8;
             }
           }
 
+          // Underground Skeleton Ambush
           sim.skeletonTimer -= dt;
-          if (sim.skeletonTimer <= 0) {
-            sim.skeletonTimer = 9 + Math.random() * 4;
-            const ambushX = 240 + Math.random() * 230;
+          if (sim.skeletonTimer <= 0 && aliveZombies < maxActiveZombies) {
+            sim.skeletonTimer = 13 + Math.random() * 5;
+            const ambushX = 250 + Math.random() * 220;
             const ambushY = ROAD_Y_MIN + 14 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 28);
             spawnZombie('skeleton', ambushX, ambushY);
-            if (Math.random() < 0.5) {
+            if (sector >= 3 && Math.random() < 0.5) {
               spawnZombie('skeleton', ambushX + 28, ambushY);
             }
           }
 
-          // Sheriff Bill Roof Rifle Defense (Only fires when zombies get very close to the bus!)
+          // Sheriff Bill Roof Rifle Defense + Tracers & Roof Brass Ejection
           if (sim.billBarrageActiveTimer > 0) {
             sim.billBarrageActiveTimer -= dt;
             if (Math.random() < 0.32) {
@@ -855,12 +1157,23 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               );
               if (targetZombies.length > 0) {
                 const target = targetZombies[Math.floor(Math.random() * targetZombies.length)];
-                const dmg = Math.round((16 + progress.billDamageBonus) * (1 - target.bulletResist));
+                const dmg = Math.round(
+                  (17 + progress.billDamageBonus) * (1 - target.bulletResist * 0.7)
+                );
                 target.hp -= dmg;
                 target.whiteFlashTimer = 0.09;
                 target.vx += 15;
                 sim.billFiringVisual = 0.1;
                 soundFX.playRifle();
+                spawnWeaponTracerAndShell(
+                  sim.busX + 104,
+                  sim.busY + 62,
+                  76,
+                  target.x,
+                  target.y,
+                  1,
+                  'rifle'
+                );
                 spawnBloodParticles(target.x, target.y, 12, 6);
                 addFloatingText(`${dmg}`, target.x, target.y, 20, '#fde047', true, 'WACK!');
               }
@@ -869,32 +1182,102 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             sim.billShotTimer -= dt;
             if (sim.billShotTimer <= 0) {
               const closeZombie = sim.units
-                .filter((u) => u.team === 'zombie' && u.state !== 'corpse' && u.x < 250 && u.hp > 0)
+                .filter((u) => u.team === 'zombie' && u.state !== 'corpse' && u.x < 265 && u.hp > 0)
                 .sort((a, b) => a.x - b.x)[0];
               if (closeZombie) {
-                sim.billShotTimer = 2.6;
+                sim.billShotTimer = 2.4;
                 sim.billFiringVisual = 0.14;
                 soundFX.playRifle();
                 scareCrows();
-                const dmg = Math.round((18 + progress.billDamageBonus) * (1 - closeZombie.bulletResist));
+                const dmg = Math.round(
+                  (19 + progress.billDamageBonus) * (1 - closeZombie.bulletResist * 0.7)
+                );
                 closeZombie.hp -= dmg;
                 closeZombie.whiteFlashTimer = 0.1;
                 closeZombie.vx += 16;
+                spawnWeaponTracerAndShell(
+                  sim.busX + 104,
+                  sim.busY + 62,
+                  76,
+                  closeZombie.x,
+                  closeZombie.y,
+                  1,
+                  'rifle'
+                );
                 spawnBloodParticles(closeZombie.x, closeZombie.y, 12, 8);
                 addFloatingText(`${dmg}`, closeZombie.x, closeZombie.y, 20, '#fde047');
               } else {
-                sim.billShotTimer = 0.4;
+                sim.billShotTimer = 0.35;
               }
             }
           }
 
-          // Obstacles
+          // Active Fire Zones (Red Barrel Napalm — Burns Zombies & Cremates Corpses!)
+          for (let i = sim.fireZones.length - 1; i >= 0; i--) {
+            const fz = sim.fireZones[i];
+            fz.duration -= dt;
+            if (fz.duration <= 0) {
+              sim.fireZones.splice(i, 1);
+              continue;
+            }
+            for (let uIdx = 0; uIdx < sim.units.length; uIdx++) {
+              const u = sim.units[uIdx];
+              const dist = Math.hypot(u.x - fz.x, (u.y - fz.y) * 1.45);
+              if (dist <= fz.radius) {
+                if (u.state === 'corpse') {
+                  u.hp = -999;
+                  u.corpseTimer = -999;
+                  addFloatingText('CALCINADO', u.x, u.y, 14, '#f97316', true);
+                } else if (u.team === 'zombie' && u.hp > 0) {
+                  u.hp -= 15 * dt;
+                  if (Math.random() < 0.08) {
+                    u.whiteFlashTimer = 0.06;
+                  }
+                }
+              }
+            }
+          }
+
+          // Obstacles & Medkit Healing Field Simulation
+          sim.medkitTickTimer += dt;
+          const emitHealPopup = sim.medkitTickTimer >= 1.0;
+          if (emitHealPopup) sim.medkitTickTimer = 0;
+
           for (let i = sim.obstacles.length - 1; i >= 0; i--) {
             const obs = sim.obstacles[i];
-            if (obs.whiteFlashTimer > 0) obs.whiteFlashTimer = Math.max(0, obs.whiteFlashTimer - dt);
+            if (obs.whiteFlashTimer > 0) {
+              obs.whiteFlashTimer = Math.max(0, obs.whiteFlashTimer - dt);
+            }
+
+            if (obs.type === 'medkit') {
+              obs.healDuration = (obs.healDuration ?? 7.0) - dt;
+              if (obs.healDuration <= 0) {
+                sim.obstacles.splice(i, 1);
+                continue;
+              }
+              const healRate = TACTICAL_ITEM_CONFIGS.medkit.healsPerSec ?? 12;
+              const radius = TACTICAL_ITEM_CONFIGS.medkit.radius;
+              sim.units.forEach((u) => {
+                if (
+                  u.team === 'survivor' &&
+                  !u.isStationary &&
+                  u.state !== 'corpse' &&
+                  u.hp > 0 &&
+                  u.hp < u.maxHp &&
+                  Math.hypot(u.x - obs.x, (u.y - obs.y) * 1.35) <= radius
+                ) {
+                  u.hp = Math.min(u.maxHp, u.hp + healRate * dt);
+                  if (emitHealPopup) {
+                    addFloatingText(`+${healRate}`, u.x, u.y, 20, '#4ade80');
+                  }
+                }
+              });
+              continue;
+            }
+
             if (obs.hp <= 0) {
               if (obs.type === 'red_barrel') {
-                triggerExplosion(obs.x, obs.y, 52, 65, true);
+                triggerExplosion(obs.x, obs.y, 54, 18, true, 75);
               } else {
                 soundFX.playBarricadeBash();
               }
@@ -930,6 +1313,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             const u = sim.units[i];
             u.animTime += dt;
             if (u.whiteFlashTimer > 0) u.whiteFlashTimer = Math.max(0, u.whiteFlashTimer - dt);
+            if ((u.critTelegraphTimer ?? 0) > 0) {
+              u.critTelegraphTimer = Math.max(0, (u.critTelegraphTimer ?? 0) - dt);
+            }
+            if ((u.quoteTimer ?? 0) > 0) {
+              u.quoteTimer = Math.max(0, (u.quoteTimer ?? 0) - dt);
+            }
 
             if (u.z > 0 || u.vz !== 0) {
               u.z += u.vz * dt;
@@ -951,15 +1340,17 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             u.y = Math.max(ROAD_Y_MIN, Math.min(ROAD_Y_MAX, u.y));
 
             if (u.state === 'corpse') {
-              u.corpseTimer = (u.corpseTimer ?? 3.8) - dt;
+              u.corpseTimer = (u.corpseTimer ?? 6.0) - dt;
               if (u.corpseTimer <= -900) {
                 sim.units.splice(i, 1);
                 continue;
               }
               if (u.corpseTimer <= 0) {
-                const zType = u.infectedZombieType ?? 'runner';
+                // Fair early-game reanimation: Redneck revives as Walker in M1-M2, and all revive at 75% HP!
+                const rawType = u.infectedZombieType ?? 'walker';
+                const zType = mission.id <= 2 && rawType === 'runner' ? 'walker' : rawType;
                 soundFX.playZombieReanimate();
-                spawnZombie(zType, u.x, u.y, true);
+                spawnZombie(zType, u.x, u.y, true, 0.75);
                 sim.units.splice(i, 1);
               }
               continue;
@@ -967,7 +1358,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
             if (u.hp <= 0) {
               stampBloodDecal(u.x, u.y, 11);
-              spawnBloodParticles(u.x, u.y, 8, 22);
+              spawnBloodParticles(u.x, u.y, 8, 22, u.subType === 'bloated');
 
               if (u.team === 'zombie') {
                 sim.zombiesKilled += 1;
@@ -997,8 +1388,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   onLevelUpCommander?.(sim.commanderLevel, sim.commanderXp);
                 }
 
+                // Bloated explosion damages survivors (30) AND shreds nearby zombies (55)!
                 if (u.explodesOnDeath) {
-                  triggerExplosion(u.x, u.y, 44, 34, false);
+                  triggerExplosion(u.x, u.y, 46, 30, false, 55);
                 }
 
                 if (Math.random() < (u.courageDropChance ?? 0.25)) {
@@ -1009,7 +1401,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                     x: u.x,
                     y: u.y,
                     z: 10,
-                    life: 11.0,
+                    life: 12.0,
                   });
                 }
                 sim.units.splice(i, 1);
@@ -1017,8 +1409,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               } else {
                 if (u.infectedZombieType) {
                   u.state = 'corpse';
-                  u.corpseTimer = 2.5;
-                  u.corpseMaxTimer = 2.5;
+                  u.corpseTimer = 6.0;
+                  u.corpseMaxTimer = 6.0;
                   u.isPlayerControlled = false;
                 } else {
                   sim.units.splice(i, 1);
@@ -1038,7 +1430,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             if (u.team === 'survivor') {
               for (let pIdx = sim.pickups.length - 1; pIdx >= 0; pIdx--) {
                 const pk = sim.pickups[pIdx];
-                if (Math.hypot(u.x - pk.x, u.y - pk.y) <= 22) {
+                if (Math.hypot(u.x - pk.x, u.y - pk.y) <= 24) {
                   soundFX.playCouragePickup();
                   sim.courage = Math.min(100, sim.courage + pk.amount);
                   setCourage(Math.floor(sim.courage));
@@ -1056,7 +1448,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 u.state = 'march';
                 u.reloadProgress = 0;
               }
-              if (u.isPlayerControlled && isUsingWasd) {
+              if (u.isPlayerControlled && isUsingWasd && !u.isStationary) {
                 const len = Math.hypot(wasdDx, wasdDy) || 1;
                 u.x += (wasdDx / len) * u.speed * 0.9 * dt;
                 u.y += (wasdDy / len) * u.speed * 0.75 * dt;
@@ -1080,9 +1472,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
             if (u.attackTimer > 0) {
               u.attackTimer = Math.max(0, u.attackTimer - dt);
+              // Pre-critical telegraph flash on Berserker Zombie right before swinging!
+              if (u.team === 'zombie' && u.subType === 'crit_zombie' && u.attackTimer <= 0.22) {
+                u.critTelegraphTimer = 0.22;
+              }
             }
 
-            if (u.team === 'survivor' && u.isPlayerControlled && isUsingWasd) {
+            if (u.team === 'survivor' && u.isPlayerControlled && isUsingWasd && !u.isStationary) {
               const len = Math.hypot(wasdDx, wasdDy) || 1;
               u.x += (wasdDx / len) * u.speed * 1.25 * dt;
               u.y += (wasdDy / len) * u.speed * 0.95 * dt;
@@ -1095,7 +1491,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               let bestDist = Infinity;
               for (const other of sim.units) {
                 if (other.team === 'zombie' && other.state !== 'corpse' && other.hp > 0) {
-                  const d = Math.hypot(other.x - u.x, (other.y - u.y) * 1.5);
+                  // Sniper prioritizes high-HP / armored threats in range!
+                  const priorityBias =
+                    u.subType === 'sniper' &&
+                    (other.subType === 'bloated' || other.subType === 'armored')
+                      ? -85
+                      : 0;
+                  const d = Math.hypot(other.x - u.x, (other.y - u.y) * 1.5) + priorityBias;
                   if (d < bestDist) {
                     bestDist = d;
                     closestZ = other;
@@ -1108,7 +1510,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               if (
                 closestZ &&
                 Math.abs(closestZ.x - u.x) <= u.attackRange &&
-                Math.abs(closestZ.y - u.y) <= (u.isRanged ? 34 : 18)
+                Math.abs(closestZ.y - u.y) <= (u.isRanged ? 38 : 18)
               ) {
                 u.facing = closestZ.x >= u.x ? 1 : -1;
                 if (u.attackTimer <= 0) {
@@ -1124,10 +1526,19 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                     } else {
                       soundFX.playShotgun();
                     }
-                    sim.screenShake = Math.max(sim.screenShake, 2.2);
+                    sim.screenShake = Math.max(sim.screenShake, u.subType === 'sniper' ? 3.2 : 2.0);
 
                     if (u.pellets === 1 && !u.isFlame) {
-                      // Precision single-target shot (Sniper, Turret, Drone)
+                      const wKind = u.subType === 'sniper' ? 'sniper' : 'rapid';
+                      spawnWeaponTracerAndShell(
+                        u.x,
+                        u.y,
+                        u.isFlying ? 32 : 18,
+                        closestZ.x,
+                        closestZ.y,
+                        u.facing,
+                        wKind
+                      );
                       const isCrit = Math.random() < u.critChance;
                       const effectiveResist = closestZ.bulletResist * (1 - u.armorPiercing);
                       const shotDmg = Math.round(
@@ -1147,6 +1558,17 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                         isCrit ? 'CRIT!' : 'WACK!'
                       );
                     } else {
+                      if (!u.isFlame) {
+                        spawnWeaponTracerAndShell(
+                          u.x,
+                          u.y,
+                          18,
+                          closestZ.x,
+                          closestZ.y,
+                          u.facing,
+                          'shotgun'
+                        );
+                      }
                       // Cone AoE shot (Shotguns & Flamethrower)
                       sim.units.forEach((z) => {
                         if (
@@ -1172,6 +1594,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                             z.hp -= totalPelletDmg;
                             z.whiteFlashTimer = 0.1;
                             z.vx += u.facing * u.knockback;
+                            if (u.isFlame) {
+                              z.infectedZombieType = undefined;
+                            }
                             spawnBloodParticles(z.x, z.y, 12, 10);
                             addFloatingText(
                               `${totalPelletDmg}?`,
@@ -1190,10 +1615,10 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                     const isFirstHitCrit = !!u.firstHitReady;
                     const isCrit = isFirstHitCrit || Math.random() < u.critChance;
                     u.firstHitReady = false;
-                    const mult = isFirstHitCrit ? 3.0 : isCrit ? u.critMultiplier : 1;
+                    const mult = isFirstHitCrit ? u.firstHitCritMult : isCrit ? u.critMultiplier : 1;
                     const dmg = Math.round(u.damage * mult);
 
-                    soundFX.playMeleeHit(isCrit || u.subType === 'builder');
+                    soundFX.playMeleeHit(isCrit || u.subType === 'builder' || u.subType === 'juggernaut');
                     if (isCrit) {
                       sim.hitStopTimer = 0.045;
                       sim.screenShake = Math.max(sim.screenShake, 4);
@@ -1210,11 +1635,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                       22,
                       '#fde047',
                       true,
-                      'WACK!'
+                      isFirstHitCrit ? 'SMASH!' : 'WACK!'
                     );
                   }
                 }
-              } else if (distToBarricade <= (u.isRanged ? 90 : 28)) {
+              } else if (!u.isStationary && distToBarricade <= (u.isRanged ? 92 : 28)) {
                 u.facing = 1;
                 if (u.attackTimer <= 0) {
                   u.state = 'attack';
@@ -1223,6 +1648,17 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   if (u.isRanged) {
                     u.ammo -= 1;
                     soundFX.playShotgun();
+                    if (!u.isFlame) {
+                      spawnWeaponTracerAndShell(
+                        u.x,
+                        u.y,
+                        u.isFlying ? 32 : 18,
+                        sim.barricadeX - 8,
+                        u.y,
+                        1,
+                        u.subType === 'sniper' ? 'sniper' : u.pellets > 1 ? 'shotgun' : 'rapid'
+                      );
+                    }
                   } else {
                     soundFX.playBarricadeBash();
                   }
@@ -1231,8 +1667,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   sim.barricadeShake = 0.25;
                   addFloatingText(`${dmg}`, sim.barricadeX - 18, u.y, 22, '#fde047', true, 'WACK!');
 
-                  // Trigger Barricade Breach Defenders at 75%, 50%, and 25% HP!
-                  const thresholds = [0.75, 0.5, 0.25];
+                  // Sector-Scaled Barricade Breach Defenders (NO Armored wall in Sector 1!)
+                  const thresholds =
+                    mission.id === 1
+                      ? [0.5]
+                      : sector === 1 || sector === 2
+                      ? [0.65, 0.3]
+                      : [0.7, 0.45, 0.2];
                   const nextThresh = thresholds[sim.barricadeThresholdIdx];
                   if (
                     nextThresh !== undefined &&
@@ -1241,10 +1682,24 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   ) {
                     sim.barricadeThresholdIdx += 1;
                     sim.screenShake = 6;
-                    addFloatingText('¡CONTRAATAQUE!', sim.barricadeX - 45, 195, 24, '#ef4444', true);
-                    spawnZombie('runner', sim.barricadeX - 14);
-                    spawnZombie('crit_zombie', sim.barricadeX - 28);
-                    spawnZombie('armored', sim.barricadeX - 20);
+                    addFloatingText('¡DEFENSORES!', sim.barricadeX - 48, 195, 24, '#ef4444', true);
+                    if (mission.id === 1) {
+                      spawnZombie('walker', sim.barricadeX - 16);
+                      spawnZombie('walker', sim.barricadeX - 32);
+                    } else if (sector === 1) {
+                      spawnZombie('walker', sim.barricadeX - 16);
+                      spawnZombie('runner', sim.barricadeX - 30);
+                    } else if (sector === 2) {
+                      spawnZombie('runner', sim.barricadeX - 16);
+                      spawnZombie(
+                        sim.barricadeThresholdIdx === 1 ? 'armored' : 'crit_zombie',
+                        sim.barricadeX - 30
+                      );
+                    } else {
+                      spawnZombie('runner', sim.barricadeX - 14);
+                      spawnZombie('crit_zombie', sim.barricadeX - 28);
+                      spawnZombie('armored', sim.barricadeX - 20);
+                    }
                   }
 
                   if (sim.barricadeHp <= 0 && sim.phase === 'combat') {
@@ -1254,9 +1709,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                     sim.screenShake = 10;
                   }
                 }
-              } else if (!(u.isPlayerControlled && isUsingWasd)) {
+              } else if (!(u.isPlayerControlled && isUsingWasd) && !u.isStationary) {
                 u.state = 'march';
-                if (closestZ && Math.abs(closestZ.x - u.x) < 190) {
+                if (closestZ && Math.abs(closestZ.x - u.x) < 210) {
                   const dx = closestZ.x - u.x;
                   const dy = closestZ.y - u.y;
                   u.facing = dx >= 0 ? 1 : -1;
@@ -1321,17 +1776,31 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   u.attackProgress = 0;
                   u.attackTimer = u.attackCooldown;
                   const isCrit = Math.random() < u.critChance;
-                  const dmg = Math.round(
-                    u.damage * (isCrit ? u.critMultiplier : 1) * (1 - closestS.bulletResist * 0.4)
+                  // Uses explicit meleeResist (Policeman Diaz 50%, Juggernaut 45%, Builder 35%)!
+                  const dmg = Math.max(
+                    2,
+                    Math.round(
+                      u.damage * (isCrit ? u.critMultiplier : 1) * (1 - closestS.meleeResist)
+                    )
                   );
                   soundFX.playMeleeHit(isCrit);
                   closestS.hp -= dmg;
                   closestS.whiteFlashTimer = 0.1;
-                  if (!closestS.isLucky) {
-                    closestS.vx += u.facing * 16;
+                  // Comeback Rage Mechanic: +0.18 Rage per HP lost on survivors!
+                  sim.rage = Math.min(100, sim.rage + dmg * 0.18);
+                  if (!closestS.isLucky && closestS.meleeResist < 0.4) {
+                    closestS.vx += u.facing * 15;
                   }
                   spawnBloodParticles(closestS.x, closestS.y, 12, 16);
-                  addFloatingText(`${dmg}?`, closestS.x, closestS.y, 20, '#fde047', true, 'WACK!');
+                  addFloatingText(
+                    `${dmg}?`,
+                    closestS.x,
+                    closestS.y,
+                    20,
+                    '#fde047',
+                    true,
+                    isCrit ? 'CRIT!' : 'WACK!'
+                  );
                 }
               } else if (u.x <= sim.busX + 148) {
                 if (u.attackTimer <= 0) {
@@ -1342,9 +1811,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   sim.busHp = Math.max(0, sim.busHp - u.damage);
                   sim.busDamagedEver = true;
                   sim.screenShake = 4;
+                  // Comeback Rage Mechanic: +0.30 Rage per HP lost on the Bus!
+                  sim.rage = Math.min(100, sim.rage + u.damage * 0.3);
 
                   if (progress.spikedBumper) {
-                    u.hp -= 12;
+                    u.hp -= 14;
                     u.whiteFlashTimer = 0.1;
                     spawnBloodParticles(u.x, u.y, 10, 8);
                   }
@@ -1357,7 +1828,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 }
               } else {
                 u.state = 'march';
-                if (closestS && Math.abs(closestS.x - u.x) < 120) {
+                if (closestS && Math.abs(closestS.x - u.x) < 125) {
                   const dx = closestS.x - u.x;
                   const dy = closestS.y - u.y;
                   u.facing = dx <= 0 ? -1 : 1;
@@ -1387,6 +1858,32 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               crow.z += crow.vz * dt;
             }
           });
+
+          // Ballistic Tracers lifetime
+          for (let i = sim.tracers.length - 1; i >= 0; i--) {
+            sim.tracers[i].life -= dt;
+            if (sim.tracers[i].life <= 0) sim.tracers.splice(i, 1);
+          }
+
+          // 2.5D Bouncing Brass & Shotgun Shells -> Bake onto decalCanvas when stopped!
+          for (let i = sim.shells.length - 1; i >= 0; i--) {
+            const s = sim.shells[i];
+            s.x += s.vx * dt;
+            s.y += s.vy * dt;
+            s.z += s.vz * dt;
+            s.vz -= 290 * dt;
+            if (s.z <= 0) {
+              s.z = 0;
+              s.bounces += 1;
+              s.vx *= 0.52;
+              s.vy *= 0.52;
+              s.vz = Math.abs(s.vz) * 0.42;
+              if (s.bounces >= 2 || s.vz < 12) {
+                stampShellDecal(s.x, s.y, s.color, s.w, s.h);
+                sim.shells.splice(i, 1);
+              }
+            }
+          }
 
           for (let i = sim.particles.length - 1; i >= 0; i--) {
             const p = sim.particles[i];
@@ -1425,12 +1922,16 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             setUnitCooldowns({ ...sim.unitCooldowns });
             setItemCooldowns({ ...sim.itemCooldowns });
             setTimeRemaining(Math.ceil(sim.timeRemaining));
+            setRushWarningState({
+              active: sim.rushWarningTimer > 0,
+              yPct: Math.round((sim.rushWarningY / LOGICAL_HEIGHT) * 100),
+            });
           }
         }
       }
 
       // =======================================================
-      // RENDER PIPELINE (Full-Bleed 640x360 matching screenshot)
+      // 6-LAYER PIXEL-ART RENDER PIPELINE (720x336 @ 60 FPS)
       // =======================================================
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext('2d');
@@ -1442,38 +1943,67 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           ctx.translate(sx, sy);
         }
 
-        // LAYER 0: Biome Sky, Forest, Wrecked SUV & Dirt Road
-        renderBiomeBackground(ctx, mission.biome, sim.time);
+        // LAYER 0: Cached Offscreen Biome Background + Live Biome Details
+        renderBiomeBackground(ctx, mission.biome, sim.time, mission.id);
 
-        // LAYER 1: Persistent Decal Buffer (Blood puddles)
+        // LAYER 1: Persistent Decal Buffer (Blood puddles, blast craters & spent shells)
         if (decalCanvasRef.current) {
           ctx.drawImage(decalCanvasRef.current, 0, 0);
         }
 
-        // Drag & Drop Target Circle on the Road
+        // LAYER 1.5: Active Ground Napalm Fire Zones
+        for (let i = 0; i < sim.fireZones.length; i++) {
+          renderFireZone(ctx, sim.fireZones[i], sim.time);
+        }
+
+        // Drag & Drop Tactical Reticle on the Road (Color-coded by Item Type!)
         if (sim.draggingItem) {
           const cfg = TACTICAL_ITEM_CONFIGS[sim.draggingItem];
-          const tx = Math.max(145, Math.min(sim.barricadeX - 24, sim.mouseLogical.x));
+          const tx = Math.max(142, Math.min(sim.barricadeX - 22, sim.mouseLogical.x));
           const ty = Math.max(ROAD_Y_MIN + 4, Math.min(ROAD_Y_MAX - 4, sim.mouseLogical.y));
-          ctx.strokeStyle = '#84cc16';
+          const strokeCol =
+            sim.draggingItem === 'red_barrel'
+              ? '#ef4444'
+              : sim.draggingItem === 'medkit'
+              ? '#4ade80'
+              : '#38bdf8';
+          const fillCol =
+            sim.draggingItem === 'red_barrel'
+              ? 'rgba(239, 68, 68, 0.24)'
+              : sim.draggingItem === 'medkit'
+              ? 'rgba(74, 222, 128, 0.22)'
+              : 'rgba(56, 189, 248, 0.22)';
+
+          ctx.strokeStyle = strokeCol;
           ctx.lineWidth = 2;
           ctx.beginPath();
           ctx.ellipse(tx, ty, cfg.radius, cfg.radius * 0.45, 0, 0, Math.PI * 2);
           ctx.stroke();
-          ctx.fillStyle = 'rgba(132, 204, 22, 0.22)';
+          ctx.fillStyle = fillCol;
           ctx.beginPath();
           ctx.ellipse(tx, ty, cfg.radius, cfg.radius * 0.45, 0, 0, Math.PI * 2);
           ctx.fill();
         }
 
-        // LAYER 2: Y-Sorted Entities
+        // Telegraphed Rush Lane Indicator drawn directly on road right edge
+        if (sim.rushWarningTimer > 0) {
+          const pulse = 0.35 + Math.abs(Math.sin(sim.time * 14)) * 0.45;
+          ctx.fillStyle = `rgba(239, 68, 68, ${pulse * 0.38})`;
+          ctx.fillRect(sim.barricadeX - 115, sim.rushWarningY - 12, 110, 24);
+          ctx.strokeStyle = `rgba(254, 202, 202, ${pulse})`;
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(sim.barricadeX - 115, sim.rushWarningY - 12, 110, 24);
+        }
+
+        // LAYER 2: Barricade & Y-Sorted 2.5D Entities
         if (sim.barricadeHp > 0) {
           renderBarricade(
             ctx,
             sim.barricadeX,
             sim.barricadeHp,
             sim.maxBarricadeHp,
-            sim.barricadeShake
+            sim.barricadeShake,
+            sim.time
           );
         }
 
@@ -1516,10 +2046,26 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           }
         });
 
-        // Foreground Left Military Truck & Oil Drums (matching bottom-left of screenshot!)
+        // LAYER 3: Supersonic Sniper Trails, Shotgun Pellets & Ejected Brass Shells
+        renderTracersAndShells(ctx, sim.tracers, sim.shells);
+
+        // LAYER 4: Foreground Left Military Truck & Oil Drums
         renderForegroundLeftProps(ctx);
 
-        // LAYER 3: Flying Crows, Blood Particles & "17? / WACK!" Popups
+        // LAYER 5: 1/4-Res Additive Dynamic Lightmap + Cinematic Top Vignette
+        renderDynamicLightmap(
+          ctx,
+          mission.biome,
+          sim.time,
+          sim.busX,
+          sim.busY,
+          sim.units,
+          sim.fireZones,
+          sim.obstacles,
+          sim.tracers
+        );
+
+        // LAYER 6: Flying Crows, Blood Particles & Crisp Comic Popups ("17? / WACK!")
         sim.crows.forEach((c) => renderCrow(ctx, c, sim.time));
 
         sim.particles.forEach((p) => {
@@ -1534,7 +2080,6 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           ctx.textAlign = 'center';
 
           if (ft.subText) {
-            // Yellow damage number "17?" on top + red-orange "WACK!" underneath (exact match to screenshot!)
             ctx.font = 'bold 10px "Press Start 2P", monospace';
             ctx.fillStyle = '#181410';
             ctx.fillText(ft.text, tx + 1, ty - 7);
@@ -1544,7 +2089,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             ctx.font = 'bold 7px "Press Start 2P", monospace';
             ctx.fillStyle = '#181410';
             ctx.fillText(ft.subText, tx + 1, ty + 2);
-            ctx.fillStyle = '#ea580c';
+            ctx.fillStyle = ft.subText === 'CRIT!' || ft.subText === 'SMASH!' ? '#f43f5e' : '#ea580c';
             ctx.fillText(ft.subText, tx, ty + 1);
           } else {
             ctx.font = ft.isComic
@@ -1571,30 +2116,43 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     initDecalCanvas,
     mission.barricadeHp,
     mission.biome,
+    mission.id,
     mission.skeletonAmbush,
     mission.waveInterval,
     mission.zombiePool,
+    onLevelUpCommander,
     progress.billDamageBonus,
     progress.spikedBumper,
     progress.weldedArmor,
     scareCrows,
     spawnBloodParticles,
+    spawnWeaponTracerAndShell,
     spawnZombie,
     stampBloodDecal,
+    stampShellDecal,
     triggerExplosion,
   ]);
 
-  const selectDraggingBarrel = () => {
-    const rCost = getEffectiveRageCost('blue_barrel');
-    if (rage < rCost || itemCooldowns.blue_barrel > 0) return;
-    const next = draggingItem === 'blue_barrel' ? null : 'blue_barrel';
+  const toggleDraggingTactical = (itemType: TacticalItemType) => {
+    const cfg = TACTICAL_ITEM_CONFIGS[itemType];
+    if (rage < cfg.rageCost || itemCooldowns[itemType] > 0) return;
+    const next = draggingItem === itemType ? null : itemType;
     setDraggingItem(next);
     simRef.current.draggingItem = next;
   };
 
+  // Show all unlocked units + only the NEXT 2 locked preview slots so mobile HUD stays super crisp!
+  const unlockedUnits = SURVIVOR_ORDER.filter(
+    (sType) => commanderLevel >= SURVIVOR_CONFIGS[sType].unlockLevel
+  );
+  const nextLockedUnits = SURVIVOR_ORDER.filter(
+    (sType) => commanderLevel < SURVIVOR_CONFIGS[sType].unlockLevel
+  ).slice(0, 2);
+  const visibleDeckUnits = [...unlockedUnits, ...nextLockedUnits];
+
   return (
-    <div className="relative w-full h-full bg-[#322f24] select-none overflow-hidden">
-      {/* FULLSCREEN 16:9 PIXEL-ART CANVAS (NO TOP OR BOTTOM BARS!) */}
+    <div className="relative w-full h-full bg-[#24221a] select-none overflow-hidden">
+      {/* FULLSCREEN LANDSCAPE PIXEL-ART CANVAS */}
       <canvas
         ref={canvasRef}
         width={LOGICAL_WIDTH}
@@ -1613,26 +2171,21 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       />
 
       {/* ===================================================================== */}
-      {/* TOP-LEFT FLOATING HUD: Pause "||", Courage (16), Rage (4) & Water Pips */}
+      {/* TOP-LEFT FLOATING HUD: Pause "||", Courage Flasks, Rage Drop & Level  */}
       {/* ===================================================================== */}
       <div className="absolute top-1.5 left-3 z-20 flex items-start gap-1.5">
         <div className="flex flex-col items-center gap-1">
-          {/* White Pause Icon "||" */}
           <button
             onClick={() => {
-              if (paused) {
-                resumeBattle();
-              } else {
-                pauseBattle();
-              }
+              if (paused) resumeBattle();
+              else pauseBattle();
             }}
-            className="mt-0.5 text-white/90 hover:text-white font-pixel text-xs drop-shadow-[0_1px_1px_rgba(0,0,0,0.9)] px-1 cursor-pointer"
-            title="Pausar / Reanudar Combate"
+            className="mt-0.5 text-white hover:text-amber-300 font-pixel text-xs drop-shadow-[0_1px_1px_rgba(0,0,0,0.95)] px-1 cursor-pointer"
+            title="Pausar / Reanudar Combate [Esc]"
           >
             {paused ? '▶' : '||'}
           </button>
 
-          {/* Quick Sound Activate/Mute Toggle */}
           <button
             onClick={() => {
               if (soundFX.muted) {
@@ -1643,7 +2196,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 soundFX.muted = true;
               }
             }}
-            className="text-xs px-1 drop-shadow-[0_1px_1px_rgba(0,0,0,0.9)]"
+            className="text-xs px-1 drop-shadow-[0_1px_1px_rgba(0,0,0,0.95)] cursor-pointer"
             title="Activar / Silenciar Sonido"
           >
             🔊
@@ -1651,41 +2204,55 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         </div>
 
         <div className="flex flex-col gap-1.5">
-          {/* Blue Courage Bar (16) */}
+          {/* Blue Courage Bar with live internal fill meter */}
           <div className="relative flex items-center">
-            <div className="z-10 -mr-2 w-7 h-7 flex items-center justify-center drop-shadow-[0_2px_2px_rgba(0,0,0,0.9)]">
+            <div className="z-10 -mr-2 w-7 h-7 flex items-center justify-center drop-shadow-[0_2px_2px_rgba(0,0,0,0.95)]">
               <div className="flex items-end gap-0.5">
-                <div className="w-2 h-4 bg-sky-400 border border-slate-950 rounded-t-xs" />
-                <div className="w-2.5 h-5 bg-sky-300 border border-slate-950 rounded-t-xs" />
-                <div className="w-2 h-4 bg-sky-500 border border-slate-950 rounded-t-xs" />
+                <div className="w-2 h-4 bg-gradient-to-b from-sky-200 to-sky-500 border border-slate-950 rounded-t-xs" />
+                <div className="w-2.5 h-5 bg-gradient-to-b from-cyan-100 to-sky-400 border border-slate-950 rounded-t-xs" />
+                <div className="w-2 h-4 bg-gradient-to-b from-sky-300 to-blue-600 border border-slate-950 rounded-t-xs" />
               </div>
             </div>
-            <div className="min-w-[82px] sm:min-w-[96px] h-6 bg-[#7a825c]/90 border-2 border-[#2a2e1e] rounded-xs flex items-center justify-start pl-3.5 pr-2 shadow-md">
+            <div className="relative overflow-hidden min-w-[88px] sm:min-w-[102px] h-6 bg-[#5f6647]/95 border-2 border-[#232619] rounded-xs flex items-center justify-start pl-3.5 pr-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_2px_4px_rgba(0,0,0,0.6)]">
+              <div
+                className="absolute inset-y-0 left-0 bg-gradient-to-r from-sky-500/45 to-cyan-300/35 transition-all duration-150 pointer-events-none"
+                style={{ width: `${Math.min(100, courage)}%` }}
+              />
               <span
-                className="font-tactical font-extrabold text-sm sm:text-base text-white leading-none"
-                style={{ textShadow: '1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000' }}
+                className="relative z-10 font-tactical font-extrabold text-sm sm:text-base text-white leading-none"
+                style={{
+                  textShadow:
+                    '1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000',
+                }}
               >
                 {courage}
               </span>
             </div>
           </div>
 
-          {/* Red Rage Bar (4) */}
+          {/* Red Rage Bar with live internal fill meter */}
           <div className="relative flex items-center">
-            <div className="z-10 -mr-2 w-7 h-7 flex items-center justify-center drop-shadow-[0_2px_2px_rgba(0,0,0,0.9)]">
-              <div className="w-4 h-5 bg-gradient-to-b from-red-400 to-red-700 border border-slate-950 rounded-full rounded-t-xs rotate-12" />
+            <div className="z-10 -mr-2 w-7 h-7 flex items-center justify-center drop-shadow-[0_2px_2px_rgba(0,0,0,0.95)]">
+              <div className="w-4 h-5 bg-gradient-to-b from-rose-300 via-red-500 to-red-800 border border-slate-950 rounded-full rounded-t-xs rotate-12" />
             </div>
-            <div className="min-w-[82px] sm:min-w-[96px] h-6 bg-[#7a825c]/90 border-2 border-[#2a2e1e] rounded-xs flex items-center justify-start pl-3.5 pr-2 shadow-md">
+            <div className="relative overflow-hidden min-w-[88px] sm:min-w-[102px] h-6 bg-[#5f6647]/95 border-2 border-[#232619] rounded-xs flex items-center justify-start pl-3.5 pr-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_2px_4px_rgba(0,0,0,0.6)]">
+              <div
+                className="absolute inset-y-0 left-0 bg-gradient-to-r from-red-600/45 to-orange-500/35 transition-all duration-150 pointer-events-none"
+                style={{ width: `${Math.min(100, rage)}%` }}
+              />
               <span
-                className="font-tactical font-extrabold text-sm sm:text-base text-[#ff5a5a] leading-none"
-                style={{ textShadow: '1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000' }}
+                className="relative z-10 font-tactical font-extrabold text-sm sm:text-base text-[#ff6b6b] leading-none"
+                style={{
+                  textShadow:
+                    '1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000',
+                }}
               >
                 {rage}
               </span>
             </div>
           </div>
 
-          {/* Commander Level & XP Progress Bar + WASD Toggle */}
+          {/* Water Drop WASD Toggle + Compact Commander XP Badge */}
           <div className="flex items-center gap-1.5 mt-0.5">
             <button
               onClick={() => {
@@ -1693,9 +2260,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 cycleSelectedSurvivor();
               }}
               className="flex flex-col items-center w-6 cursor-pointer group"
-              title="Cambiar unidad WASD / Mostrar D-Pad Táctil"
+              title="Cambiar unidad controlada [TAB] / Mostrar D-Pad Táctil"
             >
-              <div className="w-4 h-4 rounded-full bg-slate-900 border border-sky-400 flex items-center justify-center text-[9px]">
+              <div className="w-4 h-4 rounded-full bg-slate-900 border border-sky-400 flex items-center justify-center text-[9px] shadow">
                 💧
               </div>
               <div className="flex gap-0.5 mt-0.5">
@@ -1705,43 +2272,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               </div>
             </button>
 
-            <div className="flex flex-col bg-zinc-950/85 border border-yellow-500/70 rounded px-1.5 py-0.5 shadow">
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-pixel text-[8px] text-yellow-300">NV.{commanderLevel}</span>
-                {commanderLevel < 7 && (
-                  <button
-                    onClick={() => {
-                      const sim = simRef.current;
-                      sim.commanderLevel = Math.min(7, sim.commanderLevel + 1);
-                      sim.commanderXp = 0;
-                      setCommanderLevel(sim.commanderLevel);
-                      setCommanderXp(0);
-                      soundFX.playCouragePickup();
-                      const unlockedUnit = SURVIVOR_ORDER.map((k) => SURVIVOR_CONFIGS[k]).find(
-                        (c) => c.unlockLevel === sim.commanderLevel
-                      );
-                      addFloatingText(
-                        unlockedUnit
-                          ? `¡DESBLOQUEADO: ${unlockedUnit.name.toUpperCase()}!`
-                          : `¡NIVEL ${sim.commanderLevel}!`,
-                        360,
-                        165,
-                        28,
-                        '#fde047',
-                        true
-                      );
-                      onLevelUpCommander?.(sim.commanderLevel, 0);
-                    }}
-                    className="px-1 rounded bg-emerald-600 hover:bg-emerald-500 text-[8px] font-extrabold text-white cursor-pointer"
-                    title="Subir Nivel de Comandante para desbloquear la siguiente unidad"
-                  >
-                    +NV
-                  </button>
-                )}
+            <div className="flex flex-col bg-zinc-950/80 border border-[#787459] rounded-xs px-1.5 py-0.5 shadow">
+              <div className="flex items-center justify-between gap-1.5">
+                <span className="font-pixel text-[7px] text-amber-300">NV.{commanderLevel}</span>
+                <span className="text-[8px] font-bold text-zinc-400">M{mission.id}</span>
               </div>
-              <div className="w-20 h-1.5 bg-zinc-800 rounded-full overflow-hidden mt-0.5 border border-black">
+              <div className="w-16 h-1 bg-zinc-800 rounded-full overflow-hidden mt-0.5 border border-black">
                 <div
-                  className="h-full bg-gradient-to-r from-sky-400 to-yellow-400 transition-all"
+                  className="h-full bg-gradient-to-r from-sky-400 to-amber-400 transition-all"
                   style={{ width: `${Math.min(100, commanderXp)}%` }}
                 />
               </div>
@@ -1751,54 +2289,62 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       </div>
 
       {/* ===================================================================== */}
-      {/* TOP-CENTER FLOATING BUFF BOTTLE (Glowing Orange Bottle with badge "1") */}
+      {/* TOP-CENTER FLOATING FURY BOTTLE (Glowing Red-Orange Aura)             */}
       {/* ===================================================================== */}
       <button
         onClick={triggerFuryWhiskeyBuff}
         className="absolute top-1.5 left-1/2 -translate-x-1/2 z-20 flex items-center justify-center w-11 h-11 cursor-pointer group"
         title="Activar Botella de Furia / Ráfaga de Bill [Espacio]"
       >
-        <div className="absolute inset-0 rounded-full bg-red-500/45 blur-md animate-pulse" />
-        <div className="relative w-5 h-8 bg-gradient-to-b from-amber-300 via-orange-500 to-red-700 border-2 border-[#1c1917] rounded-xs flex flex-col items-center justify-center shadow-lg">
+        <div
+          className={`absolute inset-0 rounded-full blur-md transition ${
+            furyBuffCount > 0 || rage >= 25
+              ? 'bg-red-500/55 animate-pulse'
+              : 'bg-zinc-800/30 opacity-50'
+          }`}
+        />
+        <div className="relative w-5 h-8 bg-gradient-to-b from-amber-300 via-orange-500 to-red-700 border-2 border-[#1c1917] rounded-xs flex flex-col items-center justify-center shadow-lg group-hover:scale-105 transition">
           <div className="w-2 h-2 bg-amber-200 border border-black -mt-3 mb-1" />
-          <div className="w-3 h-3 bg-fef08a/90 rounded-xs" />
+          <div className="w-3 h-3 bg-yellow-200/90 rounded-xs" />
         </div>
         <span className="absolute bottom-0 right-1 w-4 h-4 rounded-full bg-zinc-900 border border-zinc-400 text-[9px] font-bold text-white flex items-center justify-center">
-          {furyBuffCount}
+          {furyBuffCount > 0 ? furyBuffCount : '25'}
         </span>
       </button>
 
       {/* ===================================================================== */}
-      {/* TOP-RIGHT FLOATING COINS / SCORE BAR ("403" + Gold Skull Coin)         */}
+      {/* TOP-RIGHT FLOATING COINS BAR & CAMPAIGN MAP BUTTON                    */}
       {/* ===================================================================== */}
       <div className="absolute top-2 right-3 z-20 flex items-center gap-2">
         <button
           onClick={onRetreat}
-          className="px-2 py-0.5 rounded bg-zinc-900/75 hover:bg-zinc-800 border border-zinc-600 text-[10px] font-bold text-zinc-200 cursor-pointer"
-          title="Volver al Mapa de Carretera"
+          className="px-2 py-0.5 rounded-xs bg-[#323626]/90 hover:bg-[#414732] border border-[#8e9472] text-[10px] font-extrabold text-amber-200 shadow cursor-pointer"
+          title="Volver al Mapa de Campaña"
         >
-          🗺️ Mapa (12)
+          🗺️ Mapa
         </button>
 
         <div className="relative flex items-center">
-          <div className="min-w-[86px] sm:min-w-[100px] h-6 bg-[#7a825c]/90 border-2 border-[#2a2e1e] rounded-xs flex items-center justify-end pr-4 pl-2 shadow-md">
+          <div className="min-w-[84px] sm:min-w-[98px] h-6 bg-[#7a825c]/95 border-2 border-[#232619] rounded-xs flex items-center justify-end pr-4 pl-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_2px_4px_rgba(0,0,0,0.6)]">
             <span
               className="font-tactical font-extrabold text-sm sm:text-base text-white leading-none"
-              style={{ textShadow: '1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000' }}
+              style={{
+                textShadow: '1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000',
+              }}
             >
-              {progress.coins + barHpDisplay(barricadeHp)}
+              {progress.coins}
             </span>
           </div>
-          <div className="z-10 -ml-2.5 w-7 h-7 rounded-full bg-gradient-to-b from-yellow-300 to-amber-600 border-2 border-[#1c1917] flex items-center justify-center shadow-md">
+          <div className="z-10 -ml-2.5 w-7 h-7 rounded-full bg-gradient-to-b from-yellow-300 via-amber-400 to-amber-600 border-2 border-[#1c1917] flex items-center justify-center shadow-md">
             <span className="text-xs leading-none">🪙</span>
           </div>
         </div>
       </div>
 
       {/* ===================================================================== */}
-      {/* RIGHT-SIDE FLOATING TIMER ("02:25") & ORANGE SKULL HORDE BUTTON        */}
+      {/* RIGHT-SIDE HORDE TIMER ("02:30") + TELEGRAPHED RUSH LANE BADGE        */}
       {/* ===================================================================== */}
-      <div className="absolute top-[25%] right-4 z-20 flex flex-col items-center">
+      <div className="absolute top-[24%] right-3.5 z-20 flex flex-col items-center pointer-events-none">
         <span
           className="font-tactical font-bold text-xs text-white mb-0.5"
           style={{ textShadow: '1px 1px 0 #000, -1px -1px 0 #000' }}
@@ -1807,20 +2353,39 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           {String(timeRemaining % 60).padStart(2, '0')}
         </span>
         <div
-          className={`w-10 h-10 rounded-full bg-gradient-to-b from-yellow-300 via-amber-500 to-orange-600 border-2 border-white shadow-lg flex items-center justify-center ${
+          className={`w-10 h-10 rounded-full bg-gradient-to-b from-yellow-300 via-amber-500 to-orange-600 border-2 border-[#231f18] shadow-lg flex items-center justify-center ${
             hordeTriggered ? 'animate-bounce ring-4 ring-red-500' : ''
           }`}
-          title="Temporizador de la Horda Final"
         >
           <span className="text-lg leading-none drop-shadow">💀</span>
         </div>
       </div>
 
+      {/* TELEGRAPHED RUSH WARNING AT EXACT Y LANE */}
+      {rushWarningState.active && (
+        <div
+          className="absolute right-2 z-30 flex items-center gap-1 px-2 py-0.5 rounded bg-red-700/95 border-2 border-yellow-300 shadow-lg animate-pulse pointer-events-none"
+          style={{ top: `${Math.max(48, Math.min(82, rushWarningState.yPct))}%` }}
+        >
+          <span className="text-xs">⚠️</span>
+          <span className="font-pixel text-[7px] text-yellow-200 tracking-tighter">
+            ¡CORREDORES!
+          </span>
+        </div>
+      )}
+
+      {/* ACTIVE DRAG DEPLOYMENT HINT BANNER */}
+      {draggingItem && (
+        <div className="absolute top-13 left-1/2 -translate-x-1/2 z-30 px-3 py-1 rounded bg-zinc-950/90 border border-amber-400 text-[10px] font-bold text-amber-200 shadow-lg pointer-events-none">
+          🎯 Toca la carretera para lanzar {TACTICAL_ITEM_CONFIGS[draggingItem].name}
+        </div>
+      )}
+
       {/* ===================================================================== */}
-      {/* OPTIONAL TOUCH WASD D-PAD (bottom-left, toggleable with water drop)    */}
+      {/* OPTIONAL TOUCH WASD D-PAD (bottom-left)                               */}
       {/* ===================================================================== */}
       {showDpad && (
-        <div className="absolute bottom-2 left-3 z-30 grid grid-cols-3 gap-1 w-24 h-24 opacity-85 select-none touch-none">
+        <div className="absolute bottom-16 left-3 z-30 grid grid-cols-3 gap-1 w-24 h-24 opacity-85 select-none touch-none">
           <div />
           <button
             type="button"
@@ -1872,179 +2437,238 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       )}
 
       {/* ===================================================================== */}
-      {/* BOTTOM-CENTER FLOATING SCROLLABLE 11-UNIT + BARREL TACTICAL DECK      */}
+      {/* BOTTOM TACTICAL DECK: Authentic Olive Slots + 3 Rage Support Items!   */}
       {/* ===================================================================== */}
-      <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 z-20 flex items-end gap-1 max-w-[98vw] overflow-x-auto px-2 py-0.5">
-        {SURVIVOR_ORDER.map((sType) => {
-          const cfg = SURVIVOR_CONFIGS[sType];
-          const isUnlocked = commanderLevel >= cfg.unlockLevel;
-          const cd = unitCooldowns[sType];
-          const canAfford = isUnlocked && courage >= cfg.cost && cd <= 0;
-          const lvl = progress.unitLevels[sType] || 1;
+      <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 z-20 flex items-end gap-1.5 max-w-[98vw] overflow-x-auto px-2 py-0.5">
+        {/* SURVIVOR SQUAD CARDS */}
+        <div className="flex items-end gap-1">
+          {visibleDeckUnits.map((sType) => {
+            const cfg = SURVIVOR_CONFIGS[sType];
+            const isUnlocked = commanderLevel >= cfg.unlockLevel;
+            const cd = unitCooldowns[sType];
+            const canAfford = isUnlocked && courage >= cfg.cost && cd <= 0;
+            const lvl = progress.unitLevels[sType] || 1;
 
-          return (
-            <button
-              key={sType}
-              onClick={() => {
-                if (isUnlocked) {
-                  deploySurvivor(sType);
-                } else {
-                  addFloatingText(
-                    `DESBLOQUEA EN NIVEL ${cfg.unlockLevel}`,
-                    360,
-                    210,
-                    18,
-                    '#fde047',
-                    true
-                  );
-                }
-              }}
-              disabled={isUnlocked && !canAfford}
-              className={`shrink-0 relative w-11 h-12 sm:w-12 sm:h-13 rounded-xs transition select-none flex flex-col justify-between p-1 ${
-                !isUnlocked
-                  ? 'bg-zinc-950/85 border border-zinc-800 opacity-75 cursor-pointer'
-                  : canAfford
-                  ? 'bg-[#3b3829]/90 border border-[#96916f] shadow-lg cursor-pointer hover:scale-105'
-                  : 'bg-[#2a271d]/80 border border-[#3d392b] cursor-not-allowed'
-              }`}
-              title={
-                isUnlocked
-                  ? `${cfg.name} (${cfg.roleTitle} — Coste: ${cfg.cost} Valor)`
-                  : `🔒 ${cfg.name}: Se desbloquea al subir a Nivel ${cfg.unlockLevel}`
-              }
-            >
-              {/* Cooldown Fill Sweep */}
-              {isUnlocked && cd > 0 && (
-                <div
-                  className="absolute bottom-0 left-0 right-0 bg-black/60 pointer-events-none"
-                  style={{ height: `${Math.min(100, (cd / cfg.prepTime) * 100)}%` }}
-                />
-              )}
-
-              {/* Top-Right Level or Unlock Badge */}
-              <div className="w-full flex justify-between items-center z-10">
-                <span className="text-[7px] font-bold text-zinc-300 truncate max-w-[28px]">
-                  {cfg.name.split(' ')[0]}
-                </span>
-                {isUnlocked ? (
-                  <span
-                    className={`px-1 text-[8px] font-extrabold leading-tight rounded-xs ${
-                      canAfford
-                        ? 'bg-[#2b6cb0] text-white border border-black'
-                        : 'text-[#8c856b]'
-                    }`}
-                  >
-                    {lvl}
-                  </span>
-                ) : (
-                  <span className="px-0.5 text-[7px] font-extrabold bg-amber-950 text-amber-300 border border-amber-700 rounded-xs">
-                    🔒{cfg.unlockLevel}
-                  </span>
-                )}
-              </div>
-
-              {/* Center Pixel Portrait */}
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <UnitSlotMiniPortrait type={sType} active={canAfford} />
-              </div>
-
-              {/* Bottom Cost Row: Blue Water Drop + Cost */}
-              <div className="w-full flex items-center justify-between z-10 mt-auto">
-                <span
-                  className={`w-3 h-3 rounded-full flex items-center justify-center text-[7px] ${
-                    canAfford
-                      ? 'bg-slate-900 border border-sky-400 text-sky-300'
-                      : 'bg-zinc-900/70 text-zinc-600'
-                  }`}
-                >
-                  💧
-                </span>
-                <span
-                  className={`font-tactical font-extrabold text-[11px] leading-none ${
-                    canAfford ? 'text-white' : 'text-[#6e6952]'
-                  }`}
-                  style={
-                    canAfford
-                      ? { textShadow: '1px 1px 0 #000, -1px -1px 0 #000' }
-                      : undefined
+            return (
+              <button
+                key={sType}
+                onClick={() => {
+                  if (isUnlocked) {
+                    deploySurvivor(sType);
+                  } else {
+                    addFloatingText(
+                      `SE DESBLOQUEA EN NV.${cfg.unlockLevel}`,
+                      360,
+                      210,
+                      18,
+                      '#fde047',
+                      true
+                    );
                   }
-                >
-                  {cfg.cost}
-                </span>
-              </div>
-            </button>
-          );
-        })}
-
-        {/* TACTICAL BARREL SLOT (Curved Green Drop Arrow + Red "6" Cost) */}
-        {(() => {
-          const rCost = getEffectiveRageCost('blue_barrel');
-          const cd = itemCooldowns.blue_barrel;
-          const canAfford = rage >= rCost && cd <= 0;
-          const isSelected = draggingItem === 'blue_barrel';
-
-          return (
-            <button
-              onPointerDown={() => {
-                if (canAfford) {
-                  setDraggingItem('blue_barrel');
-                  simRef.current.draggingItem = 'blue_barrel';
+                }}
+                disabled={isUnlocked && !canAfford}
+                className={`shrink-0 relative rounded-xs transition select-none flex flex-col justify-between p-1 ${
+                  !isUnlocked
+                    ? 'w-9 h-12 sm:w-10 sm:h-13 bg-zinc-950/75 border border-zinc-800/90 opacity-70 cursor-pointer'
+                    : canAfford
+                    ? 'w-11 h-13 sm:w-12 sm:h-14 bg-[#454833]/92 border-2 border-[#a5a982] shadow-[0_2px_6px_rgba(0,0,0,0.75)] cursor-pointer hover:scale-105 active:scale-95'
+                    : 'w-11 h-13 sm:w-12 sm:h-14 bg-[#2c2e21]/82 border border-[#4a4d38] cursor-not-allowed'
+                }`}
+                title={
+                  isUnlocked
+                    ? `${cfg.name} (${cfg.roleTitle}) — ${cfg.cost} Valor [${cfg.hotkey}]`
+                    : `🔒 ${cfg.name}: Desbloquea en Nivel ${cfg.unlockLevel}`
                 }
-              }}
-              onClick={selectDraggingBarrel}
-              disabled={!canAfford}
-              className={`shrink-0 relative w-11 h-12 sm:w-12 sm:h-13 rounded-xs transition select-none flex flex-col justify-between p-1 ${
-                isSelected
-                  ? 'bg-emerald-950/90 border-2 border-lime-400 scale-105'
-                  : canAfford
-                  ? 'bg-[#3b3829]/90 border border-[#96916f] cursor-grab hover:scale-105'
-                  : 'bg-[#2a271d]/80 border border-[#3d392b] cursor-not-allowed'
-              }`}
-              title="Arrastra o toca para lanzar Barril (6 Furia)"
-            >
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div
-                  className={`w-5 h-7 rounded-xs border ${
-                    canAfford
-                      ? 'bg-[#294257] border-black'
-                      : 'bg-[#1f1d15] border-[#2e2b20]'
-                  }`}
-                />
-              </div>
+              >
+                {/* Cooldown Vertical Wipe */}
+                {isUnlocked && cd > 0 && (
+                  <div
+                    className="absolute bottom-0 left-0 right-0 bg-black/65 pointer-events-none z-10"
+                    style={{ height: `${Math.min(100, (cd / cfg.prepTime) * 100)}%` }}
+                  />
+                )}
 
-              <div className="w-full flex items-center justify-between z-10 mt-auto">
-                <div className="flex flex-col items-center">
-                  <span className="text-[9px] text-zinc-300 leading-none">⤵</span>
-                  <span className="w-3 h-1 rounded-full bg-lime-500 border border-black" />
+                {/* Top Level Badge (exact cyan square like screenshot!) */}
+                <div className="w-full flex justify-end items-center z-20">
+                  {isUnlocked ? (
+                    <span
+                      className={`px-1 text-[8px] font-extrabold leading-tight rounded-xs ${
+                        canAfford
+                          ? 'bg-[#0284c7] text-white border border-black shadow-xs'
+                          : 'text-[#8c8a6e]'
+                      }`}
+                    >
+                      {lvl}
+                    </span>
+                  ) : (
+                    <span className="px-0.5 text-[7px] font-extrabold bg-amber-950/90 text-amber-300 border border-amber-700 rounded-xs">
+                      🔒{cfg.unlockLevel}
+                    </span>
+                  )}
                 </div>
-                <span
-                  className={`font-tactical font-extrabold text-[11px] leading-none ${
-                    canAfford ? 'text-[#ff5a5a]' : 'text-[#572822]'
-                  }`}
-                  style={{ textShadow: '1px 1px 0 #000' }}
-                >
-                  {rCost}
-                </span>
-              </div>
-            </button>
-          );
-        })()}
+
+                {/* Real Pixel-Art Matrix Portrait */}
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <CanvasUnitPortrait type={sType} active={canAfford} />
+                </div>
+
+                {/* Bottom Cost Row: Blue Drop + Bold Cost */}
+                {isUnlocked && (
+                  <div className="w-full flex items-center justify-between z-20 mt-auto">
+                    <span
+                      className={`w-3 h-3 rounded-full flex items-center justify-center text-[7px] ${
+                        canAfford
+                          ? 'bg-slate-950 border border-sky-400 text-sky-300'
+                          : 'bg-zinc-900/60 text-zinc-600'
+                      }`}
+                    >
+                      💧
+                    </span>
+                    <span
+                      className={`font-tactical font-extrabold text-xs leading-none ${
+                        canAfford ? 'text-white' : 'text-[#737058]'
+                      }`}
+                      style={
+                        canAfford
+                          ? { textShadow: '1px 1px 0 #000, -1px -1px 0 #000' }
+                          : undefined
+                      }
+                    >
+                      {cfg.cost}
+                    </span>
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* DIVIDER */}
+        <div className="h-10 w-[1px] bg-[#6e7353]/50 self-center mx-0.5" />
+
+        {/* RAGE TACTICAL DOCK: Blue Barrel [Q] (6), Red Barrel [X] (12), Medkit [E] (14) */}
+        <div className="flex items-end gap-1">
+          {TACTICAL_ORDER.map((itemType) => {
+            const cfg = TACTICAL_ITEM_CONFIGS[itemType];
+            const cd = itemCooldowns[itemType];
+            const canAfford = rage >= cfg.rageCost && cd <= 0;
+            const isSelected = draggingItem === itemType;
+            const keyHint = itemType === 'blue_barrel' ? 'Q' : itemType === 'red_barrel' ? 'X' : 'E';
+
+            return (
+              <button
+                key={itemType}
+                onPointerDown={() => {
+                  if (canAfford) {
+                    setDraggingItem(itemType);
+                    simRef.current.draggingItem = itemType;
+                  }
+                }}
+                onClick={() => toggleDraggingTactical(itemType)}
+                disabled={!canAfford}
+                className={`shrink-0 relative w-11 h-13 sm:w-12 sm:h-14 rounded-xs transition select-none flex flex-col justify-between p-1 ${
+                  isSelected
+                    ? 'bg-amber-950/95 border-2 border-yellow-300 scale-105 shadow-lg'
+                    : canAfford
+                    ? 'bg-[#453830]/92 border-2 border-[#b88774] cursor-grab hover:scale-105 shadow-[0_2px_6px_rgba(0,0,0,0.75)]'
+                    : 'bg-[#2a2520]/82 border border-[#453c34] cursor-not-allowed'
+                }`}
+                title={`${cfg.name} (${cfg.rageCost} Ira) [${keyHint}] — ${cfg.description}`}
+              >
+                {cd > 0 && (
+                  <div
+                    className="absolute bottom-0 left-0 right-0 bg-black/65 pointer-events-none z-10"
+                    style={{ height: `${Math.min(100, (cd / cfg.prepTime) * 100)}%` }}
+                  />
+                )}
+
+                <div className="w-full flex justify-between items-center z-20">
+                  <span className="text-[7px] font-extrabold text-zinc-400">{keyHint}</span>
+                  <span className="text-[8px] text-lime-300 leading-none">⤵</span>
+                </div>
+
+                {/* Tactical Item Pixel Icon */}
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  {itemType === 'blue_barrel' && (
+                    <div
+                      className={`w-5 h-7 rounded-xs border flex items-center justify-center ${
+                        canAfford
+                          ? 'bg-gradient-to-r from-[#3b5d7a] via-[#527da3] to-[#243b4f] border-black'
+                          : 'bg-[#1f1e18] border-[#2e2c22] opacity-55'
+                      }`}
+                    >
+                      <div className="w-full h-0.5 bg-black/70" />
+                    </div>
+                  )}
+                  {itemType === 'red_barrel' && (
+                    <div
+                      className={`w-5 h-7 rounded-xs border flex items-center justify-center ${
+                        canAfford
+                          ? 'bg-gradient-to-r from-[#b91c1c] via-[#ef4444] to-[#7f1d1d] border-black'
+                          : 'bg-[#241917] border-[#362522] opacity-55'
+                      }`}
+                    >
+                      <span className="text-[8px] leading-none">{canAfford ? '💥' : ''}</span>
+                    </div>
+                  )}
+                  {itemType === 'medkit' && (
+                    <div
+                      className={`w-6 h-5 rounded-xs border flex items-center justify-center ${
+                        canAfford
+                          ? 'bg-slate-100 border-black'
+                          : 'bg-zinc-800 border-zinc-700 opacity-50'
+                      }`}
+                    >
+                      <span
+                        className={`font-extrabold text-[10px] leading-none ${
+                          canAfford ? 'text-red-600' : 'text-zinc-600'
+                        }`}
+                      >
+                        +
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="w-full flex items-center justify-between z-20 mt-auto">
+                  <span
+                    className={`w-2.5 h-1 rounded-full border border-black ${
+                      itemType === 'medkit'
+                        ? 'bg-emerald-400'
+                        : itemType === 'red_barrel'
+                        ? 'bg-orange-500'
+                        : 'bg-lime-400'
+                    }`}
+                  />
+                  <span
+                    className={`font-tactical font-extrabold text-xs leading-none ${
+                      canAfford ? 'text-[#ff6b6b]' : 'text-[#633630]'
+                    }`}
+                    style={canAfford ? { textShadow: '1px 1px 0 #000' } : undefined}
+                  >
+                    {cfg.rageCost}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      {/* PAUSE MODAL OVERLAY (Auto-triggered when leaving app / switching tabs / pressing ||) */}
+      {/* PAUSE MODAL OVERLAY */}
       {paused && battleResult === 'none' && (
         <div className="absolute inset-0 z-40 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="max-w-xs w-full bg-zinc-900/95 border-2 border-amber-500 rounded-xl p-5 text-center shadow-2xl">
+          <div className="max-w-xs w-full bg-[#1f2118] border-2 border-amber-500 rounded-lg p-5 text-center shadow-2xl">
             <div className="font-pixel text-sm sm:text-base text-amber-400 mb-1.5">
               ⏸ JUEGO EN PAUSA
             </div>
             <p className="text-[11px] text-zinc-300 mb-4 leading-relaxed">
-              Combate y sonido en espera segura. Toca reanudar cuando estés listo para continuar defendiendo el autobús.
+              Combate y audio en espera segura. Tus unidades y el autobús están listos cuando vuelvas.
             </p>
             <div className="flex flex-col gap-2">
               <button
                 onClick={resumeBattle}
-                className="w-full py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-extrabold text-xs uppercase tracking-wider cursor-pointer shadow-lg"
+                className="w-full py-2.5 rounded bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-extrabold text-xs uppercase tracking-wider cursor-pointer shadow-lg"
               >
                 ▶ Reanudar Combate
               </button>
@@ -2053,7 +2677,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   soundFX.resumeFromBackground();
                   onRetreat();
                 }}
-                className="w-full py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 text-zinc-200 font-bold text-xs cursor-pointer"
+                className="w-full py-2 rounded bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 text-zinc-200 font-bold text-xs cursor-pointer"
               >
                 🗺️ Salir al Mapa de Campaña
               </button>
@@ -2065,7 +2689,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       {/* VICTORY OR DEFEAT MODAL OVERLAY */}
       {battleResult !== 'none' && (
         <div className="absolute inset-0 z-40 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="max-w-sm w-full bg-zinc-900 border-2 border-yellow-500 rounded-xl p-5 text-center shadow-2xl">
+          <div className="max-w-sm w-full bg-[#1f2118] border-2 border-yellow-500 rounded-lg p-5 text-center shadow-2xl">
             {battleResult === 'victory' ? (
               <>
                 <div className="font-pixel text-base text-yellow-400 mb-1.5">
@@ -2076,15 +2700,20 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                     <span
                       key={s}
                       className={`text-3xl ${
-                        s <= starsEarned ? 'text-yellow-400' : 'text-zinc-700'
+                        s <= starsEarned
+                          ? 'text-yellow-400 drop-shadow-[0_0_8px_rgba(250,204,21,0.65)]'
+                          : 'text-zinc-700'
                       }`}
                     >
                       ★
                     </span>
                   ))}
                 </div>
-                <p className="text-xs text-zinc-300 mb-4">
-                  Recompensa: <strong className="text-yellow-400">+{mission.coinsReward + starsEarned * 15} 🪙</strong> ({zombiesKilledCount} zombis abatidos)
+                <p className="text-[11px] text-zinc-400 mb-1">
+                  Integridad del Autobús: <strong className="text-emerald-400">{Math.round((busHp / maxBusHp) * 100)}%</strong> ({barricadeHp === 0 ? 'Ruta Despejada' : ''})
+                </p>
+                <p className="text-xs text-zinc-200 mb-4">
+                  Botín: <strong className="text-yellow-400">+{mission.coinsReward + starsEarned * 15} 🪙</strong> ({zombiesKilledCount} infectados abatidos)
                 </p>
                 <button
                   onClick={() =>
@@ -2094,19 +2723,22 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                       zombiesKilledCount
                     )
                   }
-                  className="w-full py-2.5 rounded-lg bg-yellow-500 hover:bg-yellow-400 text-zinc-950 font-extrabold text-xs uppercase tracking-wider"
+                  className="w-full py-2.5 rounded bg-yellow-500 hover:bg-yellow-400 text-zinc-950 font-extrabold text-xs uppercase tracking-wider cursor-pointer shadow-lg"
                 >
-                  Ir al Mapa Grande →
+                  Continuar al Mapa Mundial →
                 </button>
               </>
             ) : (
               <>
-                <div className="font-pixel text-base text-red-500 mb-2">¡EL AUTOBÚS CAYÓ!</div>
+                <div className="font-pixel text-base text-red-500 mb-1.5">¡EL AUTOBÚS CAYÓ!</div>
+                <p className="text-xs text-zinc-300 mb-4">
+                  Consejo táctico: Usa el Barril Azul [Q] para frenar corredores, el Barril Rojo [X] para incinerar cadáveres y al Mechanic para reparar el bus.
+                </p>
                 <button
                   onClick={onRetreat}
-                  className="w-full py-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white font-bold text-xs"
+                  className="w-full py-2.5 rounded bg-amber-500 hover:bg-amber-400 text-zinc-950 font-extrabold text-xs uppercase cursor-pointer"
                 >
-                  Volver al Mapa
+                  Reagrupar en el Mapa →
                 </button>
               </>
             )}
@@ -2117,115 +2749,26 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   );
 };
 
-function barHpDisplay(hp: number) {
-  return Math.max(0, Math.round(hp));
-}
+// Crisp Canvas-Rendered Pixel Sprite Portrait (turns into authentic dark silhouette when on cooldown/low courage!)
+const CanvasUnitPortrait: React.FC<{ type: SurvivorType; active: boolean }> = React.memo(
+  ({ type, active }) => {
+    const ref = useRef<HTMLCanvasElement | null>(null);
 
-// Detailed Pixel-Art Portrait for all 11 Units in the Bottom Deck
-const UnitSlotMiniPortrait: React.FC<{ type: SurvivorType; active: boolean }> = ({
-  type,
-  active,
-}) => {
-  const cls = `w-6 h-9 sm:w-7 sm:h-10 ${active ? 'opacity-100' : 'brightness-0 opacity-45'}`;
+    useEffect(() => {
+      const ctx = ref.current?.getContext('2d');
+      if (!ctx) return;
+      renderCharacterPreview(ctx, type, false, 30, 34);
+    }, [type]);
 
-  if (type === 'hound') {
     return (
-      <svg viewBox="0 0 16 20" className={cls} style={{ shapeRendering: 'crispEdges' }}>
-        <rect x="2" y="9" width="11" height="5" fill="#78350f" />
-        <rect x="10" y="6" width="4" height="4" fill="#9a3412" />
-        <rect x="11" y="4" width="1" height="2" fill="#451a03" />
-        <rect x="13" y="4" width="1" height="2" fill="#451a03" />
-        <rect x="9" y="9" width="2" height="4" fill="#dc2626" />
-        <rect x="3" y="14" width="2" height="4" fill="#451a03" />
-        <rect x="10" y="14" width="2" height="4" fill="#451a03" />
-      </svg>
+      <canvas
+        ref={ref}
+        width={30}
+        height={34}
+        className={`w-8 h-9 pixel-canvas transition ${
+          active ? 'opacity-100' : 'brightness-0 opacity-45'
+        }`}
+      />
     );
   }
-
-  if (type === 'turret') {
-    return (
-      <svg viewBox="0 0 16 20" className={cls} style={{ shapeRendering: 'crispEdges' }}>
-        <rect x="4" y="5" width="7" height="5" fill="#334155" />
-        <rect x="9" y="6" width="6" height="3" fill="#94a3b8" />
-        <rect x="5" y="6" width="3" height="2" fill="#facc15" />
-        <rect x="6" y="10" width="3" height="4" fill="#1e293b" />
-        <rect x="3" y="14" width="3" height="4" fill="#475569" />
-        <rect x="9" y="14" width="3" height="4" fill="#475569" />
-      </svg>
-    );
-  }
-
-  if (type === 'drone') {
-    return (
-      <svg viewBox="0 0 16 20" className={cls} style={{ shapeRendering: 'crispEdges' }}>
-        <rect x="1" y="4" width="5" height="1" fill="#e2e8f0" />
-        <rect x="10" y="4" width="5" height="1" fill="#e2e8f0" />
-        <rect x="3" y="6" width="10" height="4" fill="#334155" />
-        <rect x="9" y="7" width="3" height="2" fill="#ef4444" />
-        <rect x="5" y="10" width="6" height="3" fill="#1e293b" />
-      </svg>
-    );
-  }
-
-  const hatColor =
-    type === 'redneck'
-      ? '#0284c7'
-      : type === 'builder'
-      ? '#facc15'
-      : type === 'farmer'
-      ? '#eab308'
-      : type === 'policeman'
-      ? '#1e3a8a'
-      : type === 'sniper'
-      ? '#b91c1c'
-      : type === 'flamethrower'
-      ? '#ea580c'
-      : type === 'juggernaut'
-      ? '#09090b'
-      : '#334155';
-
-  const shirtColor =
-    type === 'redneck'
-      ? '#f5b882'
-      : type === 'builder'
-      ? '#6b653b'
-      : type === 'farmer'
-      ? '#cbd5e1'
-      : type === 'policeman'
-      ? '#172554'
-      : type === 'sniper'
-      ? '#3f3f46'
-      : type === 'flamethrower'
-      ? '#c2410c'
-      : type === 'juggernaut'
-      ? '#1e293b'
-      : '#0369a1';
-
-  const overallsColor =
-    type === 'redneck' || type === 'farmer'
-      ? '#1d4ed8'
-      : type === 'builder' || type === 'juggernaut'
-      ? '#facc15'
-      : type === 'sniper'
-      ? '#991b1b'
-      : '#09090b';
-
-  return (
-    <svg viewBox="0 0 16 24" className={cls} style={{ shapeRendering: 'crispEdges' }}>
-      <rect x="4" y="1" width="7" height="4" fill="#14110f" />
-      <rect x="3" y="4" width="9" height="6" fill="#14110f" />
-      <rect x="2" y="10" width="10" height="8" fill="#14110f" />
-      <rect x="3" y="18" width="8" height="5" fill="#14110f" />
-      <rect x="5" y="2" width="5" height="2" fill={hatColor} />
-      <rect x="4" y="3" width="8" height="1" fill={hatColor} />
-      <rect x="4" y="4" width="6" height="5" fill="#f5b882" />
-      <rect x="8" y="5" width="1" height="2" fill="#18181b" />
-      <rect x="3" y="10" width="8" height="7" fill={shirtColor} />
-      <rect x="4" y="12" width="6" height="5" fill={overallsColor} />
-      <rect x="4" y="18" width="2" height="4" fill="#1e293b" />
-      <rect x="8" y="18" width="2" height="4" fill="#1e293b" />
-      <rect x="11" y="8" width="2" height="9" fill="#14110f" />
-      <rect x="11" y="9" width="1" height="7" fill="#94a3b8" />
-    </svg>
-  );
-};
+);
