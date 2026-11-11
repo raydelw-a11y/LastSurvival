@@ -52,29 +52,30 @@ interface RoadMapHubProps {
   onRefillFuel: () => void;
 }
 
-const WORLD_W = 2100;
-const WORLD_H = 1120;
+const WORLD_W = 2800;
+const WORLD_H = 980;
 
 const ROAD_CACHES = [
-  // Ruta Norte, Centro y Sur distribuidas en los 4 Sectores
-  { id: 'cache_1', name: 'Gasolinera Texaco', x: 10, y: 48, coins: 45, fuel: 3 },
-  { id: 'cache_2', name: 'Cabaña Guardabosques Norte', x: 18, y: 18, coins: 65, fuel: 3 },
-  { id: 'cache_3', name: 'Embarcadero del Pantano', x: 20, y: 81, coins: 70, fuel: 3 },
-  { id: 'cache_4', name: 'Granero Abandonado', x: 26, y: 50, coins: 75, fuel: 2 },
-  { id: 'cache_5', name: 'Vagoneta de la Mina Norte', x: 31, y: 24, coins: 90, fuel: 3 },
-  { id: 'cache_6', name: 'Almacén Pesquero Sur', x: 35, y: 82, coins: 95, fuel: 3 },
-  { id: 'cache_7', name: 'Subestación de la Presa', x: 44, y: 17, coins: 115, fuel: 4 },
-  { id: 'cache_8', name: 'Torre Petrolera Ruta 66', x: 36, y: 50, coins: 110, fuel: 3 },
-  { id: 'cache_9', name: 'Control Carretera 66', x: 45, y: 51, coins: 120, fuel: 4 },
-  { id: 'cache_10', name: 'Faro de la Costa Sur', x: 51, y: 83, coins: 130, fuel: 4 },
-  { id: 'cache_11', name: 'Antena Sierra Norte', x: 60, y: 17, coins: 150, fuel: 4 },
-  { id: 'cache_12', name: 'Farmacia Saqueada', x: 54, y: 52, coins: 140, fuel: 3 },
-  { id: 'cache_13', name: 'Furgón Policial SWAT', x: 62, y: 49, coins: 165, fuel: 4 },
-  { id: 'cache_14', name: 'Contenedor Blindado Sur', x: 67, y: 83, coins: 175, fuel: 4 },
-  { id: 'cache_15', name: 'Convoy Ártico Norte', x: 77, y: 17, coins: 210, fuel: 5 },
-  { id: 'cache_16', name: 'Convoy del Ejército', x: 78, y: 49, coins: 200, fuel: 5 },
-  { id: 'cache_17', name: 'Lancha Patrullera Sur', x: 83, y: 83, coins: 225, fuel: 5 },
-  { id: 'cache_18', name: 'Hangar Secreto Omega', x: 93, y: 52, coins: 255, fuel: 5 },
+  // Sector 1 (M1..M6)
+  { id: 'cache_1', name: 'Gasolinera Texaco', x: 6.4, y: 37, coins: 45, fuel: 3 },
+  { id: 'cache_2', name: 'Granero Abandonado', x: 10.4, y: 38, coins: 65, fuel: 3 },
+  { id: 'cache_3', name: 'Furgoneta en la Ribera', x: 14.3, y: 66, coins: 70, fuel: 3 },
+  { id: 'cache_4', name: 'Torre Petrolera', x: 22.0, y: 35, coins: 85, fuel: 3 },
+  // Sector 2 (M7..M12)
+  { id: 'cache_5', name: 'Ambulancia Militar', x: 29.8, y: 65, coins: 105, fuel: 3 },
+  { id: 'cache_6', name: 'Control Policial SWAT', x: 33.8, y: 66, coins: 120, fuel: 4 },
+  { id: 'cache_7', name: 'Convoy de la Cresta', x: 37.6, y: 35, coins: 135, fuel: 4 },
+  { id: 'cache_8', name: 'Almacén Bio-Alfa', x: 45.4, y: 65, coins: 155, fuel: 4 },
+  // Sector 3 (M13..M18)
+  { id: 'cache_9', name: 'Cabaña Alpina Norte', x: 53.4, y: 33, coins: 170, fuel: 4 },
+  { id: 'cache_10', name: 'Vagoneta de la Mina', x: 57.4, y: 34, coins: 180, fuel: 4 },
+  { id: 'cache_11', name: 'Embarcadero del Pantano', x: 61.4, y: 65, coins: 190, fuel: 4 },
+  { id: 'cache_12', name: 'Subestación de la Presa', x: 69.4, y: 33, coins: 205, fuel: 4 },
+  // Sector 4 (M19..M24)
+  { id: 'cache_13', name: 'Furgón Penitenciario', x: 77.4, y: 66, coins: 220, fuel: 5 },
+  { id: 'cache_14', name: 'Contenedor Blindado Sur', x: 81.4, y: 66, coins: 235, fuel: 5 },
+  { id: 'cache_15', name: 'Convoy Ártico Norte', x: 85.5, y: 34, coins: 250, fuel: 5 },
+  { id: 'cache_16', name: 'Hangar Secreto Omega', x: 93.7, y: 63, coins: 280, fuel: 5 },
 ];
 
 export const RoadMapHub: React.FC<RoadMapHubProps> = ({
@@ -132,7 +133,10 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
     }
   }, [selectedMission.mapX, selectedMission.mapY, zoomedOut]);
 
-  // Bake static 2400x1480 Continent once + Animate Live Weather, Rivers, Ocean, Flares & Reactor!
+  const missionStarsRef = useRef(progress.missionStars);
+  missionStarsRef.current = progress.missionStars;
+
+  // Bake static 2800x980 Continent once + Animate Live Weather, Rivers, Ocean, Flares & Conquered Road!
   useEffect(() => {
     if (!bakedMapRef.current) {
       const MAP_SCALE = 1.35;
@@ -143,20 +147,20 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       bctx.scale(MAP_SCALE, MAP_SCALE);
       bctx.imageSmoothingEnabled = true;
 
-      // 1. Regional West-to-East Biome Grounds
+      // 1. Regional West-to-East Biome Grounds across the 4 Sectors
       const bgGrad = bctx.createLinearGradient(0, 0, WORLD_W, 0);
       bgGrad.addColorStop(0, '#334227');
       bgGrad.addColorStop(0.24, '#3c4a2d');
-      bgGrad.addColorStop(0.28, '#5c462f');
-      bgGrad.addColorStop(0.49, '#55422d');
-      bgGrad.addColorStop(0.53, '#343841');
-      bgGrad.addColorStop(0.73, '#2f333b');
+      bgGrad.addColorStop(0.27, '#5c462f');
+      bgGrad.addColorStop(0.49, '#46413b');
+      bgGrad.addColorStop(0.52, '#354534');
+      bgGrad.addColorStop(0.73, '#313a42');
       bgGrad.addColorStop(0.77, '#27342b');
       bgGrad.addColorStop(1, '#1f2b23');
       bctx.fillStyle = bgGrad;
       bctx.fillRect(0, 0, WORLD_W, WORLD_H);
 
-      // 1B. North-to-South Elevation Tint (Snowy Alpine Highlands at Top, Muddy Bayou & Coast at Bottom)
+      // 1B. North-to-South Elevation Tint (Snowy Alpine Highlands at Top, Bayou & Ocean at Bottom)
       const nsGrad = bctx.createLinearGradient(0, 0, 0, WORLD_H);
       nsGrad.addColorStop(0, 'rgba(203, 213, 225, 0.24)');
       nsGrad.addColorStop(0.18, 'rgba(148, 163, 184, 0.08)');
@@ -166,12 +170,12 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       bctx.fillStyle = nsGrad;
       bctx.fillRect(0, 0, WORLD_W, WORLD_H);
 
-      // Southern Ocean / Infected Bay Shoreline along the bottom edge (y = 1015..1120)
+      // Southern Ocean / Infected Bay Shoreline along the bottom edge (y = 890..980)
       bctx.fillStyle = '#857352';
       bctx.beginPath();
-      bctx.moveTo(0, 1005);
-      for (let sx = 0; sx <= WORLD_W; sx += 110) {
-        const waveY = 1008 + Math.sin(sx * 0.009) * 14;
+      bctx.moveTo(0, 882);
+      for (let sx = 0; sx <= WORLD_W; sx += 120) {
+        const waveY = 885 + Math.sin(sx * 0.008) * 12;
         bctx.lineTo(sx, waveY);
       }
       bctx.lineTo(WORLD_W, WORLD_H);
@@ -179,15 +183,15 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       bctx.closePath();
       bctx.fill();
 
-      const seaGrad = bctx.createLinearGradient(0, 1018, 0, WORLD_H);
+      const seaGrad = bctx.createLinearGradient(0, 896, 0, WORLD_H);
       seaGrad.addColorStop(0, '#164e63');
       seaGrad.addColorStop(0.45, '#0f3446');
       seaGrad.addColorStop(1, '#081e2b');
       bctx.fillStyle = seaGrad;
       bctx.beginPath();
-      bctx.moveTo(0, 1020);
-      for (let sx = 0; sx <= WORLD_W; sx += 110) {
-        const waveY = 1022 + Math.sin(sx * 0.009) * 14;
+      bctx.moveTo(0, 898);
+      for (let sx = 0; sx <= WORLD_W; sx += 120) {
+        const waveY = 900 + Math.sin(sx * 0.008) * 12;
         bctx.lineTo(sx, waveY);
       }
       bctx.lineTo(WORLD_W, WORLD_H);
@@ -195,48 +199,46 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       bctx.closePath();
       bctx.fill();
 
-      // Northern Alpine Snowy Mountain Ridges along the top border (y = 0..135)
-      for (let m = 0; m < 20; m++) {
-        const mx = m * 112 - 20;
-        const mw = 148 + (m % 3) * 24;
-        const mh = 82 + (m % 4) * 20;
+      // Northern Alpine Snowy Mountain Ridges along the top border (y = 0..120)
+      for (let m = 0; m < 26; m++) {
+        const mx = m * 114 - 20;
+        const mw = 152 + (m % 3) * 24;
+        const mh = 76 + (m % 4) * 18;
         bctx.fillStyle = m % 2 === 0 ? '#334155' : '#3f4959';
         bctx.strokeStyle = '#0f172a';
         bctx.lineWidth = 2;
         bctx.beginPath();
-        bctx.moveTo(mx, 128);
-        bctx.lineTo(mx + mw * 0.5, 128 - mh);
-        bctx.lineTo(mx + mw, 128);
+        bctx.moveTo(mx, 118);
+        bctx.lineTo(mx + mw * 0.5, 118 - mh);
+        bctx.lineTo(mx + mw, 118);
         bctx.closePath();
         bctx.fill();
         bctx.stroke();
 
-        // Snow cap
         bctx.fillStyle = '#e2e8f0';
         bctx.beginPath();
-        bctx.moveTo(mx + mw * 0.5, 128 - mh);
-        bctx.lineTo(mx + mw * 0.67, 128 - mh * 0.62);
-        bctx.lineTo(mx + mw * 0.52, 128 - mh * 0.54);
-        bctx.lineTo(mx + mw * 0.33, 128 - mh * 0.62);
+        bctx.moveTo(mx + mw * 0.5, 118 - mh);
+        bctx.lineTo(mx + mw * 0.67, 118 - mh * 0.62);
+        bctx.lineTo(mx + mw * 0.52, 118 - mh * 0.54);
+        bctx.lineTo(mx + mw * 0.33, 118 - mh * 0.62);
         bctx.closePath();
         bctx.fill();
       }
 
-      // Organic topographic contour plateaus & southern swamp lagoons
-      for (let i = 0; i < 80; i++) {
-        const px = 65 + ((i * 163) % (WORLD_W - 130));
-        const py = 125 + ((i * 113) % (WORLD_H - 250));
+      // Organic topographic contour plateaus
+      for (let i = 0; i < 90; i++) {
+        const px = 70 + ((i * 179) % (WORLD_W - 140));
+        const py = 120 + ((i * 107) % (WORLD_H - 230));
         bctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.12)';
         bctx.beginPath();
-        bctx.ellipse(px, py, 64 + (i % 5) * 16, 32 + (i % 4) * 12, (i % 3) * 0.25, 0, Math.PI * 2);
+        bctx.ellipse(px, py, 66 + (i % 5) * 16, 30 + (i % 4) * 11, (i % 3) * 0.25, 0, Math.PI * 2);
         bctx.fill();
       }
 
-      // Southern Bayou Marsh Ponds (Sector 1 & 2 South)
+      // Southern Bayou Marsh Ponds
       [
-        { x: 260, y: 885, rx: 64, ry: 24 },
-        { x: 430, y: 945, rx: 52, ry: 20 },
-        { x: 740, y: 905, rx: 60, ry: 22 },
+        { x: 350, y: 780, rx: 64, ry: 22 },
+        { x: 1775, y: 805, rx: 72, ry: 24 },
       ].forEach((pond) => {
         bctx.fillStyle = '#1b3b36';
         bctx.strokeStyle = '#0f2420';
@@ -247,17 +249,17 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
         bctx.stroke();
       });
 
-      // Sector Borders & Crisp Tactical Headers
+      // Sector Borders & Crisp Sequential Headers (M1-M6, M7-M12, M13-M18, M19-M24)
       const sectors = [
-        { x: 25, label: 'SECTOR 1: BOSQUE, CUMBRES Y PANTANO' },
-        { x: 555, label: 'SECTOR 2: MINA NORTE, RUTA 66 Y BAHÍA' },
-        { x: 1085, label: 'SECTOR 3: SIERRA, CIUDAD MUERTA Y PUERTO' },
-        { x: 1605, label: 'SECTOR 4: RADAR, BASE MILITAR Y LAB CERO' },
+        { x: 30, label: 'SECTOR 1: BOSQUE, COLINAS Y RUTA 66 (M1 → M6)' },
+        { x: 745, label: 'SECTOR 2: CIUDAD MUERTA Y LAB CERO (M7 → M12)' },
+        { x: 1415, label: 'SECTOR 3: SIERRA NEVADA Y BAYOU (M13 → M18)' },
+        { x: 2095, label: 'SECTOR 4: PUERTO, RADAR Y OMEGA (M19 → M24)' },
       ];
       bctx.strokeStyle = 'rgba(250, 204, 21, 0.3)';
       bctx.lineWidth = 2.2;
       bctx.setLineDash([10, 10]);
-      [535, 1060, 1585].forEach((sx) => {
+      [728, 1385, 2065].forEach((sx) => {
         bctx.beginPath();
         bctx.moveTo(sx, 0);
         bctx.lineTo(sx, WORLD_H);
@@ -266,59 +268,59 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       bctx.setLineDash([]);
 
       sectors.forEach((s) => {
-        bctx.fillStyle = 'rgba(14, 16, 12, 0.86)';
+        bctx.fillStyle = 'rgba(14, 16, 12, 0.88)';
         bctx.beginPath();
-        bctx.roundRect(s.x, 48, 385, 25, 6);
+        bctx.roundRect(s.x, 46, 395, 25, 6);
         bctx.fill();
         bctx.strokeStyle = '#a39e77';
         bctx.lineWidth = 1.5;
         bctx.stroke();
         bctx.fillStyle = '#fde047';
         bctx.font = '800 11px "Chakra Petch", sans-serif';
-        bctx.fillText(s.label, s.x + 12, 65);
+        bctx.fillText(s.label, s.x + 12, 63);
       });
 
-      // 2. Two Winding North-to-South Rivers emptying into the Southern Bay
-      [1035, 1565].forEach((rx) => {
+      // 2. Winding North-to-South Rivers emptying into the Southern Bay
+      [720, 1385, 2060].forEach((rx) => {
         const drawRiverCurve = () => {
           bctx.beginPath();
           bctx.moveTo(rx, -10);
-          bctx.bezierCurveTo(rx - 65, 350, rx + 75, 730, rx - 20, 1055);
+          bctx.bezierCurveTo(rx - 45, 310, rx + 55, 640, rx - 15, 925);
         };
         bctx.lineCap = 'round';
         bctx.strokeStyle = '#14120e';
-        bctx.lineWidth = 48;
+        bctx.lineWidth = 44;
         drawRiverCurve();
         bctx.stroke();
 
         bctx.strokeStyle = '#78684a';
-        bctx.lineWidth = 42;
+        bctx.lineWidth = 38;
         drawRiverCurve();
         bctx.stroke();
 
         bctx.strokeStyle = '#153142';
-        bctx.lineWidth = 34;
+        bctx.lineWidth = 30;
         drawRiverCurve();
         bctx.stroke();
 
         bctx.strokeStyle = '#285875';
-        bctx.lineWidth = 18;
+        bctx.lineWidth = 15;
         drawRiverCurve();
         bctx.stroke();
       });
 
-      // Hydroelectric Concrete Dam in Northern Gorge (near Mission 16)
+      // Hydroelectric Concrete Dam (near Mission 17)
       bctx.fillStyle = '#64748b';
       bctx.strokeStyle = '#0f172a';
       bctx.lineWidth = 2.2;
       bctx.beginPath();
-      bctx.roundRect(1045, 148, 88, 32, 4);
+      bctx.roundRect(1845, 425, 84, 30, 4);
       bctx.fill();
       bctx.stroke();
       bctx.fillStyle = '#38bdf8';
-      bctx.fillRect(1059, 176, 60, 12);
+      bctx.fillRect(1858, 451, 58, 12);
 
-      // 3. Vector-Inked Pines across Northern Forests, Valleys & Ridges
+      // 3. Vector-Inked Pines across Forests, Valleys & Ridges
       const drawPineHD = (px: number, py: number, scale = 1, snowy = false) => {
         bctx.fillStyle = 'rgba(0,0,0,0.34)';
         bctx.beginPath();
@@ -347,48 +349,37 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
         });
       };
 
-      for (let i = 0; i < 250; i++) {
-        const fx = 28 + ((i * 119) % (WORLD_W - 56));
-        const fy = 105 + ((i * 89) % (WORLD_H - 220));
-        if (Math.abs(fy - 560) > 52) {
-          drawPineHD(fx, fy, 1.05 + (i % 3) * 0.1, fy < 235);
+      for (let i = 0; i < 290; i++) {
+        const fx = 28 + ((i * 131) % (WORLD_W - 56));
+        const fy = 105 + ((i * 83) % (WORLD_H - 210));
+        if (Math.abs(fy - 490) > 45) {
+          drawPineHD(fx, fy, 1.04 + (i % 3) * 0.1, fy < 220);
         }
       }
 
-      // Sector 1 Center: Inked Red Farm Barn + Cylindrical Grain Silo (near M2)
-      bctx.fillStyle = 'rgba(0,0,0,0.35)';
-      bctx.beginPath();
-      bctx.ellipse(315, 458, 44, 11, 0, 0, Math.PI * 2);
-      bctx.fill();
+      // Sector 1: Red Farm Barn + Silo (near M2) & Oil Derricks (near M5)
       bctx.fillStyle = '#881d1d';
       bctx.strokeStyle = '#14110f';
       bctx.lineWidth = 2;
-      bctx.fillRect(285, 426, 50, 32);
-      bctx.strokeRect(285, 426, 50, 32);
+      bctx.fillRect(215, 165, 48, 30);
+      bctx.strokeRect(215, 165, 48, 30);
       bctx.beginPath();
-      bctx.moveTo(279, 428);
-      bctx.lineTo(310, 408);
-      bctx.lineTo(341, 428);
+      bctx.moveTo(209, 167);
+      bctx.lineTo(239, 148);
+      bctx.lineTo(269, 167);
       bctx.closePath();
       bctx.fillStyle = '#b91c1c';
       bctx.fill();
       bctx.stroke();
       bctx.fillStyle = '#cbd5e1';
-      bctx.fillRect(341, 404, 18, 52);
-      bctx.strokeRect(341, 404, 18, 52);
+      bctx.fillRect(269, 145, 18, 50);
+      bctx.strokeRect(269, 145, 18, 50);
 
-      // Sector 2: Oil Derricks & Refinery Storage Tanks (Center & South Coast)
       [
-        { x: 780, y: 580 },
-        { x: 880, y: 530 },
-        { x: 925, y: 635 },
-        { x: 895, y: 940 },
+        { x: 520, y: 520 },
+        { x: 605, y: 475 },
+        { x: 1640, y: 515 },
       ].forEach((oil) => {
-        bctx.fillStyle = 'rgba(0,0,0,0.35)';
-        bctx.beginPath();
-        bctx.ellipse(oil.x + 12, oil.y + 3, 18, 6, 0, 0, Math.PI * 2);
-        bctx.fill();
-
         bctx.fillStyle = '#3f3f46';
         bctx.strokeStyle = '#121214';
         bctx.lineWidth = 2;
@@ -400,35 +391,34 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
         bctx.fillRect(oil.x + 1, oil.y - 29, 24, 5);
       });
 
-      // Southern Wooden Fishing Pier & Container Port Docks
-      [570, 1240, 1885].forEach((dx) => {
+      // Southern Wooden Pier & Container Port Docks
+      [890, 2220, 2565].forEach((dx) => {
         bctx.fillStyle = '#5c4028';
         bctx.strokeStyle = '#1c130b';
         bctx.lineWidth = 2;
-        bctx.fillRect(dx - 16, 995, 32, 68);
-        bctx.strokeRect(dx - 16, 995, 32, 68);
+        bctx.fillRect(dx - 16, 875, 32, 62);
+        bctx.strokeRect(dx - 16, 875, 32, 62);
       });
 
-      // Sector 3 North: Observatory Dome (near M17)
+      // Observatory Dome (near M18 North)
       bctx.fillStyle = '#e2e8f0';
       bctx.strokeStyle = '#0f172a';
       bctx.lineWidth = 2.2;
       bctx.beginPath();
-      bctx.arc(1428, 175, 25, Math.PI, 0);
+      bctx.arc(1998, 150, 24, Math.PI, 0);
       bctx.closePath();
       bctx.fill();
       bctx.stroke();
       bctx.fillStyle = '#475569';
-      bctx.fillRect(1403, 175, 50, 20);
-      bctx.strokeRect(1403, 175, 50, 20);
+      bctx.fillRect(1974, 150, 48, 18);
+      bctx.strokeRect(1974, 150, 48, 18);
 
-      // Sector 3 Center & South: Ruined City Skyscrapers, Hospital & Port Containers
+      // Sector 2 & 4: Ruined City Skyscrapers, Hospital & Bunkers
       const cityBlocks = [
-        { x: 1215, y: 455, w: 48, h: 78 },
-        { x: 1280, y: 430, w: 58, h: 98 },
-        { x: 1360, y: 465, w: 50, h: 72 },
-        { x: 1245, y: 630, w: 62, h: 86 },
-        { x: 1330, y: 645, w: 52, h: 78 },
+        { x: 755, y: 405, w: 46, h: 74 },
+        { x: 815, y: 385, w: 54, h: 92 },
+        { x: 965, y: 420, w: 50, h: 72 },
+        { x: 2085, y: 410, w: 58, h: 78 },
       ];
       cityBlocks.forEach((b, idx) => {
         bctx.fillStyle = 'rgba(0,0,0,0.42)';
@@ -446,83 +436,48 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
             bctx.fillRect(wx, wy, 6, 6);
           }
         }
-        if (idx === 3) {
+        if (idx === 0) {
           bctx.fillStyle = '#ef4444';
-          bctx.fillRect(b.x + 26, b.y - 14, 10, 14);
-          bctx.fillRect(b.x + 22, b.y - 10, 18, 6);
+          bctx.fillRect(b.x + 18, b.y - 14, 10, 14);
+          bctx.fillRect(b.x + 14, b.y - 10, 18, 6);
         }
       });
 
-      // Port Shipping Containers (Sector 3 South)
-      [
-        { x: 1185, y: 925, c: '#b91c1c' },
-        { x: 1221, y: 925, c: '#1d4ed8' },
-        { x: 1203, y: 907, c: '#ca8a04' },
-      ].forEach((cnt) => {
-        bctx.fillStyle = cnt.c;
-        bctx.strokeStyle = '#09090b';
-        bctx.lineWidth = 1.8;
-        bctx.fillRect(cnt.x, cnt.y, 32, 16);
-        bctx.strokeRect(cnt.x, cnt.y, 32, 16);
-      });
+      // 4. Single Ordered Sequential Highway 1 -> 2 -> 3 -> ... -> 24 with Smooth S-Curves!
+      const orderedPts = MISSION_NODES.map((m) => ({
+        id: m.id,
+        x: (m.mapX / 100) * WORLD_W,
+        y: (m.mapY / 100) * WORLD_H,
+      }));
 
-      // Sector 4: Military Bunkers & Helipad
-      bctx.fillStyle = '#3f4739';
-      bctx.strokeStyle = '#141612';
-      bctx.lineWidth = 2.2;
-      bctx.beginPath();
-      bctx.roundRect(1690, 385, 82, 50, 6);
-      bctx.fill();
-      bctx.stroke();
+      const traceSequentialHighway = (ctx2d: CanvasRenderingContext2D, maxNodeIdx?: number) => {
+        const limit = maxNodeIdx !== undefined ? Math.min(orderedPts.length - 1, maxNodeIdx) : orderedPts.length - 1;
+        if (limit < 1) return;
+        ctx2d.beginPath();
+        ctx2d.moveTo(orderedPts[0].x, orderedPts[0].y);
+        for (let i = 0; i < limit; i++) {
+          const p1 = orderedPts[i];
+          const p2 = orderedPts[i + 1];
+          const midX = (p1.x + p2.x) * 0.5;
+          ctx2d.bezierCurveTo(midX, p1.y, midX, p2.y, p2.x, p2.y);
+        }
+      };
 
-      bctx.fillStyle = 'rgba(24, 24, 27, 0.84)';
-      bctx.beginPath();
-      bctx.roundRect(1820, 655, 72, 72, 8);
-      bctx.fill();
-      bctx.strokeStyle = '#eab308';
-      bctx.lineWidth = 2;
-      bctx.strokeRect(1826, 661, 60, 60);
-      bctx.fillStyle = '#eab308';
-      bctx.font = '800 24px "Chakra Petch", sans-serif';
-      bctx.fillText('H', 1847, 700);
-
-      // 4. Multi-Branch Interstate & Mountain/Coastal Highway Network connecting all 24 Missions!
-      const nodeById = new Map<number, MissionNode>();
-      MISSION_NODES.forEach((m) => nodeById.set(m.id, m));
-
-      const drawAllRoadEdges = (stroke: string, width: number, dash: number[] = []) => {
-        const drawnPairs = new Set<string>();
+      const paintRoadPass = (stroke: string, width: number, dash: number[] = []) => {
         bctx.strokeStyle = stroke;
         bctx.lineWidth = width;
         bctx.lineCap = 'round';
         bctx.lineJoin = 'round';
         bctx.setLineDash(dash);
-        bctx.beginPath();
-        MISSION_NODES.forEach((m) => {
-          const x1 = (m.mapX / 100) * WORLD_W;
-          const y1 = (m.mapY / 100) * WORLD_H;
-          m.connectedTo.forEach((targetId) => {
-            const pairKey = `${Math.min(m.id, targetId)}-${Math.max(m.id, targetId)}`;
-            if (drawnPairs.has(pairKey)) return;
-            drawnPairs.add(pairKey);
-            const target = nodeById.get(targetId);
-            if (!target) return;
-            const x2 = (target.mapX / 100) * WORLD_W;
-            const y2 = (target.mapY / 100) * WORLD_H;
-            const cx = (x1 + x2) * 0.5;
-            const cy = (y1 + y2) * 0.5 + ((m.id + targetId) % 2 === 0 ? -14 : 14);
-            bctx.moveTo(x1, y1);
-            bctx.quadraticCurveTo(cx, cy, x2, y2);
-          });
-        });
+        traceSequentialHighway(bctx);
         bctx.stroke();
         bctx.setLineDash([]);
       };
 
-      drawAllRoadEdges('#121215', 34);
-      drawAllRoadEdges('#57534e', 28);
-      drawAllRoadEdges('#33363d', 22);
-      drawAllRoadEdges('#facc15', 2.4, [11, 10]);
+      paintRoadPass('#121215', 36);
+      paintRoadPass('#57534e', 30);
+      paintRoadPass('#33363d', 23);
+      paintRoadPass('#facc15', 2.4, [11, 10]);
 
       bakedMapRef.current = off;
     }
@@ -538,44 +493,74 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       const canvas = mapCanvasRef.current;
       const baked = bakedMapRef.current;
       if (!canvas || !baked) return;
-      const ctx = syncCanvasHiDPI(canvas, WORLD_W, WORLD_H, 1.5);
+      const ctx = syncCanvasHiDPI(canvas, WORLD_W, WORLD_H, 1.45);
       if (!ctx) return;
 
       const t = now * 0.001;
       ctx.drawImage(baked, 0, 0, WORLD_W, WORLD_H);
 
-      // A. Flowing water current streaks along both North-to-South rivers + Southern Bay waves
+      // Highlight already-conquered sequential highway segments in emerald green!
+      const starsMap = missionStarsRef.current || {};
+      let highestBeatenIdx = -1;
+      for (let i = 0; i < MISSION_NODES.length; i++) {
+        if ((starsMap[MISSION_NODES[i].id] || 0) > 0) {
+          highestBeatenIdx = i;
+        } else {
+          break;
+        }
+      }
+      if (highestBeatenIdx >= 0) {
+        const targetIdx = Math.min(MISSION_NODES.length - 1, highestBeatenIdx + 1);
+        ctx.save();
+        ctx.strokeStyle = 'rgba(52, 211, 153, 0.65)';
+        ctx.lineWidth = 6;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        const p0x = (MISSION_NODES[0].mapX / 100) * WORLD_W;
+        const p0y = (MISSION_NODES[0].mapY / 100) * WORLD_H;
+        ctx.moveTo(p0x, p0y);
+        for (let i = 0; i < targetIdx; i++) {
+          const x1 = (MISSION_NODES[i].mapX / 100) * WORLD_W;
+          const y1 = (MISSION_NODES[i].mapY / 100) * WORLD_H;
+          const x2 = (MISSION_NODES[i + 1].mapX / 100) * WORLD_W;
+          const y2 = (MISSION_NODES[i + 1].mapY / 100) * WORLD_H;
+          const midX = (x1 + x2) * 0.5;
+          ctx.bezierCurveTo(midX, y1, midX, y2, x2, y2);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // A. Flowing water current streaks along all 3 rivers + Southern Bay waves
       ctx.save();
       ctx.strokeStyle = 'rgba(125, 211, 252, 0.32)';
       ctx.lineWidth = 3;
       ctx.setLineDash([16, 28]);
       ctx.lineDashOffset = -t * 30;
-      [1035, 1565].forEach((rx) => {
+      [720, 1385, 2060].forEach((rx) => {
         ctx.beginPath();
         ctx.moveTo(rx, -10);
-        ctx.bezierCurveTo(rx - 65, 350, rx + 75, 730, rx - 20, 1055);
+        ctx.bezierCurveTo(rx - 45, 310, rx + 55, 640, rx - 15, 925);
         ctx.stroke();
       });
 
-      // Southern Bay Gentle Sea Foam Shimmer
       ctx.strokeStyle = 'rgba(186, 230, 253, 0.28)';
       ctx.lineWidth = 2.2;
       ctx.setLineDash([28, 38]);
       ctx.lineDashOffset = t * 18;
       ctx.beginPath();
-      ctx.moveTo(0, 1042);
-      for (let sx = 0; sx <= WORLD_W; sx += 110) {
-        ctx.lineTo(sx, 1044 + Math.sin(sx * 0.009 + t * 1.5) * 10);
+      ctx.moveTo(0, 922);
+      for (let sx = 0; sx <= WORLD_W; sx += 120) {
+        ctx.lineTo(sx, 924 + Math.sin(sx * 0.008 + t * 1.5) * 9);
       }
       ctx.stroke();
       ctx.restore();
 
-      // B. Flickering Refinery Gas Flares & Smoke Plumes (Sector 2 Center & South)
+      // B. Flickering Refinery Gas Flares & Smoke Plumes
       [
-        { x: 780, y: 580 },
-        { x: 880, y: 530 },
-        { x: 925, y: 635 },
-        { x: 895, y: 940 },
+        { x: 520, y: 520 },
+        { x: 605, y: 475 },
+        { x: 1640, y: 515 },
       ].forEach((oil, idx) => {
         const flk = Math.round(Math.sin(t * 15 + idx * 2) * 3);
         ctx.fillStyle = '#ea580c';
@@ -588,31 +573,31 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
         ctx.fillRect(oil.x + 3 - puffShift * 0.2, oil.y - 68 - puffShift, 18, 12);
       });
 
-      // C. Pulsing Biohazard Reactor Dome (Mission 12) & Arctic Radar Sweep (Mission 18 North)
+      // C. Pulsing Biohazard Reactor Dome (Mission 24 Omega) & Arctic Radar Sweep (Mission 22 North)
       const pulseR = 44 + Math.sin(t * 4) * 6;
-      const radGrad = ctx.createRadialGradient(2016, 549, 10, 2016, 549, pulseR + 26);
+      const radGrad = ctx.createRadialGradient(2682, 470, 10, 2682, 470, pulseR + 26);
       radGrad.addColorStop(0, 'rgba(253, 224, 71, 0.95)');
       radGrad.addColorStop(0.45, 'rgba(220, 38, 38, 0.78)');
       radGrad.addColorStop(1, 'rgba(220, 38, 38, 0)');
       ctx.fillStyle = radGrad;
       ctx.beginPath();
-      ctx.arc(2016, 549, pulseR + 26, 0, Math.PI * 2);
+      ctx.arc(2682, 470, pulseR + 26, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.strokeStyle = 'rgba(74, 222, 128, 0.42)';
       ctx.lineWidth = 2.2;
       const sweepR = 16 + ((t * 40) % 80);
       ctx.beginPath();
-      ctx.arc(1785, 179, sweepR, 0, Math.PI * 2);
+      ctx.arc(2453, 186, sweepR, 0, Math.PI * 2);
       ctx.stroke();
 
-      // D. Soft Drifting Cloud Shadows across North, Center & South
+      // D. Soft Drifting Cloud Shadows
       ctx.fillStyle = 'rgba(0, 0, 0, 0.11)';
-      for (let c = 0; c < 8; c++) {
-        const cx = ((c * 310 + t * 18) % (WORLD_W + 260)) - 130;
-        const cy = 140 + ((c * 135) % (WORLD_H - 260));
+      for (let c = 0; c < 9; c++) {
+        const cx = ((c * 350 + t * 18) % (WORLD_W + 260)) - 130;
+        const cy = 140 + ((c * 115) % (WORLD_H - 250));
         ctx.beginPath();
-        ctx.ellipse(cx, cy, 105, 38, 0, 0, Math.PI * 2);
+        ctx.ellipse(cx, cy, 105, 36, 0, 0, Math.PI * 2);
         ctx.fill();
       }
     };
@@ -695,7 +680,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
     const container = scrollContainerRef.current;
     if (!container) return;
     setZoomedOut(false);
-    const leftPositions = [0, 505, 1025, 1520];
+    const leftPositions = [0, 700, 1365, 2040];
     container.scrollTo({
       left: leftPositions[sectorIdx] || 0,
       top: Math.max(0, WORLD_H * 0.5 - container.clientHeight * 0.5),
@@ -1001,7 +986,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       {/* ===================================================================== */}
       <div className="hidden md:flex absolute top-2 left-1/2 -translate-x-1/2 z-20 items-center gap-1 bg-zinc-950/85 border border-zinc-700 px-2 py-1 rounded-lg shadow-xl">
         <Compass className="w-3.5 h-3.5 text-yellow-400 mr-1" />
-        {['S1: Bosque', 'S2: Ruta 66', 'S3: Ciudad', 'S4: Militar'].map((label, idx) => (
+        {['S1 (1-6)', 'S2 (7-12)', 'S3 (13-18)', 'S4 (19-24)'].map((label, idx) => (
           <button
             key={label}
             onClick={() => jumpToSector(idx)}
