@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   isUnitUnlocked,
   MAX_COMMANDER_LEVEL,
@@ -15,9 +15,10 @@ import { BattleArena } from './components/BattleArena';
 import { soundFX } from './engine/SoundFX';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '11:01 PM - 11/10/2026';
+const FALLBACK_TIMESTAMP = '11:11 PM - 11/10/2026';
 export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
+const CURRENT_BUILD_ID = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : '';
 
 const STORAGE_KEY = 'last_survival_dead_ahead_v4';
 const LEGACY_STORAGE_KEYS = [
@@ -91,8 +92,20 @@ function sanitizeProgress(rawObj: Partial<PlayerProgress>): PlayerProgress {
 }
 
 export function App() {
-  const [unlockedApp, setUnlockedApp] = useState<boolean>(false);
+  const [unlockedApp, setUnlockedApp] = useState<boolean>(() => {
+    try {
+      if (sessionStorage.getItem('ls_auto_update_unlocked') === '1') {
+        sessionStorage.removeItem('ls_auto_update_unlocked');
+        return true;
+      }
+    } catch {
+      // Ignore
+    }
+    return false;
+  });
   const [isPortrait, setIsPortrait] = useState<boolean>(false);
+  const [isUpdatingApp, setIsUpdatingApp] = useState<boolean>(false);
+  const [pendingRemoteBuildId, setPendingRemoteBuildId] = useState<string | null>(null);
   const [progress, setProgress] = useState<PlayerProgress>(() => {
     try {
       for (const oldKey of LEGACY_STORAGE_KEYS) {
@@ -109,9 +122,141 @@ export function App() {
   });
 
   const [selectedMissionId, setSelectedMissionId] = useState<number>(1);
-  const [activeBattleMission, setActiveBattleMission] = useState<MissionNode | null>(
-    MISSION_NODES[0]
+  const [activeBattleMission, setActiveBattleMission] = useState<MissionNode | null>(() => {
+    try {
+      if (sessionStorage.getItem('ls_auto_update_hub') === '1') {
+        sessionStorage.removeItem('ls_auto_update_hub');
+        return null;
+      }
+    } catch {
+      // Ignore
+    }
+    return MISSION_NODES[0];
+  });
+
+  const stateSnapshotRef = useRef({ unlockedApp, activeBattleMission });
+  stateSnapshotRef.current = { unlockedApp, activeBattleMission };
+
+  const applyHardMobileUpdate = useCallback((remoteBuildId: string) => {
+    try {
+      if (sessionStorage.getItem('ls_reloaded_build_id') === remoteBuildId) return;
+      sessionStorage.setItem('ls_reloaded_build_id', remoteBuildId);
+      if (stateSnapshotRef.current.unlockedApp) {
+        sessionStorage.setItem('ls_auto_update_unlocked', '1');
+        if (!stateSnapshotRef.current.activeBattleMission) {
+          sessionStorage.setItem('ls_auto_update_hub', '1');
+        }
+      }
+    } catch {
+      // Ignore storage error
+    }
+
+    setIsUpdatingApp(true);
+
+    const finishReload = () => {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.set('_v', remoteBuildId);
+      window.location.replace(nextUrl.toString());
+    };
+
+    // Purge CacheStorage & stale Service Workers before navigating with cache-busting query
+    const cleanupPromises: Promise<unknown>[] = [];
+    if ('caches' in window) {
+      cleanupPromises.push(
+        window.caches
+          .keys()
+          .then((names) => Promise.all(names.map((n) => window.caches.delete(n))))
+          .catch(() => {})
+      );
+    }
+    if ('serviceWorker' in navigator) {
+      cleanupPromises.push(
+        navigator.serviceWorker
+          .getRegistrations()
+          .then((regs) => Promise.all(regs.map((r) => r.unregister())))
+          .catch(() => {})
+      );
+    }
+
+    Promise.all(cleanupPromises).finally(() => {
+      setTimeout(finishReload, 220);
+    });
+  }, []);
+
+  const checkRemoteUpdate = useCallback(
+    async (trigger: 'mount' | 'resume' | 'poll' | 'manual') => {
+      if (!CURRENT_BUILD_ID || import.meta.env.DEV) return;
+      try {
+        const res = await fetch(`./version.json?_t=${Date.now()}`, {
+          cache: 'no-store',
+          headers: {
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            Pragma: 'no-cache',
+          },
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as { buildId?: string; timestamp?: string };
+        if (!data?.buildId || data.buildId === CURRENT_BUILD_ID) {
+          // Clean up ?_v= query param once confirmed running latest build
+          if (window.location.search.includes('_v=')) {
+            window.history.replaceState(null, '', window.location.pathname);
+          }
+          return;
+        }
+
+        const { unlockedApp: isUnlocked, activeBattleMission: inBattle } =
+          stateSnapshotRef.current;
+
+        // Auto-apply immediately if on PrivateAccess, on World Map, on app resume, or manual tap!
+        if (!isUnlocked || !inBattle || trigger === 'resume' || trigger === 'manual') {
+          applyHardMobileUpdate(data.buildId);
+        } else {
+          // Player is mid-combat during background poll: queue until battle ends or badge is tapped
+          setPendingRemoteBuildId(data.buildId);
+        }
+      } catch {
+        // Offline or transient network error — ignore silently
+      }
+    },
+    [applyHardMobileUpdate]
   );
+
+  // If an update arrived mid-combat, apply automatically as soon as player returns to Map Hub
+  useEffect(() => {
+    if (pendingRemoteBuildId && !activeBattleMission) {
+      applyHardMobileUpdate(pendingRemoteBuildId);
+    }
+  }, [activeBattleMission, applyHardMobileUpdate, pendingRemoteBuildId]);
+
+  useEffect(() => {
+    checkRemoteUpdate('mount');
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        checkRemoteUpdate('resume');
+      }
+    };
+    const onFocusOrResume = () => checkRemoteUpdate('resume');
+
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', onFocusOrResume);
+    window.addEventListener('online', onFocusOrResume);
+    window.addEventListener('app-resumed-check-update', onFocusOrResume);
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        checkRemoteUpdate('poll');
+      }
+    }, 25000);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', onFocusOrResume);
+      window.removeEventListener('online', onFocusOrResume);
+      window.removeEventListener('app-resumed-check-update', onFocusOrResume);
+      window.clearInterval(intervalId);
+    };
+  }, [checkRemoteUpdate]);
 
   useEffect(() => {
     const checkOrientation = () => {
@@ -320,7 +465,14 @@ export function App() {
   }, []);
 
   if (!unlockedApp) {
-    return <PrivateAccess onUnlock={handleUnlock} buildTimestamp={BUILD_TS} />;
+    return (
+      <PrivateAccess
+        onUnlock={handleUnlock}
+        buildTimestamp={BUILD_TS}
+        isUpdating={isUpdatingApp}
+        onCheckUpdate={() => checkRemoteUpdate('manual')}
+      />
+    );
   }
 
   return (
@@ -366,10 +518,26 @@ export function App() {
         </div>
       )}
 
-      {/* Global Verification Timestamp in Bottom-Right Corner */}
-      <div className="fixed bottom-2 right-3 z-[9999] text-[10px] sm:text-[11px] text-yellow-300 font-mono font-semibold bg-black/85 px-2.5 py-0.5 rounded border border-yellow-500/60 shadow-lg pointer-events-none">
-        Actualizado: {BUILD_TS}
-      </div>
+      {/* Non-intrusive Pending Update Pill if detected mid-combat */}
+      {pendingRemoteBuildId && !isUpdatingApp && (
+        <button
+          type="button"
+          onClick={() => applyHardMobileUpdate(pendingRemoteBuildId)}
+          className="fixed top-2 left-1/2 -translate-x-1/2 z-[9999] px-3 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 border-2 border-yellow-300 text-[10px] font-extrabold text-white shadow-xl animate-bounce cursor-pointer"
+        >
+          🔄 Nueva versión disponible — Toca o termina misión para actualizar
+        </button>
+      )}
+
+      {/* Global Verification Timestamp in Bottom-Right Corner (Tap to force instant update check) */}
+      <button
+        type="button"
+        onClick={() => checkRemoteUpdate('manual')}
+        className="fixed bottom-2 right-3 z-[9999] text-[10px] sm:text-[11px] text-yellow-300 font-mono font-semibold bg-black/85 hover:bg-zinc-900 px-2.5 py-0.5 rounded border border-yellow-500/60 shadow-lg cursor-pointer"
+        title="Toca para comprobar actualizaciones ahora"
+      >
+        {isUpdatingApp ? '⚡ Actualizando nueva versión...' : `Actualizado: ${BUILD_TS}`}
+      </button>
     </div>
   );
 }

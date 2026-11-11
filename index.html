@@ -5,11 +5,36 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>DEAD AHEAD: LAST SURVIVAL — Zombie Warfare</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Chakra+Petch:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Chakra+Petch:wght@500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <script>
+      // Clear any stale Service Workers that could trap mobile Home-Screen apps on an old build
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function (regs) {
+          regs.forEach(function (r) {
+            r.unregister();
+          });
+        });
+      }
+      // If mobile Safari/Chrome restores frozen bfcache page, trigger visibility check
+      window.addEventListener('pageshow', function (e) {
+        if (e.persisted) {
+          window.dispatchEvent(new Event('app-resumed-check-update'));
+        }
+      });
+    </script>
   </head>
   <body class="bg-zinc-950 text-zinc-100 select-none overflow-hidden">
     <div id="root"></div>

@@ -12,9 +12,16 @@ import { soundFX } from '../engine/SoundFX';
 interface PrivateAccessProps {
   onUnlock: () => void;
   buildTimestamp: string;
+  isUpdating?: boolean;
+  onCheckUpdate?: () => void;
 }
 
-export const PrivateAccess: React.FC<PrivateAccessProps> = ({ onUnlock, buildTimestamp }) => {
+export const PrivateAccess: React.FC<PrivateAccessProps> = ({
+  onUnlock,
+  buildTimestamp,
+  isUpdating,
+  onCheckUpdate,
+}) => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState(false);
   const bgCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -165,10 +172,15 @@ export const PrivateAccess: React.FC<PrivateAccessProps> = ({ onUnlock, buildTim
         </div>
       </div>
 
-      {/* Global Verification Timestamp in Corner */}
-      <div className="fixed bottom-2 right-3 z-[9999] text-[10px] sm:text-[11px] text-yellow-300 font-mono font-semibold bg-black/85 px-2.5 py-0.5 rounded border border-yellow-500/60 shadow-lg pointer-events-none">
-        Actualizado: {buildTimestamp}
-      </div>
+      {/* Global Verification Timestamp in Corner (Tap to force instant update check) */}
+      <button
+        type="button"
+        onClick={onCheckUpdate}
+        className="fixed bottom-2 right-3 z-[9999] text-[10px] sm:text-[11px] text-yellow-300 font-mono font-semibold bg-black/85 hover:bg-zinc-900 px-2.5 py-0.5 rounded border border-yellow-500/60 shadow-lg cursor-pointer"
+        title="Toca para comprobar actualizaciones ahora"
+      >
+        {isUpdating ? '⚡ Actualizando nueva versión...' : `Actualizado: ${buildTimestamp}`}
+      </button>
     </div>
   );
 };
