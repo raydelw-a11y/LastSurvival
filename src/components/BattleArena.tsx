@@ -1,12 +1,18 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
+  getNextLockedUnit,
+  getUnitUnlockedAtLevel,
+  getXpForNextLevel,
+  MAX_COMMANDER_LEVEL,
   MissionNode,
   PlayerProgress,
   SURVIVOR_CONFIGS,
+  SURVIVOR_ORDER,
   SurvivorType,
   TACTICAL_ITEM_CONFIGS,
   TacticalItemType,
   ZOMBIE_CONFIGS,
+  ZOMBIE_XP_REWARD,
   ZombieType,
 } from '../types/game';
 import {
@@ -35,12 +41,14 @@ import {
   renderTacticalObstacle,
   renderTracersAndShells,
   renderUnitSprite,
+  syncCanvasHiDPI,
 } from '../engine/PixelArtRenderer';
 import { soundFX } from '../engine/SoundFX';
 
 interface BattleArenaProps {
   mission: MissionNode;
   progress: PlayerProgress;
+  isPortrait?: boolean;
   onVictory: (stars: number, coinsEarned: number, zombiesKilled: number) => void;
   onRetreat: () => void;
   onLevelUpCommander?: (newLevel: number, newXp: number) => void;
@@ -76,21 +84,9 @@ interface InternalUnit extends RenderUnit {
   explodesOnDeath?: boolean;
   rageReward?: number;
   courageDropChance?: number;
+  deathProcessed?: boolean;
+  markedForRemoval?: boolean;
 }
-
-const SURVIVOR_ORDER: SurvivorType[] = [
-  'redneck',
-  'farmer',
-  'builder',
-  'mechanic',
-  'hound',
-  'policeman',
-  'sniper',
-  'flamethrower',
-  'turret',
-  'drone',
-  'juggernaut',
-];
 
 const TACTICAL_ORDER: TacticalItemType[] = ['blue_barrel', 'red_barrel', 'medkit'];
 
@@ -111,18 +107,42 @@ const INITIAL_UNIT_COOLDOWNS: Record<SurvivorType, number> = {
 export const BattleArena: React.FC<BattleArenaProps> = ({
   mission,
   progress,
+  isPortrait = false,
   onVictory,
   onRetreat,
   onLevelUpCommander,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const decalCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const bannerTimeoutRef = useRef<number | null>(null);
+
+  // Live Bridge Ref: decouples 60 FPS simulation from React parent re-renders!
+  const liveBridgeRef = useRef({
+    progress,
+    onVictory,
+    onRetreat,
+    onLevelUpCommander,
+  });
+  useEffect(() => {
+    liveBridgeRef.current = {
+      progress,
+      onVictory,
+      onRetreat,
+      onLevelUpCommander,
+    };
+  }, [progress, onVictory, onRetreat, onLevelUpCommander]);
 
   // HUD Reactive State — Tactical Sweet Spot: 28 Courage (+2.20/s) & 8 Rage (+reactive comeback)
   const [courage, setCourage] = useState<number>(28);
   const [rage, setRage] = useState<number>(8);
   const [commanderLevel, setCommanderLevel] = useState<number>(progress.busLevel || 1);
   const [commanderXp, setCommanderXp] = useState<number>(progress.commanderXp || 0);
+  const [levelUpBanner, setLevelUpBanner] = useState<{
+    level: number;
+    unitType?: SurvivorType;
+    unitName?: string;
+    roleTitle?: string;
+  } | null>(null);
   const maxBusHp = 200 + progress.busHpBonus;
   const [busHp, setBusHp] = useState<number>(maxBusHp);
   const [barricadeHp, setBarricadeHp] = useState<number>(mission.barricadeHp);
@@ -157,6 +177,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     rage: 8,
     commanderLevel: progress.busLevel || 1,
     commanderXp: progress.commanderXp || 0,
+    levelShockwaveTimer: 0,
+    barricadeHalfXpAwarded: false,
     busHp: maxBusHp,
     maxBusHp,
     busDamagedEver: false,
@@ -250,55 +272,59 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     };
   }, [pauseBattle]);
 
-  // Multi-tone organic pixel blood & blast crater decal stamper
+  useEffect(() => {
+    if (isPortrait) {
+      pauseBattle();
+    }
+  }, [isPortrait, pauseBattle]);
+
+  useEffect(() => {
+    return () => {
+      if (bannerTimeoutRef.current !== null) {
+        window.clearTimeout(bannerTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Smooth HD organic blood & blast crater decal stamper (2x physical buffer)
   const stampBloodDecal = useCallback((x: number, y: number, radius = 8, color = '#991b1b') => {
     const dctx = decalCanvasRef.current?.getContext('2d');
     if (!dctx) return;
-    const rx = Math.round(x);
-    const ry = Math.round(Math.max(ROAD_Y_MIN - 4, Math.min(ROAD_Y_MAX + 6, y)));
+    const ry = Math.max(ROAD_Y_MIN - 4, Math.min(ROAD_Y_MAX + 6, y));
     const isCrater = color === '#27272a';
 
-    dctx.fillStyle = isCrater ? 'rgba(20, 18, 16, 0.72)' : color;
-    dctx.fillRect(
-      rx - radius,
-      ry - Math.round(radius * 0.42),
-      radius * 2,
-      Math.max(3, Math.round(radius * 0.82))
-    );
-    dctx.fillStyle = isCrater ? '#18181b' : '#7f1d1d';
-    dctx.fillRect(
-      rx - Math.round(radius * 0.68),
-      ry - Math.round(radius * 0.62),
-      Math.round(radius * 1.36),
-      Math.max(2, Math.round(radius * 1.05))
-    );
-    if (!isCrater && radius >= 6) {
-      // Micro splatter droplets around main puddle
-      dctx.fillStyle = '#b91c1c';
-      dctx.fillRect(rx + radius + 1, ry - 1, 2, 2);
-      dctx.fillRect(rx - radius - 3, ry + 1, 2, 1);
-    }
+    dctx.save();
+    dctx.fillStyle = isCrater ? 'rgba(18, 16, 15, 0.72)' : 'rgba(127, 29, 29, 0.72)';
+    dctx.beginPath();
+    dctx.ellipse(x, ry, radius * 1.1, radius * 0.44, 0, 0, Math.PI * 2);
+    dctx.fill();
+
+    dctx.fillStyle = isCrater ? 'rgba(9, 9, 11, 0.85)' : color;
+    dctx.beginPath();
+    dctx.ellipse(x, ry, radius * 0.72, radius * 0.3, 0.15, 0, Math.PI * 2);
+    dctx.fill();
+    dctx.restore();
   }, []);
 
   const stampShellDecal = useCallback((x: number, y: number, color: string, w: number, h: number) => {
     const dctx = decalCanvasRef.current?.getContext('2d');
     if (!dctx) return;
-    const rx = Math.round(x);
-    const ry = Math.round(Math.max(ROAD_Y_MIN - 2, Math.min(ROAD_Y_MAX + 4, y)));
-    dctx.fillStyle = '#18181b';
-    dctx.fillRect(rx - 1, ry, w + 1, h);
+    const ry = Math.max(ROAD_Y_MIN - 2, Math.min(ROAD_Y_MAX + 4, y));
+    dctx.fillStyle = 'rgba(15, 15, 18, 0.65)';
+    dctx.fillRect(x - 0.5, ry + 0.5, w + 0.8, h + 0.4);
     dctx.fillStyle = color;
-    dctx.fillRect(rx, ry, w, h);
+    dctx.fillRect(x, ry, w, h);
   }, []);
 
   const initDecalCanvas = useCallback(() => {
     if (!decalCanvasRef.current) {
       decalCanvasRef.current = document.createElement('canvas');
-      decalCanvasRef.current.width = LOGICAL_WIDTH;
-      decalCanvasRef.current.height = LOGICAL_HEIGHT;
+      decalCanvasRef.current.width = LOGICAL_WIDTH * 2;
+      decalCanvasRef.current.height = LOGICAL_HEIGHT * 2;
     }
     const dctx = decalCanvasRef.current.getContext('2d');
     if (!dctx) return;
+    dctx.setTransform(2, 0, 0, 2, 0, 0);
     dctx.clearRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
   }, []);
 
@@ -327,6 +353,88 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       });
     },
     []
+  );
+
+  // Live Combat XP & Commander Level-Up Handler (100% non-destructive to existing units!)
+  const awardCommanderXp = useCallback(
+    (xpGain: number) => {
+      const sim = simRef.current;
+      if (sim.commanderLevel >= MAX_COMMANDER_LEVEL) {
+        sim.commanderXp = getXpForNextLevel(MAX_COMMANDER_LEVEL);
+        return;
+      }
+
+      sim.commanderXp += xpGain;
+      let leveledUp = false;
+
+      while (
+        sim.commanderLevel < MAX_COMMANDER_LEVEL &&
+        sim.commanderXp >= getXpForNextLevel(sim.commanderLevel)
+      ) {
+        sim.commanderXp -= getXpForNextLevel(sim.commanderLevel);
+        sim.commanderLevel += 1;
+        leveledUp = true;
+
+        soundFX.playCouragePickup();
+        sim.levelShockwaveTimer = 1.15;
+        sim.screenShake = Math.max(sim.screenShake, 5);
+
+        // Morale Boost: Heal ALL living allied survivors +15% HP & bestow golden aura!
+        for (let idx = 0; idx < sim.units.length; idx++) {
+          const ally = sim.units[idx];
+          if (
+            ally.team === 'survivor' &&
+            ally.state !== 'corpse' &&
+            ally.state !== 'dying' &&
+            ally.hp > 0
+          ) {
+            if (sim.commanderLevel === MAX_COMMANDER_LEVEL) {
+              ally.maxHp = Math.round(ally.maxHp * 1.1);
+              ally.damage = Math.round(ally.damage * 1.1);
+            }
+            const moraleHeal = Math.max(8, Math.round(ally.maxHp * 0.15));
+            ally.hp = Math.min(ally.maxHp, ally.hp + moraleHeal);
+            ally.ghostHp = Math.max(ally.ghostHp ?? ally.hp, ally.hp);
+            ally.levelUpGlowTimer = 1.25;
+            addFloatingText(`+${moraleHeal} MORAL`, ally.x, ally.y, 24, '#fde047');
+          }
+        }
+
+        const unlockedCfg = getUnitUnlockedAtLevel(sim.commanderLevel);
+        addFloatingText(
+          unlockedCfg
+            ? `¡NV.${sim.commanderLevel}: ${unlockedCfg.name.toUpperCase()}!`
+            : `¡MAESTRÍA NV.${sim.commanderLevel} (+10% GLOBAL)!`,
+          360,
+          164,
+          30,
+          '#fde047',
+          true
+        );
+
+        setLevelUpBanner({
+          level: sim.commanderLevel,
+          unitType: unlockedCfg?.id,
+          unitName: unlockedCfg ? unlockedCfg.name : 'Maestría de Comandante',
+          roleTitle: unlockedCfg
+            ? `${unlockedCfg.roleTitle} desbloqueado`
+            : '+10% Daño y Salud a todo el Escuadrón',
+        });
+        if (bannerTimeoutRef.current !== null) {
+          window.clearTimeout(bannerTimeoutRef.current);
+        }
+        bannerTimeoutRef.current = window.setTimeout(() => {
+          setLevelUpBanner(null);
+        }, 2950);
+      }
+
+      if (leveledUp) {
+        setCommanderLevel(sim.commanderLevel);
+      }
+      setCommanderXp(Math.floor(sim.commanderXp));
+      liveBridgeRef.current.onLevelUpCommander?.(sim.commanderLevel, Math.floor(sim.commanderXp));
+    },
+    [addFloatingText]
   );
 
   const spawnWeaponTracerAndShell = useCallback(
@@ -471,6 +579,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         vy: 0,
         vz: 0,
         hp: initialHp,
+        ghostHp: initialHp,
         maxHp: scaledMaxHp,
         damage: cfg.baseDamage,
         speed: cfg.speed * (0.93 + Math.random() * 0.14),
@@ -530,8 +639,10 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         scareCrows();
       }
 
-      const actualLevel = progress.unitLevels[type] || 1;
-      const statMult = 1 + (actualLevel - 1) * 0.14;
+      const liveProgress = liveBridgeRef.current.progress;
+      const actualLevel = liveProgress.unitLevels[type] || 1;
+      const masteryMult = sim.commanderLevel >= MAX_COMMANDER_LEVEL ? 1.1 : 1.0;
+      const statMult = (1 + (actualLevel - 1) * 0.14) * masteryMult;
       const hp = Math.round(cfg.baseHp * statMult);
       const damage = Math.round(cfg.baseDamage * statMult);
       const isLucky = freeInitial || Math.random() * 100 < cfg.fortune;
@@ -566,6 +677,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         vy: 0,
         vz: freeInitial ? 0 : 18,
         hp,
+        ghostHp: hp,
         maxHp: hp,
         damage,
         speed: cfg.speed * (isLucky ? 1.15 : 1),
@@ -604,7 +716,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       };
 
       const hasAliveControlled = sim.units.some(
-        (u) => u.team === 'survivor' && u.state !== 'corpse' && u.id === sim.selectedUnitId
+        (u) =>
+          u.team === 'survivor' &&
+          u.state !== 'corpse' &&
+          u.state !== 'dying' &&
+          u.id === sim.selectedUnitId
       );
       if (!hasAliveControlled) {
         sim.units.forEach((u) => (u.isPlayerControlled = false));
@@ -614,7 +730,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
       sim.units.push(newUnit);
     },
-    [addFloatingText, progress.unitLevels, scareCrows]
+    [addFloatingText, scareCrows]
   );
 
   // Supports both player Red Barrel explosions and Bloated Zombie collateral explosions!
@@ -803,17 +919,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       const key = e.key.toLowerCase();
       simRef.current.keysPressed.add(key);
 
-      if (key === '1') deploySurvivor('redneck');
-      else if (key === '2') deploySurvivor('farmer');
-      else if (key === '3') deploySurvivor('builder');
-      else if (key === '4') deploySurvivor('mechanic');
-      else if (key === '5') deploySurvivor('hound');
-      else if (key === '6') deploySurvivor('policeman');
-      else if (key === '7') deploySurvivor('sniper');
-      else if (key === '8') deploySurvivor('flamethrower');
-      else if (key === '9') deploySurvivor('turret');
-      else if (key === '0') deploySurvivor('drone');
-      else if (key === 'q') {
+      if (key >= '1' && key <= '6') {
+        const slotIdx = Number(key) - 1;
+        const deckUnit = liveBridgeRef.current.progress.equippedDeck[slotIdx];
+        if (deckUnit) deploySurvivor(deckUnit);
+      } else if (key === 'q') {
         const m = simRef.current.mouseLogical;
         deployTacticalItem('blue_barrel', m.insideRoad ? m.x : 340, m.insideRoad ? m.y : 234);
       } else if (key === 'x' || key === 'r') {
@@ -1001,6 +1111,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         if (sim.doorOpenTimer > 0) sim.doorOpenTimer = Math.max(0, sim.doorOpenTimer - dt);
         if (sim.barricadeShake > 0) sim.barricadeShake = Math.max(0, sim.barricadeShake - dt * 5);
         if (sim.billFiringVisual > 0) sim.billFiringVisual = Math.max(0, sim.billFiringVisual - dt);
+        if (sim.levelShockwaveTimer > 0) {
+          sim.levelShockwaveTimer = Math.max(0, sim.levelShockwaveTimer - dt);
+        }
 
         if (sim.phase === 'bus_ramming') {
           sim.busX += 340 * dt;
@@ -1149,16 +1262,22 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           }
 
           // Sheriff Bill Roof Rifle Defense + Tracers & Roof Brass Ejection
+          const liveBillBonus = liveBridgeRef.current.progress.billDamageBonus;
+          const billMastery = sim.commanderLevel >= MAX_COMMANDER_LEVEL ? 1.1 : 1.0;
           if (sim.billBarrageActiveTimer > 0) {
             sim.billBarrageActiveTimer -= dt;
             if (Math.random() < 0.32) {
               const targetZombies = sim.units.filter(
-                (u) => u.team === 'zombie' && u.state !== 'corpse' && u.hp > 0
+                (u) =>
+                  u.team === 'zombie' &&
+                  u.state !== 'corpse' &&
+                  u.state !== 'dying' &&
+                  u.hp > 0
               );
               if (targetZombies.length > 0) {
                 const target = targetZombies[Math.floor(Math.random() * targetZombies.length)];
                 const dmg = Math.round(
-                  (17 + progress.billDamageBonus) * (1 - target.bulletResist * 0.7)
+                  (17 + liveBillBonus) * billMastery * (1 - target.bulletResist * 0.7)
                 );
                 target.hp -= dmg;
                 target.whiteFlashTimer = 0.09;
@@ -1182,7 +1301,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             sim.billShotTimer -= dt;
             if (sim.billShotTimer <= 0) {
               const closeZombie = sim.units
-                .filter((u) => u.team === 'zombie' && u.state !== 'corpse' && u.x < 265 && u.hp > 0)
+                .filter(
+                  (u) =>
+                    u.team === 'zombie' &&
+                    u.state !== 'corpse' &&
+                    u.state !== 'dying' &&
+                    u.x < 265 &&
+                    u.hp > 0
+                )
                 .sort((a, b) => a.x - b.x)[0];
               if (closeZombie) {
                 sim.billShotTimer = 2.4;
@@ -1190,7 +1316,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 soundFX.playRifle();
                 scareCrows();
                 const dmg = Math.round(
-                  (19 + progress.billDamageBonus) * (1 - closeZombie.bulletResist * 0.7)
+                  (19 + liveBillBonus) * billMastery * (1 - closeZombie.bulletResist * 0.7)
                 );
                 closeZombie.hp -= dmg;
                 closeZombie.whiteFlashTimer = 0.1;
@@ -1297,11 +1423,19 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
           if (
             !sim.units.some(
-              (u) => u.team === 'survivor' && u.state !== 'corpse' && u.id === sim.selectedUnitId
+              (u) =>
+                u.team === 'survivor' &&
+                u.state !== 'corpse' &&
+                u.state !== 'dying' &&
+                u.id === sim.selectedUnitId
             )
           ) {
             const firstAlive = sim.units.find(
-              (u) => u.team === 'survivor' && u.state !== 'corpse' && u.hp > 0
+              (u) =>
+                u.team === 'survivor' &&
+                u.state !== 'corpse' &&
+                u.state !== 'dying' &&
+                u.hp > 0
             );
             if (firstAlive) {
               sim.selectedUnitId = firstAlive.id;
@@ -1311,6 +1445,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
           for (let i = sim.units.length - 1; i >= 0; i--) {
             const u = sim.units[i];
+            if (!Number.isFinite(u.x)) u.x = sim.busX + 120;
+            if (!Number.isFinite(u.y)) u.y = (ROAD_Y_MIN + ROAD_Y_MAX) * 0.5;
+            if (!Number.isFinite(u.z)) u.z = 0;
+            if (!Number.isFinite(u.vx)) u.vx = 0;
+            if (!Number.isFinite(u.vy)) u.vy = 0;
+            if (!Number.isFinite(u.vz)) u.vz = 0;
+
             u.animTime += dt;
             if (u.whiteFlashTimer > 0) u.whiteFlashTimer = Math.max(0, u.whiteFlashTimer - dt);
             if ((u.critTelegraphTimer ?? 0) > 0) {
@@ -1318,6 +1459,20 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             }
             if ((u.quoteTimer ?? 0) > 0) {
               u.quoteTimer = Math.max(0, (u.quoteTimer ?? 0) - dt);
+            }
+            if ((u.levelUpGlowTimer ?? 0) > 0) {
+              u.levelUpGlowTimer = Math.max(0, (u.levelUpGlowTimer ?? 0) - dt);
+            }
+
+            // Smooth Ghost Health Bar trailing decay
+            const targetGhost = Math.max(0, u.hp);
+            if ((u.ghostHp ?? u.maxHp) > targetGhost) {
+              u.ghostHp = Math.max(
+                targetGhost,
+                (u.ghostHp ?? u.maxHp) - dt * u.maxHp * 0.85
+              );
+            } else {
+              u.ghostHp = targetGhost;
             }
 
             if (u.z > 0 || u.vz !== 0) {
@@ -1339,24 +1494,33 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             u.x = Math.max(sim.busX + 102, Math.min(sim.barricadeX - 10, u.x));
             u.y = Math.max(ROAD_Y_MIN, Math.min(ROAD_Y_MAX, u.y));
 
-            if (u.state === 'corpse') {
-              u.corpseTimer = (u.corpseTimer ?? 6.0) - dt;
-              if (u.corpseTimer <= -900) {
-                sim.units.splice(i, 1);
-                continue;
-              }
-              if (u.corpseTimer <= 0) {
-                // Fair early-game reanimation: Redneck revives as Walker in M1-M2, and all revive at 75% HP!
-                const rawType = u.infectedZombieType ?? 'walker';
-                const zType = mission.id <= 2 && rawType === 'runner' ? 'walker' : rawType;
-                soundFX.playZombieReanimate();
-                spawnZombie(zType, u.x, u.y, true, 0.75);
-                sim.units.splice(i, 1);
+            if (u.state === 'dying') {
+              u.deathProgress = (u.deathProgress ?? 0) + dt / 0.4;
+              if (u.deathProgress >= 1) {
+                u.markedForRemoval = true;
               }
               continue;
             }
 
-            if (u.hp <= 0) {
+            if (u.state === 'corpse') {
+              u.corpseTimer = (u.corpseTimer ?? 6.0) - dt;
+              if (u.corpseTimer <= -900) {
+                u.markedForRemoval = true;
+                continue;
+              }
+              if (u.corpseTimer <= 0) {
+                const rawType = u.infectedZombieType ?? 'walker';
+                const zType = mission.id <= 2 && rawType === 'runner' ? 'walker' : rawType;
+                soundFX.playZombieReanimate();
+                spawnZombie(zType, u.x, u.y, true, 0.75);
+                u.markedForRemoval = true;
+              }
+              continue;
+            }
+
+            if (u.hp <= 0 && !u.deathProcessed) {
+              u.deathProcessed = true;
+              u.isPlayerControlled = false;
               stampBloodDecal(u.x, u.y, 11);
               spawnBloodParticles(u.x, u.y, 8, 22, u.subType === 'bloated');
 
@@ -1365,32 +1529,15 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 const rageGain = u.rageReward ?? 4;
                 sim.rage = Math.min(100, sim.rage + rageGain);
 
-                // Award Commander XP and Level-Up Live in Battle to Unlock New Units!
-                sim.commanderXp += 24;
-                if (sim.commanderXp >= 100 && sim.commanderLevel < 10) {
-                  sim.commanderXp -= 100;
-                  sim.commanderLevel += 1;
-                  setCommanderLevel(sim.commanderLevel);
-                  soundFX.playCouragePickup();
-                  const unlockedUnit = SURVIVOR_ORDER.map((k) => SURVIVOR_CONFIGS[k]).find(
-                    (c) => c.unlockLevel === sim.commanderLevel
-                  );
-                  addFloatingText(
-                    unlockedUnit
-                      ? `¡NIVEL ${sim.commanderLevel}: ${unlockedUnit.name.toUpperCase()}!`
-                      : `¡SUBIDA A NIVEL ${sim.commanderLevel}!`,
-                    360,
-                    165,
-                    28,
-                    '#fde047',
-                    true
-                  );
-                  onLevelUpCommander?.(sim.commanderLevel, sim.commanderXp);
-                }
+                const xpGain = ZOMBIE_XP_REWARD[u.subType as ZombieType] ?? 10;
+                awardCommanderXp(xpGain);
 
-                // Bloated explosion damages survivors (30) AND shreds nearby zombies (55)!
                 if (u.explodesOnDeath) {
                   triggerExplosion(u.x, u.y, 46, 30, false, 55);
+                  u.markedForRemoval = true;
+                } else {
+                  u.state = 'dying';
+                  u.deathProgress = 0;
                 }
 
                 if (Math.random() < (u.courageDropChance ?? 0.25)) {
@@ -1404,16 +1551,15 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                     life: 12.0,
                   });
                 }
-                sim.units.splice(i, 1);
                 continue;
               } else {
                 if (u.infectedZombieType) {
                   u.state = 'corpse';
                   u.corpseTimer = 6.0;
                   u.corpseMaxTimer = 6.0;
-                  u.isPlayerControlled = false;
                 } else {
-                  sim.units.splice(i, 1);
+                  u.state = 'dying';
+                  u.deathProgress = 0;
                 }
                 continue;
               }
@@ -1490,7 +1636,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               let closestZ: InternalUnit | null = null;
               let bestDist = Infinity;
               for (const other of sim.units) {
-                if (other.team === 'zombie' && other.state !== 'corpse' && other.hp > 0) {
+                if (
+                  other.team === 'zombie' &&
+                  other.state !== 'corpse' &&
+                  other.state !== 'dying' &&
+                  other.hp > 0
+                ) {
                   // Sniper prioritizes high-HP / armored threats in range!
                   const priorityBias =
                     u.subType === 'sniper' &&
@@ -1702,11 +1853,29 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                     }
                   }
 
+                  // Award +20 XP once when Barricade drops to <= 50% HP!
+                  if (
+                    !sim.barricadeHalfXpAwarded &&
+                    sim.barricadeHp > 0 &&
+                    sim.barricadeHp <= sim.maxBarricadeHp * 0.5
+                  ) {
+                    sim.barricadeHalfXpAwarded = true;
+                    awardCommanderXp(20);
+                    addFloatingText('+20 XP BRECHA', sim.barricadeX - 36, 172, 22, '#38bdf8', true);
+                  }
+
                   if (sim.barricadeHp <= 0 && sim.phase === 'combat') {
                     sim.phase = 'bus_ramming';
                     soundFX.playExplosion();
                     soundFX.playBusEngineRam();
                     sim.screenShake = 10;
+                    const integrityBonus =
+                      sim.busHp >= sim.maxBusHp * 0.85
+                        ? 30
+                        : sim.busHp >= sim.maxBusHp * 0.45
+                        ? 20
+                        : 10;
+                    awardCommanderXp(35 + integrityBonus);
                   }
                 }
               } else if (!(u.isPlayerControlled && isUsingWasd) && !u.isStationary) {
@@ -1755,6 +1924,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   other.team === 'survivor' &&
                   !other.isFlying &&
                   other.state !== 'corpse' &&
+                  other.state !== 'dying' &&
                   other.hp > 0
                 ) {
                   const d = Math.hypot(other.x - u.x, (other.y - u.y) * 1.5);
@@ -1814,7 +1984,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   // Comeback Rage Mechanic: +0.30 Rage per HP lost on the Bus!
                   sim.rage = Math.min(100, sim.rage + u.damage * 0.3);
 
-                  if (progress.spikedBumper) {
+                  if (liveBridgeRef.current.progress.spikedBumper) {
                     u.hp -= 14;
                     u.whiteFlashTimer = 0.1;
                     spawnBloodParticles(u.x, u.y, 10, 8);
@@ -1842,6 +2012,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 }
               }
             }
+          }
+
+          // Safe deferred cleanup pass (ZERO mid-iteration array splices!)
+          if (sim.units.some((u) => u.markedForRemoval)) {
+            sim.units = sim.units.filter((u) => !u.markedForRemoval);
           }
 
           for (let i = sim.pickups.length - 1; i >= 0; i--) {
@@ -1931,24 +2106,39 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       }
 
       // =======================================================
-      // 6-LAYER PIXEL-ART RENDER PIPELINE (720x336 @ 60 FPS)
+      // ILLUSTRATED 2D HD RETINA RENDER PIPELINE (HiDPI @ 60 FPS)
       // =======================================================
       const canvas = canvasRef.current;
-      const ctx = canvas?.getContext('2d');
+      const ctx = canvas ? syncCanvasHiDPI(canvas, LOGICAL_WIDTH, LOGICAL_HEIGHT) : null;
       if (ctx) {
+        const liveProgress = liveBridgeRef.current.progress;
         ctx.save();
         if (sim.screenShake > 0) {
-          const sx = Math.round((Math.random() - 0.5) * sim.screenShake);
-          const sy = Math.round((Math.random() - 0.5) * sim.screenShake);
+          const sx = (Math.random() - 0.5) * sim.screenShake;
+          const sy = (Math.random() - 0.5) * sim.screenShake;
           ctx.translate(sx, sy);
         }
 
-        // LAYER 0: Cached Offscreen Biome Background + Live Biome Details
+        // LAYER 0: 2.5x HiDPI Cached Biome Background + Live Biome Details
         renderBiomeBackground(ctx, mission.biome, sim.time, mission.id);
 
-        // LAYER 1: Persistent Decal Buffer (Blood puddles, blast craters & spent shells)
+        // LAYER 1: 2x HiDPI Persistent Decal Buffer (Blood puddles, blast craters & spent shells)
         if (decalCanvasRef.current) {
-          ctx.drawImage(decalCanvasRef.current, 0, 0);
+          ctx.drawImage(decalCanvasRef.current, 0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+        }
+
+        // Golden Commander Level-Up Shockwave Ring expanding across the road!
+        if (sim.levelShockwaveTimer > 0) {
+          const prog = 1 - sim.levelShockwaveTimer / 1.15;
+          const rx = 38 + prog * 460;
+          const ry = 16 + prog * 135;
+          ctx.save();
+          ctx.strokeStyle = `rgba(253, 224, 71, ${Math.max(0, 1 - prog) * 0.85})`;
+          ctx.lineWidth = 4.5 * (1 - prog * 0.6);
+          ctx.beginPath();
+          ctx.ellipse(sim.busX + 115, 228, rx, ry, 0, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
         }
 
         // LAYER 1.5: Active Ground Napalm Fire Zones
@@ -2033,8 +2223,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               sim.time,
               sim.billShotTimer,
               sim.billFiringVisual,
-              progress.spikedBumper,
-              progress.weldedArmor,
+              liveProgress.spikedBumper,
+              liveProgress.weldedArmor,
               sim.doorOpenTimer
             );
           } else if (item.kind === 'unit') {
@@ -2070,33 +2260,38 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
         sim.particles.forEach((p) => {
           ctx.fillStyle = p.color;
-          ctx.fillRect(Math.round(p.x), Math.round(p.y - p.z), p.size, p.size);
+          ctx.beginPath();
+          ctx.arc(p.x, p.y - p.z, p.size * 0.62, 0, Math.PI * 2);
+          ctx.fill();
         });
 
         sim.floatingTexts.forEach((ft) => {
           ctx.save();
-          const tx = Math.round(ft.x);
-          const ty = Math.round(ft.y - ft.z);
+          const tx = ft.x;
+          const ty = ft.y - ft.z;
           ctx.textAlign = 'center';
+          ctx.lineJoin = 'round';
 
           if (ft.subText) {
-            ctx.font = 'bold 10px "Press Start 2P", monospace';
-            ctx.fillStyle = '#181410';
-            ctx.fillText(ft.text, tx + 1, ty - 7);
-            ctx.fillStyle = '#facc15';
-            ctx.fillText(ft.text, tx, ty - 8);
+            ctx.font = '800 11.5px "Chakra Petch", sans-serif';
+            ctx.lineWidth = 2.6;
+            ctx.strokeStyle = '#121014';
+            ctx.strokeText(ft.text, tx, ty - 7);
+            ctx.fillStyle = '#fde047';
+            ctx.fillText(ft.text, tx, ty - 7);
 
-            ctx.font = 'bold 7px "Press Start 2P", monospace';
-            ctx.fillStyle = '#181410';
-            ctx.fillText(ft.subText, tx + 1, ty + 2);
-            ctx.fillStyle = ft.subText === 'CRIT!' || ft.subText === 'SMASH!' ? '#f43f5e' : '#ea580c';
-            ctx.fillText(ft.subText, tx, ty + 1);
+            ctx.font = '800 8px "Chakra Petch", sans-serif';
+            ctx.lineWidth = 2.2;
+            ctx.strokeText(ft.subText, tx, ty + 2);
+            ctx.fillStyle = ft.subText === 'CRIT!' || ft.subText === 'SMASH!' ? '#fb7185' : '#fb923c';
+            ctx.fillText(ft.subText, tx, ty + 2);
           } else {
             ctx.font = ft.isComic
-              ? 'bold 8px "Press Start 2P", monospace'
-              : 'bold 7px "Chakra Petch", sans-serif';
-            ctx.fillStyle = '#181410';
-            ctx.fillText(ft.text, tx + 1, ty + 1);
+              ? '800 10px "Chakra Petch", sans-serif'
+              : '700 8.5px "Chakra Petch", sans-serif';
+            ctx.lineWidth = 2.4;
+            ctx.strokeStyle = '#121014';
+            ctx.strokeText(ft.text, tx, ty);
             ctx.fillStyle = ft.color;
             ctx.fillText(ft.text, tx, ty);
           }
@@ -2111,27 +2306,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
     animationFrameId = requestAnimationFrame(step);
     return () => cancelAnimationFrame(animationFrameId);
-  }, [
-    addFloatingText,
-    initDecalCanvas,
-    mission.barricadeHp,
-    mission.biome,
-    mission.id,
-    mission.skeletonAmbush,
-    mission.waveInterval,
-    mission.zombiePool,
-    onLevelUpCommander,
-    progress.billDamageBonus,
-    progress.spikedBumper,
-    progress.weldedArmor,
-    scareCrows,
-    spawnBloodParticles,
-    spawnWeaponTracerAndShell,
-    spawnZombie,
-    stampBloodDecal,
-    stampShellDecal,
-    triggerExplosion,
-  ]);
+    // Simulation mounts ONCE per mission.id; live upgrades & callbacks flow via liveBridgeRef!
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mission.id]);
 
   const toggleDraggingTactical = (itemType: TacticalItemType) => {
     const cfg = TACTICAL_ITEM_CONFIGS[itemType];
@@ -2141,14 +2318,18 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     simRef.current.draggingItem = next;
   };
 
-  // Show all unlocked units + only the NEXT 2 locked preview slots so mobile HUD stays super crisp!
-  const unlockedUnits = SURVIVOR_ORDER.filter(
+  // Active Tactical Squad (max 6 unlocked units) + 1 Next-Unlock Teaser Card!
+  const activeSquadUnits = progress.equippedDeck.filter(
     (sType) => commanderLevel >= SURVIVOR_CONFIGS[sType].unlockLevel
   );
-  const nextLockedUnits = SURVIVOR_ORDER.filter(
-    (sType) => commanderLevel < SURVIVOR_CONFIGS[sType].unlockLevel
-  ).slice(0, 2);
-  const visibleDeckUnits = [...unlockedUnits, ...nextLockedUnits];
+  const effectiveSquad: SurvivorType[] =
+    activeSquadUnits.length > 0 ? activeSquadUnits : ['redneck'];
+  const nextLockedCfg = getNextLockedUnit(commanderLevel);
+  const xpNeeded = getXpForNextLevel(commanderLevel);
+  const xpPercent =
+    commanderLevel >= MAX_COMMANDER_LEVEL
+      ? 100
+      : Math.min(100, Math.round((commanderXp / Math.max(1, xpNeeded)) * 100));
 
   return (
     <div className="relative w-full h-full bg-[#24221a] select-none overflow-hidden">
@@ -2272,15 +2453,17 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               </div>
             </button>
 
-            <div className="flex flex-col bg-zinc-950/80 border border-[#787459] rounded-xs px-1.5 py-0.5 shadow">
-              <div className="flex items-center justify-between gap-1.5">
-                <span className="font-pixel text-[7px] text-amber-300">NV.{commanderLevel}</span>
-                <span className="text-[8px] font-bold text-zinc-400">M{mission.id}</span>
+            <div className="flex flex-col bg-zinc-950/90 border border-[#8e8864] rounded px-2 py-0.5 shadow-md">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-pixel text-[9px] text-amber-300">NV.{commanderLevel}</span>
+                <span className="text-[8px] font-bold text-zinc-300">
+                  {commanderLevel >= MAX_COMMANDER_LEVEL ? 'MAX' : `${commanderXp}/${xpNeeded} XP`}
+                </span>
               </div>
-              <div className="w-16 h-1 bg-zinc-800 rounded-full overflow-hidden mt-0.5 border border-black">
+              <div className="w-20 h-1.5 bg-zinc-800 rounded-full overflow-hidden mt-0.5 border border-black">
                 <div
-                  className="h-full bg-gradient-to-r from-sky-400 to-amber-400 transition-all"
-                  style={{ width: `${Math.min(100, commanderXp)}%` }}
+                  className="h-full bg-gradient-to-r from-sky-400 via-amber-300 to-yellow-400 transition-all duration-200"
+                  style={{ width: `${xpPercent}%` }}
                 />
               </div>
             </div>
@@ -2374,6 +2557,30 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         </div>
       )}
 
+      {/* NON-BLOCKING GOLDEN COMMANDER LEVEL-UP BANNER */}
+      {levelUpBanner && (
+        <div className="animate-level-banner absolute top-12 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2.5 px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-950/95 via-zinc-950/95 to-amber-950/95 border-2 border-yellow-400 shadow-[0_0_24px_rgba(250,204,21,0.55)] pointer-events-none">
+          {levelUpBanner.unitType ? (
+            <div className="w-9 h-9 rounded bg-amber-500/20 border border-yellow-400/70 flex items-center justify-center shrink-0">
+              <CanvasUnitPortrait type={levelUpBanner.unitType} active={true} />
+            </div>
+          ) : (
+            <span className="text-lg">⭐</span>
+          )}
+          <div className="text-left leading-tight">
+            <div className="text-[10px] font-extrabold uppercase tracking-wider text-yellow-300">
+              ¡Ascenso a Nivel {levelUpBanner.level}! · Moral +15% HP
+            </div>
+            <div className="text-xs font-extrabold text-white">
+              {levelUpBanner.unitName}{' '}
+              <span className="text-[10px] font-semibold text-emerald-300">
+                ({levelUpBanner.roleTitle})
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ACTIVE DRAG DEPLOYMENT HINT BANNER */}
       {draggingItem && (
         <div className="absolute top-13 left-1/2 -translate-x-1/2 z-30 px-3 py-1 rounded bg-zinc-950/90 border border-amber-400 text-[10px] font-bold text-amber-200 shadow-lg pointer-events-none">
@@ -2440,107 +2647,111 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       {/* BOTTOM TACTICAL DECK: Authentic Olive Slots + 3 Rage Support Items!   */}
       {/* ===================================================================== */}
       <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 z-20 flex items-end gap-1.5 max-w-[98vw] overflow-x-auto px-2 py-0.5">
-        {/* SURVIVOR SQUAD CARDS */}
-        <div className="flex items-end gap-1">
-          {visibleDeckUnits.map((sType) => {
+        {/* SURVIVOR SQUAD CARDS (Max 6 Active + 1 Next-Unlock Teaser) */}
+        <div className="flex items-end gap-1.5">
+          {effectiveSquad.map((sType, slotIndex) => {
             const cfg = SURVIVOR_CONFIGS[sType];
-            const isUnlocked = commanderLevel >= cfg.unlockLevel;
             const cd = unitCooldowns[sType];
-            const canAfford = isUnlocked && courage >= cfg.cost && cd <= 0;
+            const canAfford = courage >= cfg.cost && cd <= 0;
             const lvl = progress.unitLevels[sType] || 1;
+            const slotKey = String(slotIndex + 1);
 
             return (
               <button
                 key={sType}
-                onClick={() => {
-                  if (isUnlocked) {
-                    deploySurvivor(sType);
-                  } else {
-                    addFloatingText(
-                      `SE DESBLOQUEA EN NV.${cfg.unlockLevel}`,
-                      360,
-                      210,
-                      18,
-                      '#fde047',
-                      true
-                    );
-                  }
-                }}
-                disabled={isUnlocked && !canAfford}
-                className={`shrink-0 relative rounded-xs transition select-none flex flex-col justify-between p-1 ${
-                  !isUnlocked
-                    ? 'w-9 h-12 sm:w-10 sm:h-13 bg-zinc-950/75 border border-zinc-800/90 opacity-70 cursor-pointer'
-                    : canAfford
-                    ? 'w-11 h-13 sm:w-12 sm:h-14 bg-[#454833]/92 border-2 border-[#a5a982] shadow-[0_2px_6px_rgba(0,0,0,0.75)] cursor-pointer hover:scale-105 active:scale-95'
-                    : 'w-11 h-13 sm:w-12 sm:h-14 bg-[#2c2e21]/82 border border-[#4a4d38] cursor-not-allowed'
+                onClick={() => deploySurvivor(sType)}
+                disabled={!canAfford}
+                className={`shrink-0 relative w-12 h-14 sm:w-13 sm:h-15 rounded transition select-none flex flex-col justify-between p-1 ${
+                  canAfford
+                    ? 'bg-[#3f4430]/95 border-2 border-[#c2c799] shadow-[0_3px_8px_rgba(0,0,0,0.8)] cursor-pointer hover:scale-105 active:scale-95'
+                    : 'bg-[#26281d]/88 border border-[#4a4d38] cursor-not-allowed'
                 }`}
-                title={
-                  isUnlocked
-                    ? `${cfg.name} (${cfg.roleTitle}) — ${cfg.cost} Valor [${cfg.hotkey}]`
-                    : `🔒 ${cfg.name}: Desbloquea en Nivel ${cfg.unlockLevel}`
-                }
+                title={`${cfg.name} (${cfg.roleTitle}) — ${cfg.cost} Valor [${slotKey}]`}
               >
-                {/* Cooldown Vertical Wipe */}
-                {isUnlocked && cd > 0 && (
+                {cd > 0 && (
                   <div
-                    className="absolute bottom-0 left-0 right-0 bg-black/65 pointer-events-none z-10"
+                    className="absolute bottom-0 left-0 right-0 bg-black/68 pointer-events-none z-10 rounded-b"
                     style={{ height: `${Math.min(100, (cd / cfg.prepTime) * 100)}%` }}
                   />
                 )}
 
-                {/* Top Level Badge (exact cyan square like screenshot!) */}
-                <div className="w-full flex justify-end items-center z-20">
-                  {isUnlocked ? (
-                    <span
-                      className={`px-1 text-[8px] font-extrabold leading-tight rounded-xs ${
-                        canAfford
-                          ? 'bg-[#0284c7] text-white border border-black shadow-xs'
-                          : 'text-[#8c8a6e]'
-                      }`}
-                    >
-                      {lvl}
-                    </span>
-                  ) : (
-                    <span className="px-0.5 text-[7px] font-extrabold bg-amber-950/90 text-amber-300 border border-amber-700 rounded-xs">
-                      🔒{cfg.unlockLevel}
-                    </span>
-                  )}
+                <div className="w-full flex justify-between items-center z-20">
+                  <span className="text-[7px] font-bold text-zinc-400">[{slotKey}]</span>
+                  <span
+                    className={`px-1 text-[8px] font-extrabold leading-tight rounded-xs ${
+                      canAfford
+                        ? 'bg-[#0284c7] text-white border border-black shadow-xs'
+                        : 'text-[#8c8a6e]'
+                    }`}
+                  >
+                    Nv.{lvl}
+                  </span>
                 </div>
 
-                {/* Real Pixel-Art Matrix Portrait */}
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                   <CanvasUnitPortrait type={sType} active={canAfford} />
                 </div>
 
-                {/* Bottom Cost Row: Blue Drop + Bold Cost */}
-                {isUnlocked && (
-                  <div className="w-full flex items-center justify-between z-20 mt-auto">
-                    <span
-                      className={`w-3 h-3 rounded-full flex items-center justify-center text-[7px] ${
-                        canAfford
-                          ? 'bg-slate-950 border border-sky-400 text-sky-300'
-                          : 'bg-zinc-900/60 text-zinc-600'
-                      }`}
-                    >
-                      💧
-                    </span>
-                    <span
-                      className={`font-tactical font-extrabold text-xs leading-none ${
-                        canAfford ? 'text-white' : 'text-[#737058]'
-                      }`}
-                      style={
-                        canAfford
-                          ? { textShadow: '1px 1px 0 #000, -1px -1px 0 #000' }
-                          : undefined
-                      }
-                    >
-                      {cfg.cost}
-                    </span>
-                  </div>
-                )}
+                <div className="w-full flex items-center justify-between z-20 mt-auto">
+                  <span
+                    className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[7px] ${
+                      canAfford
+                        ? 'bg-slate-950 border border-sky-400 text-sky-300'
+                        : 'bg-zinc-900/60 text-zinc-600'
+                    }`}
+                  >
+                    💧
+                  </span>
+                  <span
+                    className={`font-tactical font-extrabold text-xs leading-none ${
+                      canAfford ? 'text-white' : 'text-[#737058]'
+                    }`}
+                    style={
+                      canAfford ? { textShadow: '1px 1px 0 #000, -1px -1px 0 #000' } : undefined
+                    }
+                  >
+                    {cfg.cost}
+                  </span>
+                </div>
               </button>
             );
           })}
+
+          {/* Single Next-Unlock Teaser Slot so player sees upcoming goal without clutter */}
+          {nextLockedCfg && (
+            <button
+              type="button"
+              onClick={() =>
+                addFloatingText(
+                  `${nextLockedCfg.name.toUpperCase()} SE DESBLOQUEA EN NV.${nextLockedCfg.unlockLevel}`,
+                  360,
+                  208,
+                  20,
+                  '#fde047',
+                  true
+                )
+              }
+              className="shrink-0 relative w-11 h-14 sm:w-12 sm:h-15 rounded bg-zinc-950/82 border border-amber-700/65 flex flex-col justify-between p-1 opacity-85 hover:opacity-100 cursor-pointer transition"
+              title={`🔒 Próximo desbloqueo en Nivel ${nextLockedCfg.unlockLevel}: ${nextLockedCfg.name} (${nextLockedCfg.roleTitle})`}
+            >
+              <div className="w-full flex justify-center z-20">
+                <span className="px-1 text-[7px] font-extrabold bg-amber-950 text-amber-300 border border-amber-600/80 rounded-xs">
+                  🔒 NV.{nextLockedCfg.unlockLevel}
+                </span>
+              </div>
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <CanvasUnitPortrait type={nextLockedCfg.id} active={false} />
+              </div>
+              <div className="w-full z-20 mt-auto">
+                <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden border border-black">
+                  <div
+                    className="h-full bg-amber-400 transition-all"
+                    style={{ width: `${xpPercent}%` }}
+                  />
+                </div>
+              </div>
+            </button>
+          )}
         </div>
 
         {/* DIVIDER */}
@@ -2755,17 +2966,18 @@ const CanvasUnitPortrait: React.FC<{ type: SurvivorType; active: boolean }> = Re
     const ref = useRef<HTMLCanvasElement | null>(null);
 
     useEffect(() => {
-      const ctx = ref.current?.getContext('2d');
+      if (!ref.current) return;
+      const ctx = syncCanvasHiDPI(ref.current, 34, 38, 3);
       if (!ctx) return;
-      renderCharacterPreview(ctx, type, false, 30, 34);
+      renderCharacterPreview(ctx, type, false, 34, 38);
     }, [type]);
 
     return (
       <canvas
         ref={ref}
-        width={30}
-        height={34}
-        className={`w-8 h-9 pixel-canvas transition ${
+        width={34}
+        height={38}
+        className={`w-8.5 h-9.5 pixel-canvas transition ${
           active ? 'opacity-100' : 'brightness-0 opacity-45'
         }`}
       />

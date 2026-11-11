@@ -1,21 +1,29 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  getNextLockedUnit,
+  getXpForNextLevel,
+  isUnitUnlocked,
+  MAX_COMMANDER_LEVEL,
+  MAX_EQUIPPED_DECK,
   MISSION_NODES,
   MissionNode,
   PlayerProgress,
   SURVIVOR_CONFIGS,
+  SURVIVOR_ORDER,
   SurvivorType,
   ZOMBIE_CONFIGS,
   ZombieType,
 } from '../types/game';
 import {
   Award,
+  Check,
   Compass,
   Hammer,
   Lock,
   Maximize2,
   Minimize2,
   Play,
+  RotateCcw,
   Shield,
   Skull,
   Sparkles,
@@ -23,7 +31,11 @@ import {
   Wrench,
   X,
 } from 'lucide-react';
-import { renderArmoredBus, renderCharacterPreview } from '../engine/PixelArtRenderer';
+import {
+  renderArmoredBus,
+  renderCharacterPreview,
+  syncCanvasHiDPI,
+} from '../engine/PixelArtRenderer';
 import { soundFX } from '../engine/SoundFX';
 
 interface RoadMapHubProps {
@@ -32,10 +44,9 @@ interface RoadMapHubProps {
   onSelectMission: (id: number) => void;
   onLaunchMission: (mission: MissionNode) => void;
   onUpgradeSurvivor: (type: SurvivorType, cost: number) => void;
-  onUpgradeBusStat: (
-    kind: 'hp' | 'bill' | 'bumper' | 'armor' | 'commander_level',
-    cost: number
-  ) => void;
+  onUpgradeBusStat: (kind: 'hp' | 'bill' | 'bumper' | 'armor', cost: number) => void;
+  onToggleDeckUnit: (type: SurvivorType) => void;
+  onResetProgress: () => void;
   onCollectCache: (cacheId: string, coins: number, fuel: number) => void;
   onRefillFuel: () => void;
 }
@@ -62,12 +73,15 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
   onLaunchMission,
   onUpgradeSurvivor,
   onUpgradeBusStat,
+  onToggleDeckUnit,
+  onResetProgress,
   onCollectCache,
   onRefillFuel,
 }) => {
   const [modalTab, setModalTab] = useState<'none' | 'deck' | 'garage' | 'zombiepedia'>('none');
   const [zoomedOut, setZoomedOut] = useState<boolean>(false);
   const [weldBurstKey, setWeldBurstKey] = useState<number>(0);
+  const [confirmReset, setConfirmReset] = useState<boolean>(false);
   const mapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const bakedMapRef = useRef<HTMLCanvasElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -110,50 +124,45 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
   // Bake static 1800x640 Continent once + Animate Live Weather, Rivers, Refinery Flames & Reactor!
   useEffect(() => {
     if (!bakedMapRef.current) {
+      const MAP_SCALE = 1.5;
       const off = document.createElement('canvas');
-      off.width = WORLD_W;
-      off.height = WORLD_H;
+      off.width = Math.round(WORLD_W * MAP_SCALE);
+      off.height = Math.round(WORLD_H * MAP_SCALE);
       const bctx = off.getContext('2d')!;
+      bctx.scale(MAP_SCALE, MAP_SCALE);
+      bctx.imageSmoothingEnabled = true;
 
-      // 1. Regional Biome Grounds with Dithered Transitions
-      bctx.fillStyle = '#364129';
-      bctx.fillRect(0, 0, 485, WORLD_H);
-      bctx.fillStyle = '#5c4730';
-      bctx.fillRect(465, 0, 465, WORLD_H);
-      bctx.fillStyle = '#363940';
-      bctx.fillRect(920, 0, 445, WORLD_H);
-      bctx.fillStyle = '#29332b';
-      bctx.fillRect(1360, 0, 440, WORLD_H);
+      // 1. Smooth Regional Biome Grounds with Illustrated Gradient Transitions
+      const bgGrad = bctx.createLinearGradient(0, 0, WORLD_W, 0);
+      bgGrad.addColorStop(0, '#334227');
+      bgGrad.addColorStop(0.24, '#3c4a2d');
+      bgGrad.addColorStop(0.28, '#5c462f');
+      bgGrad.addColorStop(0.49, '#55422d');
+      bgGrad.addColorStop(0.53, '#343841');
+      bgGrad.addColorStop(0.73, '#2f333b');
+      bgGrad.addColorStop(0.77, '#27342b');
+      bgGrad.addColorStop(1, '#1f2b23');
+      bctx.fillStyle = bgGrad;
+      bctx.fillRect(0, 0, WORLD_W, WORLD_H);
 
-      // Bayer-style transition strips between sectors
-      [
-        { x: 455, col: '#5c4730' },
-        { x: 912, col: '#363940' },
-        { x: 1352, col: '#29332b' },
-      ].forEach(({ x, col }) => {
-        bctx.fillStyle = col;
-        for (let dy = 0; dy < WORLD_H; dy += 8) {
-          bctx.fillRect(x + ((dy / 8) % 2) * 8, dy, 8, 6);
-          bctx.fillRect(x + 14 - ((dy / 8) % 2) * 6, dy + 2, 6, 4);
-        }
-      });
-
-      // Topographic contour plateaus & craters
-      for (let i = 0; i < 44; i++) {
-        const px = (i * 137) % (WORLD_W - 160);
-        const py = (i * 89) % (WORLD_H - 120);
-        bctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.045)' : 'rgba(0,0,0,0.13)';
-        bctx.fillRect(px, py, 110 + (i % 5) * 28, 64 + (i % 4) * 24);
+      // Organic topographic contour plateaus & craters (smooth ellipses instead of harsh blocks)
+      for (let i = 0; i < 48; i++) {
+        const px = 60 + ((i * 137) % (WORLD_W - 120));
+        const py = 60 + ((i * 89) % (WORLD_H - 120));
+        bctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.12)';
+        bctx.beginPath();
+        bctx.ellipse(px, py, 58 + (i % 5) * 16, 30 + (i % 4) * 12, (i % 3) * 0.25, 0, Math.PI * 2);
+        bctx.fill();
       }
 
-      // Sector Borders & Stencil Headers
+      // Sector Borders & Crisp Tactical Headers (Levels 1..12)
       const sectors = [
-        { x: 20, label: 'SECTOR 1: BOSQUE SUR (NV. 1-2)' },
-        { x: 485, label: 'SECTOR 2: AUTOPISTA 66 & REFINERÍA (NV. 3-4)' },
-        { x: 940, label: 'SECTOR 3: CIUDAD MUERTA (NV. 5-6)' },
-        { x: 1380, label: 'SECTOR 4: ZONA MILITAR & REACTOR CERO (NV. 7+)' },
+        { x: 20, label: 'SECTOR 1: BOSQUE SUR (NV. 1-3)' },
+        { x: 485, label: 'SECTOR 2: AUTOPISTA 66 & REFINERÍA (NV. 4-6)' },
+        { x: 940, label: 'SECTOR 3: CIUDAD MUERTA (NV. 7-9)' },
+        { x: 1380, label: 'SECTOR 4: ZONA MILITAR & REACTOR CERO (NV. 10-12)' },
       ];
-      bctx.strokeStyle = 'rgba(250, 204, 21, 0.28)';
+      bctx.strokeStyle = 'rgba(250, 204, 21, 0.3)';
       bctx.lineWidth = 2;
       bctx.setLineDash([8, 8]);
       [468, 920, 1360].forEach((sx) => {
@@ -165,18 +174,28 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       bctx.setLineDash([]);
 
       sectors.forEach((s) => {
-        bctx.fillStyle = 'rgba(12, 14, 10, 0.72)';
-        bctx.fillRect(s.x, 52, 326, 22);
-        bctx.strokeStyle = '#787459';
-        bctx.lineWidth = 1;
-        bctx.strokeRect(s.x, 52, 326, 22);
+        bctx.fillStyle = 'rgba(14, 16, 12, 0.82)';
+        bctx.beginPath();
+        bctx.roundRect(s.x, 50, 352, 24, 5);
+        bctx.fill();
+        bctx.strokeStyle = '#a39e77';
+        bctx.lineWidth = 1.4;
+        bctx.stroke();
         bctx.fillStyle = '#fde047';
-        bctx.font = 'bold 11px monospace';
-        bctx.fillText(s.label, s.x + 8, 67);
+        bctx.font = '800 11px "Chakra Petch", sans-serif';
+        bctx.fillText(s.label, s.x + 10, 66);
       });
 
-      // 2. Two Winding Rivers with Sandbanks & Steel Truss Bridges
+      // 2. Two Winding Rivers with Inked Sandbanks & Shaded Water Channels
       [880, 1340].forEach((rx) => {
+        bctx.lineCap = 'round';
+        bctx.strokeStyle = '#14120e';
+        bctx.lineWidth = 46;
+        bctx.beginPath();
+        bctx.moveTo(rx, -10);
+        bctx.bezierCurveTo(rx - 50, 200, rx + 60, 420, rx - 20, WORLD_H + 10);
+        bctx.stroke();
+
         bctx.strokeStyle = '#78684a';
         bctx.lineWidth = 42;
         bctx.beginPath();
@@ -184,14 +203,14 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
         bctx.bezierCurveTo(rx - 50, 200, rx + 60, 420, rx - 20, WORLD_H + 10);
         bctx.stroke();
 
-        bctx.strokeStyle = '#163040';
+        bctx.strokeStyle = '#153142';
         bctx.lineWidth = 34;
         bctx.beginPath();
         bctx.moveTo(rx, -10);
         bctx.bezierCurveTo(rx - 50, 200, rx + 60, 420, rx - 20, WORLD_H + 10);
         bctx.stroke();
 
-        bctx.strokeStyle = '#254d66';
+        bctx.strokeStyle = '#285875';
         bctx.lineWidth = 18;
         bctx.beginPath();
         bctx.moveTo(rx, -10);
@@ -199,48 +218,94 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
         bctx.stroke();
       });
 
-      // 3. Detailed Pines, Barns, Graveyard, Refinery Derricks, Skyscrapers & Military Base
-      const drawPine = (px: number, py: number, scale = 1) => {
-        bctx.fillStyle = 'rgba(0,0,0,0.32)';
-        bctx.fillRect(px - 6 * scale, py + 5 * scale, 14 * scale, 4 * scale);
-        bctx.fillStyle = '#1b2416';
-        bctx.fillRect(px - 5 * scale, py, 10 * scale, 8 * scale);
-        bctx.fillStyle = '#283620';
-        bctx.fillRect(px - 8 * scale, py - 6 * scale, 16 * scale, 7 * scale);
-        bctx.fillRect(px - 6 * scale, py - 12 * scale, 12 * scale, 6 * scale);
-        bctx.fillStyle = '#3f5432';
-        bctx.fillRect(px - 3 * scale, py - 16 * scale, 6 * scale, 5 * scale);
+      // 3. Vector-Inked Pines, Barns, Refinery Derricks, Skyscrapers & Military Base
+      const drawPineHD = (px: number, py: number, scale = 1) => {
+        bctx.fillStyle = 'rgba(0,0,0,0.34)';
+        bctx.beginPath();
+        bctx.ellipse(px + 2 * scale, py + 6 * scale, 9 * scale, 4 * scale, 0, 0, Math.PI * 2);
+        bctx.fill();
+
+        bctx.fillStyle = '#3b2618';
+        bctx.fillRect(px - 2 * scale, py + 1 * scale, 4 * scale, 6 * scale);
+
+        const tiers = [
+          { yOff: 2, w: 10, h: 11, fill: '#1e2c18' },
+          { yOff: -4, w: 8.2, h: 10, fill: '#2c4022' },
+          { yOff: -10, w: 6, h: 9, fill: '#3f5931' },
+        ];
+        tiers.forEach((tr) => {
+          bctx.beginPath();
+          bctx.moveTo(px, py + (tr.yOff - tr.h) * scale);
+          bctx.lineTo(px + tr.w * scale, py + tr.yOff * scale);
+          bctx.lineTo(px - tr.w * scale, py + tr.yOff * scale);
+          bctx.closePath();
+          bctx.fillStyle = tr.fill;
+          bctx.fill();
+          bctx.strokeStyle = '#121610';
+          bctx.lineWidth = 1.1;
+          bctx.stroke();
+        });
       };
 
       for (let i = 0; i < 165; i++) {
         const fx = 25 + ((i * 97) % (WORLD_W - 50));
         const fy = 85 + ((i * 71) % (WORLD_H - 130));
         if (Math.abs(fy - 320) > 65) {
-          drawPine(fx, fy, 1.15);
+          drawPineHD(fx, fy, 1.05 + (i % 3) * 0.1);
         }
       }
 
-      // Sector 1: Red Farm Barn + Grain Silo + Blackwater Cemetery Fence
-      bctx.fillStyle = '#7c2d12';
-      bctx.fillRect(240, 180, 46, 30);
-      bctx.fillStyle = '#b91c1c';
-      bctx.fillRect(236, 168, 54, 14);
-      bctx.fillStyle = '#f8fafc';
-      bctx.strokeRect(254, 190, 16, 18);
-      bctx.fillStyle = '#cbd5e1';
-      bctx.fillRect(292, 160, 16, 50);
-      bctx.fillStyle = '#64748b';
-      bctx.fillRect(290, 154, 20, 8);
+      // Sector 1: Inked Red Farm Barn + Cylindrical Grain Silo
+      bctx.fillStyle = 'rgba(0,0,0,0.35)';
+      bctx.beginPath();
+      bctx.ellipse(270, 212, 42, 10, 0, 0, Math.PI * 2);
+      bctx.fill();
 
-      // Sector 2: Oil Derricks & Refinery Storage Tanks
+      bctx.fillStyle = '#881d1d';
+      bctx.strokeStyle = '#14110f';
+      bctx.lineWidth = 2;
+      bctx.fillRect(240, 180, 48, 30);
+      bctx.strokeRect(240, 180, 48, 30);
+      bctx.beginPath();
+      bctx.moveTo(234, 182);
+      bctx.lineTo(264, 164);
+      bctx.lineTo(294, 182);
+      bctx.closePath();
+      bctx.fillStyle = '#b91c1c';
+      bctx.fill();
+      bctx.stroke();
+      bctx.strokeStyle = '#f8fafc';
+      bctx.lineWidth = 1.5;
+      bctx.strokeRect(256, 190, 16, 18);
+
+      bctx.fillStyle = '#cbd5e1';
+      bctx.strokeStyle = '#14110f';
+      bctx.lineWidth = 1.8;
+      bctx.fillRect(294, 160, 18, 50);
+      bctx.strokeRect(294, 160, 18, 50);
+      bctx.beginPath();
+      bctx.arc(303, 160, 9, Math.PI, 0);
+      bctx.fillStyle = '#64748b';
+      bctx.fill();
+      bctx.stroke();
+
+      // Sector 2: Inked Oil Derricks & Refinery Storage Tanks
       [640, 740, 810].forEach((ox, idx) => {
         const oy = 360 + (idx % 2) * 80;
-        bctx.fillStyle = '#18181b';
-        bctx.fillRect(ox - 2, oy - 38, 26, 40);
+        bctx.fillStyle = 'rgba(0,0,0,0.35)';
+        bctx.beginPath();
+        bctx.ellipse(ox + 12, oy + 3, 18, 6, 0, 0, Math.PI * 2);
+        bctx.fill();
+
         bctx.fillStyle = '#3f3f46';
-        bctx.fillRect(ox, oy - 36, 22, 36);
+        bctx.strokeStyle = '#121214';
+        bctx.lineWidth = 2;
+        bctx.beginPath();
+        bctx.roundRect(ox, oy - 38, 24, 38, 3);
+        bctx.fill();
+        bctx.stroke();
         bctx.fillStyle = '#dc2626';
-        bctx.fillRect(ox, oy - 28, 22, 4);
+        bctx.fillRect(ox + 1, oy - 28, 22, 5);
       });
 
       // Sector 3: Ruined City Skyscrapers & Hospital Cross
@@ -253,12 +318,13 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
         { x: 1240, y: 170, w: 52, h: 86 },
       ];
       cityBlocks.forEach((b, idx) => {
-        bctx.fillStyle = 'rgba(0,0,0,0.4)';
+        bctx.fillStyle = 'rgba(0,0,0,0.42)';
         bctx.fillRect(b.x + 6, b.y + 8, b.w, b.h);
-        bctx.fillStyle = '#09090b';
-        bctx.fillRect(b.x - 2, b.y - 2, b.w + 4, b.h + 4);
         bctx.fillStyle = '#3f3f46';
+        bctx.strokeStyle = '#09090b';
+        bctx.lineWidth = 2;
         bctx.fillRect(b.x, b.y, b.w, b.h);
+        bctx.strokeRect(b.x, b.y, b.w, b.h);
         bctx.fillStyle = '#71717a';
         bctx.fillRect(b.x + 3, b.y + 3, b.w - 6, 7);
         for (let wy = b.y + 15; wy < b.y + b.h - 8; wy += 11) {
@@ -268,27 +334,31 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
           }
         }
         if (idx === 3) {
-          // Hospital Red Cross
           bctx.fillStyle = '#ef4444';
           bctx.fillRect(b.x + 24, b.y - 14, 10, 14);
           bctx.fillRect(b.x + 20, b.y - 10, 18, 6);
         }
       });
 
-      // Sector 4: Military Bunkers, Helipad & Zero Quarantine Dome
+      // Sector 4: Military Bunkers & Helipad
       bctx.fillStyle = '#3f4739';
-      bctx.fillRect(1470, 140, 78, 48);
-      bctx.strokeStyle = '#18181b';
-      bctx.lineWidth = 2;
-      bctx.strokeRect(1470, 140, 78, 48);
+      bctx.strokeStyle = '#141612';
+      bctx.lineWidth = 2.2;
+      bctx.beginPath();
+      bctx.roundRect(1470, 140, 78, 48, 6);
+      bctx.fill();
+      bctx.stroke();
 
-      bctx.fillStyle = 'rgba(24, 24, 27, 0.7)';
-      bctx.fillRect(1576, 416, 72, 72);
+      bctx.fillStyle = 'rgba(24, 24, 27, 0.8)';
+      bctx.beginPath();
+      bctx.roundRect(1576, 416, 72, 72, 8);
+      bctx.fill();
       bctx.strokeStyle = '#eab308';
-      bctx.strokeRect(1580, 420, 64, 64);
+      bctx.lineWidth = 2;
+      bctx.strokeRect(1582, 422, 60, 60);
       bctx.fillStyle = '#eab308';
-      bctx.font = 'bold 24px monospace';
-      bctx.fillText('H', 1604, 460);
+      bctx.font = '800 24px "Chakra Petch", sans-serif';
+      bctx.fillText('H', 1603, 461);
 
       // 4. Winding Two-Lane Interstate Highway connecting all 12 Mission Nodes
       const pts = MISSION_NODES.map((m) => ({
@@ -296,23 +366,31 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
         y: (m.mapY / 100) * WORLD_H,
       }));
 
-      bctx.strokeStyle = '#141417';
-      bctx.lineWidth = 36;
       bctx.lineCap = 'round';
       bctx.lineJoin = 'round';
+
+      // Inked outer road border + gravel shoulder
+      bctx.strokeStyle = '#121215';
+      bctx.lineWidth = 40;
       bctx.beginPath();
       pts.forEach((p, idx) => (idx === 0 ? bctx.moveTo(p.x, p.y) : bctx.lineTo(p.x, p.y)));
       bctx.stroke();
 
-      bctx.strokeStyle = '#3f3f46';
+      bctx.strokeStyle = '#57534e';
+      bctx.lineWidth = 34;
+      bctx.beginPath();
+      pts.forEach((p, idx) => (idx === 0 ? bctx.moveTo(p.x, p.y) : bctx.lineTo(p.x, p.y)));
+      bctx.stroke();
+
+      bctx.strokeStyle = '#33363d';
       bctx.lineWidth = 26;
       bctx.beginPath();
       pts.forEach((p, idx) => (idx === 0 ? bctx.moveTo(p.x, p.y) : bctx.lineTo(p.x, p.y)));
       bctx.stroke();
 
       bctx.strokeStyle = '#facc15';
-      bctx.lineWidth = 3;
-      bctx.setLineDash([10, 10]);
+      bctx.lineWidth = 2.6;
+      bctx.setLineDash([11, 10]);
       bctx.beginPath();
       pts.forEach((p, idx) => (idx === 0 ? bctx.moveTo(p.x, p.y) : bctx.lineTo(p.x, p.y)));
       bctx.stroke();
@@ -330,12 +408,14 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       if (now - lastDraw < 40) return;
       lastDraw = now;
 
-      const ctx = mapCanvasRef.current?.getContext('2d');
+      const canvas = mapCanvasRef.current;
       const baked = bakedMapRef.current;
-      if (!ctx || !baked) return;
+      if (!canvas || !baked) return;
+      const ctx = syncCanvasHiDPI(canvas, WORLD_W, WORLD_H, 1.75);
+      if (!ctx) return;
 
       const t = now * 0.001;
-      ctx.drawImage(baked, 0, 0);
+      ctx.drawImage(baked, 0, 0, WORLD_W, WORLD_H);
 
       // A. Flowing water current streaks along both rivers
       ctx.save();
@@ -480,10 +560,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
     });
   };
 
-  const triggerGarageUpgrade = (
-    kind: 'hp' | 'bill' | 'bumper' | 'armor' | 'commander_level',
-    cost: number
-  ) => {
+  const triggerGarageUpgrade = (kind: 'hp' | 'bill' | 'bumper' | 'armor', cost: number) => {
     onUpgradeBusStat(kind, cost);
     setWeldBurstKey((k) => k + 1);
   };
@@ -491,7 +568,14 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
   const totalStars = Object.values(progress.missionStars).reduce((a, b) => a + b, 0);
   const maxStars = MISSION_NODES.length * 3;
   const commanderLvl = progress.busLevel || 1;
-  const commanderLevelUpCost = commanderLvl * 95;
+  const xpNeeded = getXpForNextLevel(commanderLvl);
+  const isMaxLevel = commanderLvl >= MAX_COMMANDER_LEVEL;
+  const xpRatio = isMaxLevel
+    ? 100
+    : Math.min(100, Math.max(0, Math.round((progress.commanderXp / xpNeeded) * 100)));
+  const nextLockedUnit = getNextLockedUnit(commanderLvl);
+  const unlockedCount = SURVIVOR_ORDER.filter((t) => isUnitUnlocked(t, commanderLvl)).length;
+  const equippedDeck = progress.equippedDeck || ['redneck'];
 
   return (
     <div className="relative w-full h-full bg-[#252a1e] select-none overflow-hidden">
@@ -539,7 +623,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
             ref={mapCanvasRef}
             width={WORLD_W}
             height={WORLD_H}
-            className="w-full h-full object-fill pixel-canvas pointer-events-none"
+            className="w-full h-full object-fill hd-canvas pointer-events-none"
           />
 
           {/* INTERACTIVE SUPPLY CACHES ON THE HIGHWAY */}
@@ -686,11 +770,24 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
 
         <button
           onClick={() => setModalTab('deck')}
-          className="px-2.5 h-6 rounded bg-sky-900/95 hover:bg-sky-800 border-2 border-sky-400 flex items-center gap-1.5 text-xs font-extrabold text-white shadow-md cursor-pointer"
-          title="Subir Nivel de Comandante para desbloquear nuevas unidades"
+          className="px-2.5 h-7 rounded bg-sky-950/95 hover:bg-sky-900 border-2 border-sky-400 flex items-center gap-2 text-xs font-extrabold text-white shadow-md cursor-pointer"
+          title="Gana XP en combate para subir el Nivel de Comandante y desbloquear nuevas unidades"
         >
-          <Award className="w-3.5 h-3.5 text-yellow-300" />
-          <span>NIVEL {commanderLvl}</span>
+          <Award className="w-3.5 h-3.5 text-yellow-300 shrink-0" />
+          <div className="flex flex-col items-start leading-none">
+            <span className="text-[10px] tracking-wide">
+              NV.{commanderLvl}/{MAX_COMMANDER_LEVEL}
+            </span>
+            <div className="w-16 h-1.5 bg-zinc-900 rounded-full overflow-hidden border border-sky-700/60 mt-0.5">
+              <div
+                className="h-full bg-gradient-to-r from-sky-400 to-amber-300 transition-all duration-300"
+                style={{ width: `${xpRatio}%` }}
+              />
+            </div>
+          </div>
+          <span className="text-[9px] text-sky-200 font-bold">
+            {isMaxLevel ? 'MAX' : `${progress.commanderXp}/${xpNeeded} XP`}
+          </span>
         </button>
       </div>
 
@@ -719,9 +816,30 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       </div>
 
       {/* ===================================================================== */}
-      {/* TOP-RIGHT FLOATING COINS BAR                                          */}
+      {/* TOP-RIGHT FLOATING COINS & SAFE RESET BAR                             */}
       {/* ===================================================================== */}
       <div className="absolute top-2 right-3 z-20 flex items-center gap-2">
+        <button
+          onClick={() => {
+            if (!confirmReset) {
+              setConfirmReset(true);
+              setTimeout(() => setConfirmReset(false), 3800);
+            } else {
+              setConfirmReset(false);
+              onResetProgress();
+            }
+          }}
+          className={`px-2 py-1 rounded border text-[10px] font-bold flex items-center gap-1 transition cursor-pointer ${
+            confirmReset
+              ? 'bg-red-600 hover:bg-red-500 border-white text-white animate-pulse'
+              : 'bg-zinc-900/90 hover:bg-zinc-800 border-zinc-600 text-zinc-300'
+          }`}
+          title="Reiniciar campaña desde Nivel 1 (solo Campesino Redneck)"
+        >
+          <RotateCcw className="w-3 h-3" />
+          <span>{confirmReset ? '¿Confirmar Nv.1?' : 'Reiniciar'}</span>
+        </button>
+
         <button
           onClick={() => setZoomedOut((z) => !z)}
           className="md:hidden px-2 py-1 rounded bg-zinc-900/90 border border-zinc-600 text-[10px] font-bold text-yellow-300 cursor-pointer"
@@ -744,7 +862,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       </div>
 
       {/* ===================================================================== */}
-      {/* BOTTOM-LEFT FLOATING BUTTONS: Tropas (11), Taller Bus & Zombiepedia   */}
+      {/* BOTTOM-LEFT FLOATING BUTTONS: Escuadrón, Taller Bus & Zombiepedia     */}
       {/* ===================================================================== */}
       <div className="absolute bottom-3 left-3 z-20 flex items-center gap-2">
         <button
@@ -752,7 +870,9 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
           className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#3b3829]/95 hover:bg-[#4f4b37] border-2 border-yellow-400 text-xs font-extrabold text-white shadow-lg cursor-pointer"
         >
           <Users className="w-4 h-4 text-sky-400" />
-          <span>Unidades (11)</span>
+          <span>
+            Escuadrón ({unlockedCount}/11)
+          </span>
         </button>
 
         <button
@@ -826,19 +946,24 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
               <div className="flex items-center gap-3 flex-wrap">
                 <h3 className="font-pixel text-xs text-yellow-400">
                   {modalTab === 'deck'
-                    ? `ARSENAL DE SUPERVIVIENTES — NV. COMANDANTE ${commanderLvl}`
+                    ? `ARSENAL Y ESCUADRÓN — NV. COMANDANTE ${commanderLvl}/${MAX_COMMANDER_LEVEL}`
                     : modalTab === 'garage'
                     ? 'TALLER DE BILL — DIORAMA DE BLINDAJE DEL AUTOBÚS'
                     : 'ZOMBIEPEDIA — INTELIGENCIA TÁCTICA'}
                 </h3>
-                {modalTab === 'deck' && commanderLvl < 7 && (
-                  <button
-                    onClick={() => triggerGarageUpgrade('commander_level', commanderLevelUpCost)}
-                    disabled={progress.coins < commanderLevelUpCost}
-                    className="px-2.5 py-1 rounded bg-sky-500 hover:bg-sky-400 disabled:bg-zinc-800 disabled:text-zinc-500 text-zinc-950 font-extrabold text-[10px] uppercase shadow cursor-pointer"
-                  >
-                    ⬆ Subir a Nivel {commanderLvl + 1} ({commanderLevelUpCost} 🪙)
-                  </button>
+                {modalTab === 'deck' && (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="px-2 py-0.5 rounded bg-sky-950 border border-sky-500 text-sky-200 font-extrabold text-[10px] uppercase">
+                      Escuadrón Activo: {equippedDeck.length}/{MAX_EQUIPPED_DECK}
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-amber-950/90 border border-amber-500/70 text-amber-200 font-bold text-[10px]">
+                      {nextLockedUnit
+                        ? `Próximo desbloqueo Nv.${nextLockedUnit.unlockLevel}: ${nextLockedUnit.name} (${progress.commanderXp}/${xpNeeded} XP)`
+                        : isMaxLevel
+                        ? '★ Maestría Nv.12 Activa (+10% Global)'
+                        : `Nv.12 Maestría (+10% Global): ${progress.commanderXp}/${xpNeeded} XP`}
+                    </span>
+                  </div>
                 )}
               </div>
               <button
@@ -857,21 +982,26 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
 
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5">
                 {modalTab === 'deck' &&
-                  (Object.keys(SURVIVOR_CONFIGS) as SurvivorType[]).map((sType) => {
+                  SURVIVOR_ORDER.map((sType) => {
                     const cfg = SURVIVOR_CONFIGS[sType];
-                    const isUnlocked = commanderLvl >= cfg.unlockLevel;
+                    const isUnlocked = isUnitUnlocked(sType, commanderLvl);
+                    const isEquipped = equippedDeck.includes(sType);
+                    const deckSlotIdx = equippedDeck.indexOf(sType);
                     const lvl = progress.unitLevels[sType] || 1;
                     const cost = lvl * 35;
                     const canAfford = isUnlocked && progress.coins >= cost;
                     const mult = 1 + (lvl - 1) * 0.14;
+                    const isLastEquipped = isEquipped && equippedDeck.length <= 1;
 
                     return (
                       <div
                         key={sType}
-                        className={`border rounded-lg p-2.5 flex flex-col justify-between ${
+                        className={`border rounded-lg p-2.5 flex flex-col justify-between transition ${
                           isUnlocked
-                            ? 'bg-[#1a1913] border-[#5e5a45]'
-                            : 'bg-zinc-950/90 border-zinc-800 opacity-80'
+                            ? isEquipped
+                              ? 'bg-[#1f1e16] border-amber-400/90 shadow-md'
+                              : 'bg-[#1a1913] border-[#5e5a45]'
+                            : 'bg-zinc-950/90 border-zinc-800 opacity-85'
                         }`}
                       >
                         <div>
@@ -883,7 +1013,9 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                                   💧 {cfg.cost}
                                 </span>
                                 {isUnlocked ? (
-                                  <span className="text-yellow-400 font-bold">Nv.{lvl}</span>
+                                  <span className="text-yellow-400 font-bold">
+                                    {isEquipped ? `[#${deckSlotIdx + 1}] ` : ''}Nv.{lvl}
+                                  </span>
                                 ) : (
                                   <span className="flex items-center gap-0.5 text-amber-400 font-bold">
                                     <Lock className="w-3 h-3" /> Nv.{cfg.unlockLevel}
@@ -923,27 +1055,48 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                           </div>
                         </div>
                         {isUnlocked ? (
-                          <button
-                            onClick={() => onUpgradeSurvivor(sType, cost)}
-                            disabled={!canAfford}
-                            className={`w-full py-1.5 rounded text-[10px] font-extrabold uppercase ${
-                              canAfford
-                                ? 'bg-emerald-500 hover:bg-emerald-400 text-zinc-950 cursor-pointer'
-                                : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
-                            }`}
-                          >
-                            Mejorar Unidad ({cost} 🪙)
-                          </button>
+                          <div className="flex flex-col gap-1.5">
+                            <button
+                              onClick={() => onToggleDeckUnit(sType)}
+                              disabled={isLastEquipped}
+                              className={`w-full py-1 rounded text-[10px] font-extrabold uppercase flex items-center justify-center gap-1 border ${
+                                isEquipped
+                                  ? isLastEquipped
+                                    ? 'bg-amber-950/60 border-amber-700/60 text-amber-300/80 cursor-default'
+                                    : 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-400 text-amber-200 cursor-pointer'
+                                  : 'bg-sky-950 hover:bg-sky-900 border-sky-500 text-sky-200 cursor-pointer'
+                              }`}
+                            >
+                              {isEquipped ? (
+                                <>
+                                  <Check className="w-3 h-3" />
+                                  <span>En Escuadrón (Tecla {deckSlotIdx + 1})</span>
+                                </>
+                              ) : (
+                                <span>
+                                  {equippedDeck.length >= MAX_EQUIPPED_DECK
+                                    ? '↻ Reemplazar en Mazo'
+                                    : '+ Equipar en Escuadrón'}
+                                </span>
+                              )}
+                            </button>
+                            <button
+                              onClick={() => onUpgradeSurvivor(sType, cost)}
+                              disabled={!canAfford}
+                              className={`w-full py-1.5 rounded text-[10px] font-extrabold uppercase ${
+                                canAfford
+                                  ? 'bg-emerald-500 hover:bg-emerald-400 text-zinc-950 cursor-pointer'
+                                  : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
+                              }`}
+                            >
+                              Mejorar Nv.{lvl + 1} ({cost} 🪙)
+                            </button>
+                          </div>
                         ) : (
-                          <button
-                            onClick={() =>
-                              triggerGarageUpgrade('commander_level', commanderLevelUpCost)
-                            }
-                            disabled={progress.coins < commanderLevelUpCost}
-                            className="w-full py-1.5 rounded bg-amber-600/90 hover:bg-amber-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-zinc-950 font-extrabold text-[10px] uppercase cursor-pointer"
-                          >
-                            Subir a Nv.{cfg.unlockLevel}
-                          </button>
+                          <div className="w-full py-1.5 px-2 rounded bg-zinc-900/95 border border-zinc-800 text-amber-300/90 font-bold text-[10px] text-center flex items-center justify-center gap-1">
+                            <Lock className="w-3 h-3 shrink-0" />
+                            <span>Desbloquea en Nv.{cfg.unlockLevel} (XP Combate)</span>
+                          </div>
                         )}
                       </div>
                     );
@@ -955,23 +1108,32 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                       <div>
                         <div className="flex items-center gap-1.5 text-sky-400 font-bold text-xs mb-1">
                           <Award className="w-4 h-4" />
-                          <span>Rango Comandante (Nv.{commanderLvl})</span>
+                          <span>
+                            Rango Comandante (Nv.{commanderLvl}/{MAX_COMMANDER_LEVEL})
+                          </span>
                         </div>
-                        <p className="text-[10px] text-zinc-400 mb-2">
-                          Desbloquea Sabueso (Nv.2), Sniper (Nv.3), Pyro (Nv.4), Torreta (Nv.5), Dron (Nv.6) y Juggernaut (Nv.7).
+                        <p className="text-[10px] text-zinc-300 mb-2 leading-relaxed">
+                          Las unidades se desbloquean combatiendo y ganando XP en carretera (1 unidad nueva por nivel hasta Nv.11, y Maestría +10% en Nv.12).
                         </p>
                       </div>
-                      <button
-                        onClick={() =>
-                          triggerGarageUpgrade('commander_level', commanderLevelUpCost)
-                        }
-                        disabled={progress.coins < commanderLevelUpCost || commanderLvl >= 10}
-                        className="py-1.5 rounded bg-sky-400 hover:bg-sky-300 disabled:bg-zinc-800 disabled:text-zinc-500 text-zinc-950 font-extrabold text-[10px] uppercase cursor-pointer"
-                      >
-                        {commanderLvl >= 10
-                          ? 'Rango Máximo'
-                          : `Subir a Nv.${commanderLvl + 1} (${commanderLevelUpCost} 🪙)`}
-                      </button>
+                      <div className="bg-zinc-950/90 border border-sky-800/70 rounded p-2">
+                        <div className="flex items-center justify-between text-[10px] font-bold text-sky-200 mb-1">
+                          <span>
+                            {nextLockedUnit
+                              ? `Próximo: ${nextLockedUnit.name} (Nv.${nextLockedUnit.unlockLevel})`
+                              : isMaxLevel
+                              ? 'Maestría de Comandante Activa'
+                              : 'Próximo: Maestría Nv.12'}
+                          </span>
+                          <span>{isMaxLevel ? 'MAX' : `${progress.commanderXp}/${xpNeeded} XP`}</span>
+                        </div>
+                        <div className="w-full h-2 bg-zinc-900 rounded-full overflow-hidden border border-zinc-800">
+                          <div
+                            className="h-full bg-gradient-to-r from-sky-500 to-amber-400 transition-all duration-300"
+                            style={{ width: `${xpRatio}%` }}
+                          />
+                        </div>
+                      </div>
                     </div>
 
                     <div className="bg-[#1a1913] border border-[#5e5a45] rounded-lg p-3 flex flex-col justify-between">
@@ -1106,7 +1268,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
   );
 };
 
-// Crisp Pixel-Art Character Preview Box for Arsenal & Zombiepedia
+// Crisp 2D HD Character Preview Box for Arsenal & Zombiepedia
 const SpritePreviewBox: React.FC<{
   subType: SurvivorType | ZombieType;
   isZombie: boolean;
@@ -1115,18 +1277,20 @@ const SpritePreviewBox: React.FC<{
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
-    const ctx = canvasRef.current?.getContext('2d');
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = syncCanvasHiDPI(canvas, 40, 42, 3);
     if (!ctx) return;
-    renderCharacterPreview(ctx, subType, isZombie, 38, 40);
+    renderCharacterPreview(ctx, subType, isZombie, 40, 42);
   }, [isZombie, subType]);
 
   return (
     <div className="shrink-0 w-11 h-12 rounded bg-[#12120e] border border-[#3d3a2c] flex items-center justify-center shadow-inner">
       <canvas
         ref={canvasRef}
-        width={38}
-        height={40}
-        className={`w-9 h-10 pixel-canvas ${locked ? 'brightness-0 opacity-50' : ''}`}
+        width={40}
+        height={42}
+        className={`w-10 h-[42px] hd-canvas ${locked ? 'brightness-0 opacity-55' : ''}`}
       />
     </div>
   );
@@ -1166,31 +1330,36 @@ const GarageWorkshopDiorama: React.FC<{
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       const t = now * 0.001;
-      const ctx = canvasRef.current?.getContext('2d');
+      const canvas = canvasRef.current;
+      const W = 380;
+      const H = 122;
+      const ctx = canvas ? syncCanvasHiDPI(canvas, W, H, 2.5) : null;
       if (ctx) {
-        const W = 380;
-        const H = 122;
-        ctx.imageSmoothingEnabled = false;
 
         // Brick & Steel Workshop Back Wall
         ctx.fillStyle = '#181612';
         ctx.fillRect(0, 0, W, H);
         ctx.fillStyle = '#24201a';
         for (let y = 8; y < 86; y += 10) {
-          for (let x = (y % 20 === 8 ? 0 : 8); x < W; x += 18) {
-            ctx.fillRect(x, y, 16, 8);
+          for (let x = y % 20 === 8 ? 0 : 8; x < W; x += 18) {
+            ctx.beginPath();
+            ctx.roundRect(x, y, 16, 8, 1.5);
+            ctx.fill();
           }
         }
 
         // Steel girder & tool pegboard on wall
         ctx.fillStyle = '#333028';
-        ctx.fillRect(22, 26, 62, 34);
-        ctx.strokeStyle = '#57534e';
-        ctx.strokeRect(22, 26, 62, 34);
+        ctx.strokeStyle = '#141210';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.roundRect(22, 26, 62, 34, 3);
+        ctx.fill();
+        ctx.stroke();
         ctx.fillStyle = '#94a3b8';
-        ctx.fillRect(30, 32, 4, 18);
-        ctx.fillRect(40, 34, 4, 14);
-        ctx.fillRect(52, 32, 12, 4);
+        ctx.fillRect(30, 32, 3.5, 18);
+        ctx.fillRect(40, 34, 3.5, 14);
+        ctx.fillRect(52, 32, 12, 3.5);
 
         // Concrete garage floor + yellow-black hazard strip
         ctx.fillStyle = '#2d2c28';
@@ -1206,12 +1375,14 @@ const GarageWorkshopDiorama: React.FC<{
         ctx.fillStyle = '#3f3f46';
         ctx.fillRect(184, 0, 4, 10);
         ctx.fillStyle = '#52525b';
-        ctx.fillRect(172, 10, 28, 6);
+        ctx.beginPath();
+        ctx.roundRect(172, 10, 28, 6, 2);
+        ctx.fill();
         ctx.fillStyle = '#fef08a';
         ctx.fillRect(176, 15, 20, 2);
 
         const cone = ctx.createLinearGradient(186, 16, 186, 115);
-        cone.addColorStop(0, 'rgba(254, 240, 138, 0.25)');
+        cone.addColorStop(0, 'rgba(254, 240, 138, 0.26)');
         cone.addColorStop(1, 'rgba(254, 240, 138, 0.02)');
         ctx.fillStyle = cone;
         ctx.beginPath();
@@ -1222,7 +1393,7 @@ const GarageWorkshopDiorama: React.FC<{
         ctx.closePath();
         ctx.fill();
 
-        // Render Live Armored Bus right inside the Workshop!
+        // Render Live HD Armored Bus right inside the Workshop!
         const maxHp = 200 + progress.busHpBonus;
         renderArmoredBus(
           ctx,
@@ -1261,7 +1432,9 @@ const GarageWorkshopDiorama: React.FC<{
             sp.vy *= -0.45;
           }
           ctx.fillStyle = sp.color;
-          ctx.fillRect(Math.round(sp.x), Math.round(sp.y), 2, 2);
+          ctx.beginPath();
+          ctx.arc(sp.x, sp.y, 1.3, 0, Math.PI * 2);
+          ctx.fill();
           if (sp.life <= 0) sparksRef.current.splice(i, 1);
         }
       }
@@ -1278,7 +1451,7 @@ const GarageWorkshopDiorama: React.FC<{
         ref={canvasRef}
         width={380}
         height={122}
-        className="w-full sm:w-[380px] h-[116px] object-contain pixel-canvas rounded border border-zinc-800"
+        className="w-full sm:w-[380px] h-[116px] object-contain hd-canvas rounded border border-zinc-800"
       />
       <div className="flex-1 text-left space-y-1">
         <div className="font-pixel text-[10px] text-amber-300">

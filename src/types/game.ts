@@ -105,8 +105,9 @@ export interface PlayerProgress {
   fuel: number;
   maxFuel: number;
   supplies: number;
-  busLevel: number; // Commander / Bus Level (unlocks new units!)
+  busLevel: number; // Commander Level 1..12 (unlocks new units solely via combat XP!)
   commanderXp: number;
+  equippedDeck: SurvivorType[]; // Up to 6 active squad slots for battle HUD
   busHpBonus: number;
   billDamageBonus: number;
   spikedBumper: boolean;
@@ -117,6 +118,51 @@ export interface PlayerProgress {
   discoveredCaches: string[];
 }
 
+export const MAX_COMMANDER_LEVEL = 12;
+export const MAX_EQUIPPED_DECK = 6;
+
+export const SURVIVOR_ORDER: SurvivorType[] = [
+  'redneck',
+  'farmer',
+  'builder',
+  'mechanic',
+  'hound',
+  'policeman',
+  'sniper',
+  'flamethrower',
+  'turret',
+  'drone',
+  'juggernaut',
+];
+
+export const XP_THRESHOLDS: Record<number, number> = {
+  1: 110,  // Nv.1 -> Nv.2 (Farmer)
+  2: 155,  // Nv.2 -> Nv.3 (Builder)
+  3: 200,  // Nv.3 -> Nv.4 (Mechanic)
+  4: 250,  // Nv.4 -> Nv.5 (Perro K-9 Rex)
+  5: 305,  // Nv.5 -> Nv.6 (Policeman Diaz)
+  6: 365,  // Nv.6 -> Nv.7 (Sniper Polina)
+  7: 430,  // Nv.7 -> Nv.8 (Pyro Lanzallamas)
+  8: 500,  // Nv.8 -> Nv.9 (Torreta Gatling)
+  9: 575,  // Nv.9 -> Nv.10 (Dron MQ-9)
+  10: 655, // Nv.10 -> Nv.11 (Juggernaut)
+  11: 750, // Nv.11 -> Nv.12 (Maestría de Comandante +10% Global)
+};
+
+export function getXpForNextLevel(level: number): number {
+  if (level >= MAX_COMMANDER_LEVEL) return XP_THRESHOLDS[11];
+  return XP_THRESHOLDS[level] ?? 750;
+}
+
+export const ZOMBIE_XP_REWARD: Record<ZombieType, number> = {
+  walker: 8,
+  skeleton: 9,
+  runner: 12,
+  crit_zombie: 15,
+  armored: 20,
+  bloated: 24,
+};
+
 export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
   redneck: {
     id: 'redneck',
@@ -124,17 +170,17 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     roleTitle: 'Campesino con Pala',
     unlockLevel: 1,
     cost: 15,
-    prepTime: 4.0,
-    baseHp: 42,
-    baseDamage: 14,
-    fortune: 25,
-    speed: 55,
+    prepTime: 3.6,
+    baseHp: 46,
+    baseDamage: 15,
+    fortune: 28,
+    speed: 56,
     attackRange: 22,
-    attackCooldown: 0.8,
+    attackCooldown: 0.78,
     isRanged: false,
-    knockback: 10,
+    knockback: 11,
     infectedZombieType: 'runner',
-    description: 'Despliegue veloz y empuje constante. Si muere sin quemarse, puede levantarse infectado.',
+    description: 'Nv.1 Inicial: Despliegue veloz y empuje constante. Tu primer luchador para abrir camino.',
     quotes: ['¡Por mi granja!', '¡Toma pala!', '¡Yee-haw!', '¡Atrás, podridos!'],
     hotkey: '1',
   },
@@ -142,22 +188,22 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     id: 'farmer',
     name: 'Farmer',
     roleTitle: 'Granjero Escopetero',
-    unlockLevel: 1,
+    unlockLevel: 2,
     cost: 20,
-    prepTime: 8.0,
-    baseHp: 36,
+    prepTime: 7.5,
+    baseHp: 38,
     baseDamage: 8, // x4 perdigones = 32 daño en cono
     fortune: 28,
     speed: 26,
-    attackRange: 132,
-    attackCooldown: 1.4,
+    attackRange: 134,
+    attackCooldown: 1.38,
     isRanged: true,
     pellets: 4,
     magSize: 2,
-    reloadTime: 1.95,
+    reloadTime: 1.9,
     knockback: 22,
     infectedZombieType: 'walker',
-    description: 'Dispara 4 perdigones en abanico con gran retroceso y recarga ágil cada 2 tiros.',
+    description: 'Desbloquea Nv.2: Dispara 4 perdigones en abanico con gran retroceso cada 2 cartuchos.',
     quotes: ['¡Fuera de mis tierras!', '¡Plomo para todos!', '¡A comer perdigones!'],
     hotkey: '2',
   },
@@ -165,22 +211,22 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     id: 'builder',
     name: 'Builder',
     roleTitle: 'Demoledor Blindado',
-    unlockLevel: 1,
+    unlockLevel: 3,
     cost: 25,
-    prepTime: 9.5,
-    baseHp: 78,
+    prepTime: 9.2,
+    baseHp: 82,
     baseDamage: 16,
     fortune: 32,
     speed: 30,
     attackRange: 24,
-    attackCooldown: 1.15,
+    attackCooldown: 1.12,
     isRanged: false,
     knockback: 22,
     bulletResist: 0.5,
     meleeResist: 0.35,
     barricadeMultiplier: 2.0,
     infectedZombieType: 'armored',
-    description: 'Casco y chaleco anticorte (-35% daño melee). Hace doble daño a la barricada.',
+    description: 'Desbloquea Nv.3: Casco y chaleco anticorte (-35% daño melee). Doble daño a la barricada.',
     quotes: ['¡A demoler!', '¡Casco puesto!', '¡Rompiendo chatarra!'],
     hotkey: '3',
   },
@@ -188,10 +234,10 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     id: 'mechanic',
     name: 'Mechanic',
     roleTitle: 'Asesino & Reparador',
-    unlockLevel: 1,
+    unlockLevel: 4,
     cost: 20,
     prepTime: 7.0,
-    baseHp: 42,
+    baseHp: 44,
     baseDamage: 16,
     fortune: 40,
     speed: 58,
@@ -203,7 +249,7 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     firstHitCritMultiplier: 3.2,
     barricadeMultiplier: 1.5,
     infectedZombieType: 'runner',
-    description: 'Repara +30 HP del autobús al salir y su primer mazazo ejecuta un crítico demoledor x3.2.',
+    description: 'Desbloquea Nv.4: Repara +30 HP del autobús al salir y su primer mazazo hace crítico x3.2.',
     quotes: ['¡Chasis reparado!', '¡Llave inglesa lista!', '¡Primer golpe!'],
     hotkey: '4',
   },
@@ -211,10 +257,10 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     id: 'hound',
     name: 'Perro K-9 Rex',
     roleTitle: 'Sabueso de Ataque',
-    unlockLevel: 2,
+    unlockLevel: 5,
     cost: 12,
     prepTime: 3.4,
-    baseHp: 34,
+    baseHp: 36,
     baseDamage: 17,
     fortune: 48,
     speed: 86,
@@ -223,7 +269,7 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     isRanged: false,
     knockback: 14,
     isDog: true,
-    description: 'Desbloquea Nv.2: Perro militar ultrarrápido que intercepta corredores y jamás revive infectado.',
+    description: 'Desbloquea Nv.5: Perro militar ultrarrápido que caza corredores y jamás revive infectado.',
     quotes: ['¡Grrrr! ¡Guau!', '¡K-9 al ataque!'],
     hotkey: '5',
   },
@@ -231,14 +277,14 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     id: 'policeman',
     name: 'Policeman Diaz',
     roleTitle: 'Escopetero Pesado',
-    unlockLevel: 2,
+    unlockLevel: 6,
     cost: 25,
     prepTime: 10.5,
-    baseHp: 92,
+    baseHp: 94,
     baseDamage: 8, // x4 perdigones
     fortune: 35,
     speed: 24,
-    attackRange: 124,
+    attackRange: 126,
     attackCooldown: 1.15,
     isRanged: true,
     pellets: 4,
@@ -248,7 +294,7 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     bulletResist: 0.5,
     meleeResist: 0.5,
     infectedZombieType: 'armored',
-    description: 'Desbloquea Nv.2: Tanque escopetero con 50% de defensa cuerpo a cuerpo y 4 cartuchos.',
+    description: 'Desbloquea Nv.6: Tanque escopetero con 50% de defensa cuerpo a cuerpo y 4 cartuchos.',
     quotes: ['¡Alto ahí!', '¡Código 10-99!', '¡Ley y plomo!'],
     hotkey: '6',
   },
@@ -256,11 +302,11 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     id: 'sniper',
     name: 'Sniper Polina',
     roleTitle: 'Francotiradora Élite',
-    unlockLevel: 3,
+    unlockLevel: 7,
     cost: 30,
     prepTime: 11.0,
-    baseHp: 34,
-    baseDamage: 72,
+    baseHp: 36,
+    baseDamage: 74,
     fortune: 55,
     speed: 24,
     attackRange: 340,
@@ -272,7 +318,7 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     knockback: 28,
     armorPiercing: 0.75,
     infectedZombieType: 'walker',
-    description: 'Desbloquea Nv.3: Disparo supersónico con guía láser que perfora el 75% del blindaje.',
+    description: 'Desbloquea Nv.7: Disparo supersónico con guía láser que perfora el 75% del blindaje.',
     quotes: ['Un tiro, una baja.', 'Objetivo en la mira.', 'Sin escapatoria.'],
     hotkey: '7',
   },
@@ -280,14 +326,14 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     id: 'flamethrower',
     name: 'Pyro Lanzallamas',
     roleTitle: 'Incinerador Pesado',
-    unlockLevel: 4,
+    unlockLevel: 8,
     cost: 30,
     prepTime: 11.5,
-    baseHp: 72,
+    baseHp: 74,
     baseDamage: 12,
     fortune: 40,
     speed: 28,
-    attackRange: 94,
+    attackRange: 96,
     attackCooldown: 0.34,
     isRanged: true,
     pellets: 2,
@@ -298,7 +344,7 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     meleeResist: 0.2,
     isFlame: true,
     infectedZombieType: 'bloated',
-    description: 'Desbloquea Nv.4: Rocia fuego continuo que derrite blindajes y calcina cadáveres infectados.',
+    description: 'Desbloquea Nv.8: Rocia fuego continuo que derrite blindajes y calcina cadáveres infectados.',
     quotes: ['¡Fuego purificador!', '¡Que arda todo!', '¡Calor extremo!'],
     hotkey: '8',
   },
@@ -306,10 +352,10 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     id: 'turret',
     name: 'Torreta Gatling',
     roleTitle: 'Centinela Automática',
-    unlockLevel: 5,
+    unlockLevel: 9,
     cost: 25,
     prepTime: 12.0,
-    baseHp: 105,
+    baseHp: 108,
     baseDamage: 9,
     fortune: 35,
     speed: 0,
@@ -323,7 +369,7 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     bulletResist: 0.7,
     meleeResist: 0.25,
     isStationary: true,
-    description: 'Desbloquea Nv.5: Torreta trípode rotativa que barre la carretera expulsando casquillos.',
+    description: 'Desbloquea Nv.9: Torreta trípode rotativa que barre la carretera expulsando casquillos.',
     quotes: ['[SISTEMA CENTINELA ACTIVO]', '[RÁFAGA AUTOMÁTICA]'],
     hotkey: '9',
   },
@@ -331,10 +377,10 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     id: 'drone',
     name: 'Dron MQ-9',
     roleTitle: 'Apoyo Aéreo Táctico',
-    unlockLevel: 6,
+    unlockLevel: 10,
     cost: 25,
     prepTime: 11.0,
-    baseHp: 48,
+    baseHp: 50,
     baseDamage: 15,
     fortune: 50,
     speed: 44,
@@ -347,7 +393,7 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     knockback: 8,
     armorPiercing: 0.4,
     isFlying: true,
-    description: 'Desbloquea Nv.6: Dron militar volador inmune a zombis terrestres con foco y fuego aéreo.',
+    description: 'Desbloquea Nv.10: Dron militar volador inmune a zombis terrestres con foco y fuego aéreo.',
     quotes: ['[DRON EN VUELO]', '[OBJETIVO FIJADO]'],
     hotkey: '0',
   },
@@ -355,11 +401,11 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     id: 'juggernaut',
     name: 'Juggernaut',
     roleTitle: 'Coloso Spec-Ops',
-    unlockLevel: 7,
+    unlockLevel: 11,
     cost: 35,
     prepTime: 14.0,
-    baseHp: 185,
-    baseDamage: 30,
+    baseHp: 190,
+    baseDamage: 32,
     fortune: 45,
     speed: 22,
     attackRange: 28,
@@ -370,11 +416,33 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     meleeResist: 0.45,
     barricadeMultiplier: 2.5,
     infectedZombieType: 'bloated',
-    description: 'Desbloquea Nv.7: Supersoldado acorazado (-45% daño melee) con mazo de choque sísmico.',
+    description: 'Desbloquea Nv.11: Supersoldado acorazado (-45% daño melee) con mazo de choque sísmico.',
     quotes: ['¡Imparable!', '¡Blindaje máximo!', '¡Aplastando cráneos!'],
     hotkey: '-',
   },
 };
+
+export function isUnitUnlocked(type: SurvivorType, commanderLevel: number): boolean {
+  return commanderLevel >= SURVIVOR_CONFIGS[type].unlockLevel;
+}
+
+export function getUnitUnlockedAtLevel(commanderLevel: number): SurvivorConfig | null {
+  for (const id of SURVIVOR_ORDER) {
+    if (SURVIVOR_CONFIGS[id].unlockLevel === commanderLevel) {
+      return SURVIVOR_CONFIGS[id];
+    }
+  }
+  return null;
+}
+
+export function getNextLockedUnit(commanderLevel: number): SurvivorConfig | null {
+  for (const id of SURVIVOR_ORDER) {
+    if (SURVIVOR_CONFIGS[id].unlockLevel > commanderLevel) {
+      return SURVIVOR_CONFIGS[id];
+    }
+  }
+  return null;
+}
 
 export const TACTICAL_ITEM_CONFIGS: Record<TacticalItemType, TacticalItemConfig> = {
   blue_barrel: {
@@ -515,16 +583,16 @@ export const MISSION_NODES: MissionNode[] = [
     sector: 'Sector 1 — Bosque Sur',
     difficulty: 'EASY',
     biome: 'forest_highway',
-    barricadeHp: 620,
+    barricadeHp: 540,
     fuelCost: 2,
-    coinsReward: 85,
+    coinsReward: 95,
     supplyReward: 'Chatarra Militar',
     mapX: 7,
     mapY: 64,
     waveInterval: 7.4,
     zombiePool: ['walker', 'walker', 'walker', 'runner'],
     skeletonAmbush: false,
-    description: 'Ruta 14 bloqueada en el bosque. Despliega escopeteros y palas para abrir paso al autobús.',
+    description: 'Ruta 14 bloqueada en el bosque. Despliega a tu Campesino, gana XP abatiendo infectados y desbloquea refuerzos en vivo.',
   },
   {
     id: 2,

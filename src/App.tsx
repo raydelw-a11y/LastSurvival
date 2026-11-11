@@ -1,24 +1,39 @@
-import React, { useEffect, useState } from 'react';
-import { MISSION_NODES, MissionNode, PlayerProgress, SurvivorType } from './types/game';
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  isUnitUnlocked,
+  MAX_COMMANDER_LEVEL,
+  MAX_EQUIPPED_DECK,
+  MISSION_NODES,
+  MissionNode,
+  PlayerProgress,
+  SURVIVOR_ORDER,
+  SurvivorType,
+} from './types/game';
 import { PrivateAccess } from './components/PrivateAccess';
 import { RoadMapHub } from './components/RoadMapHub';
 import { BattleArena } from './components/BattleArena';
 import { soundFX } from './engine/SoundFX';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '6:41 PM - 11/10/2026';
+const FALLBACK_TIMESTAMP = '10:38 PM - 11/10/2026';
 export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 
-const STORAGE_KEY = 'last_survival_dead_ahead_v3';
+const STORAGE_KEY = 'last_survival_dead_ahead_v4';
+const LEGACY_STORAGE_KEYS = [
+  'last_survival_dead_ahead_v1',
+  'last_survival_dead_ahead_v2',
+  'last_survival_dead_ahead_v3',
+];
 
 const INITIAL_PROGRESS: PlayerProgress = {
-  coins: 195,
+  coins: 120,
   fuel: 20,
   maxFuel: 20,
   supplies: 3,
   busLevel: 1,
   commanderXp: 0,
+  equippedDeck: ['redneck'],
   busHpBonus: 0,
   billDamageBonus: 0,
   spikedBumper: false,
@@ -37,18 +52,55 @@ const INITIAL_PROGRESS: PlayerProgress = {
     juggernaut: 1,
   },
   missionStars: {},
-  unlockedMissions: [1, 2, 3],
+  unlockedMissions: [1],
   discoveredCaches: [],
 };
+
+function sanitizeProgress(rawObj: Partial<PlayerProgress>): PlayerProgress {
+  const lvl = Math.max(1, Math.min(MAX_COMMANDER_LEVEL, Math.floor(rawObj.busLevel ?? 1)));
+  const rawDeck = Array.isArray(rawObj.equippedDeck) ? rawObj.equippedDeck : [];
+  const validDeck: SurvivorType[] = [];
+  for (const u of rawDeck) {
+    if (
+      SURVIVOR_ORDER.includes(u) &&
+      isUnitUnlocked(u, lvl) &&
+      !validDeck.includes(u) &&
+      validDeck.length < MAX_EQUIPPED_DECK
+    ) {
+      validDeck.push(u);
+    }
+  }
+  if (validDeck.length === 0) {
+    validDeck.push('redneck');
+  }
+  return {
+    ...INITIAL_PROGRESS,
+    ...rawObj,
+    busLevel: lvl,
+    commanderXp: Math.max(0, Math.floor(rawObj.commanderXp ?? 0)),
+    equippedDeck: validDeck,
+    unitLevels: {
+      ...INITIAL_PROGRESS.unitLevels,
+      ...(rawObj.unitLevels || {}),
+    },
+    unlockedMissions:
+      Array.isArray(rawObj.unlockedMissions) && rawObj.unlockedMissions.length > 0
+        ? rawObj.unlockedMissions
+        : [1],
+  };
+}
 
 export function App() {
   const [unlockedApp, setUnlockedApp] = useState<boolean>(false);
   const [isPortrait, setIsPortrait] = useState<boolean>(false);
   const [progress, setProgress] = useState<PlayerProgress>(() => {
     try {
+      for (const oldKey of LEGACY_STORAGE_KEYS) {
+        localStorage.removeItem(oldKey);
+      }
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
-        return { ...INITIAL_PROGRESS, ...JSON.parse(raw) };
+        return sanitizeProgress(JSON.parse(raw));
       }
     } catch {
       // Ignore storage error
@@ -57,7 +109,6 @@ export function App() {
   });
 
   const [selectedMissionId, setSelectedMissionId] = useState<number>(1);
-  // Start directly in Mission 1 Battle Arena upon unlocking so the screen matches the gameplay screenshot!
   const [activeBattleMission, setActiveBattleMission] = useState<MissionNode | null>(
     MISSION_NODES[0]
   );
@@ -83,9 +134,8 @@ export function App() {
     }
   }, [progress]);
 
-  const handleUnlock = () => {
+  const handleUnlock = useCallback(() => {
     setUnlockedApp(true);
-    // Attempt native landscape lock on supported mobile browsers
     try {
       const orient = screen.orientation as unknown as { lock?: (mode: string) => Promise<void> };
       if (orient && orient.lock) {
@@ -94,33 +144,9 @@ export function App() {
     } catch {
       // Ignore
     }
-  };
+  }, []);
 
-  if (!unlockedApp) {
-    return <PrivateAccess onUnlock={handleUnlock} buildTimestamp={BUILD_TS} />;
-  }
-
-  // Strictly Horizontal (Landscape Only) Enforcement Screen when device is held vertically
-  if (isPortrait) {
-    return (
-      <div className="fixed inset-0 z-50 bg-zinc-950 flex flex-col items-center justify-center p-6 text-center select-none">
-        <div className="w-20 h-20 rounded-2xl bg-yellow-500/15 border-2 border-yellow-400 flex items-center justify-center mb-4">
-          <Smartphone className="w-10 h-10 text-yellow-400 -rotate-90 animate-pulse" />
-        </div>
-        <h2 className="font-pixel text-sm sm:text-base text-yellow-400 mb-2">
-          MODO ESTRICTAMENTE HORIZONTAL
-        </h2>
-        <p className="text-xs text-zinc-300 max-w-xs leading-relaxed">
-          Por favor, <strong className="text-white">gira tu móvil en posición horizontal</strong> para jugar a <em>Dead Ahead: Last Survival</em> a pantalla completa.
-        </p>
-        <div className="fixed bottom-2 right-3 text-[10px] text-zinc-400/90 font-mono bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
-          Actualizado: {BUILD_TS}
-        </div>
-      </div>
-    );
-  }
-
-  const handleLaunchMission = (mission: MissionNode) => {
+  const handleLaunchMission = useCallback((mission: MissionNode) => {
     soundFX.resumeFromBackground();
     soundFX.playUnitSpawn();
     setProgress((prev) => ({
@@ -128,93 +154,155 @@ export function App() {
       fuel: prev.fuel >= mission.fuelCost ? prev.fuel - mission.fuelCost : prev.maxFuel,
     }));
     setActiveBattleMission(mission);
-  };
+  }, []);
 
-  const handleVictory = (stars: number, coinsEarned: number) => {
-    if (!activeBattleMission) return;
-    const mId = activeBattleMission.id;
-    const nextId = mId + 1;
-
-    setProgress((prev) => {
-      const currentStars = prev.missionStars[mId] || 0;
-      const unlocked = prev.unlockedMissions.includes(nextId)
-        ? prev.unlockedMissions
-        : nextId <= MISSION_NODES.length
-        ? [...prev.unlockedMissions, nextId]
-        : prev.unlockedMissions;
-
-      return {
-        ...prev,
-        coins: prev.coins + coinsEarned,
-        missionStars: {
-          ...prev.missionStars,
-          [mId]: Math.max(currentStars, stars),
-        },
-        unlockedMissions: unlocked,
-      };
-    });
-
-    if (nextId <= MISSION_NODES.length) {
-      setSelectedMissionId(nextId);
-    }
+  const handleRetreat = useCallback(() => {
     setActiveBattleMission(null);
-  };
+  }, []);
 
-  const handleUpgradeSurvivor = (type: SurvivorType, cost: number) => {
-    if (progress.coins < cost) return;
-    soundFX.playCouragePickup();
-    setProgress((prev) => ({
-      ...prev,
-      coins: prev.coins - cost,
-      unitLevels: {
-        ...prev.unitLevels,
-        [type]: (prev.unitLevels[type] || 1) + 1,
-      },
-    }));
-  };
+  const handleVictory = useCallback(
+    (stars: number, coinsEarned: number) => {
+      setActiveBattleMission((currentMission) => {
+        if (!currentMission) return null;
+        const mId = currentMission.id;
+        const nextId = mId + 1;
 
-  const handleUpgradeBusStat = (
-    kind: 'hp' | 'bill' | 'bumper' | 'armor' | 'commander_level',
-    cost: number
-  ) => {
-    if (progress.coins < cost) return;
-    soundFX.playCouragePickup();
+        setProgress((prev) => {
+          const currentStars = prev.missionStars[mId] || 0;
+          const unlocked = prev.unlockedMissions.includes(nextId)
+            ? prev.unlockedMissions
+            : nextId <= MISSION_NODES.length
+            ? [...prev.unlockedMissions, nextId]
+            : prev.unlockedMissions;
+
+          return {
+            ...prev,
+            coins: prev.coins + coinsEarned,
+            missionStars: {
+              ...prev.missionStars,
+              [mId]: Math.max(currentStars, stars),
+            },
+            unlockedMissions: unlocked,
+          };
+        });
+
+        if (nextId <= MISSION_NODES.length) {
+          setSelectedMissionId(nextId);
+        }
+        return null;
+      });
+    },
+    []
+  );
+
+  const handleUpgradeSurvivor = useCallback((type: SurvivorType, cost: number) => {
     setProgress((prev) => {
-      if (kind === 'commander_level') {
-        return {
-          ...prev,
-          coins: prev.coins - cost,
-          busLevel: Math.min(10, (prev.busLevel || 1) + 1),
-          commanderXp: 0,
-        };
-      }
-      if (kind === 'hp') {
-        return { ...prev, coins: prev.coins - cost, busHpBonus: prev.busHpBonus + 50 };
-      }
-      if (kind === 'bill') {
-        return { ...prev, coins: prev.coins - cost, billDamageBonus: prev.billDamageBonus + 8 };
-      }
-      if (kind === 'bumper') {
-        return { ...prev, coins: prev.coins - cost, spikedBumper: true };
-      }
+      if (prev.coins < cost || !isUnitUnlocked(type, prev.busLevel)) return prev;
+      soundFX.playCouragePickup();
       return {
         ...prev,
         coins: prev.coins - cost,
-        weldedArmor: true,
-        busHpBonus: prev.busHpBonus + 80,
+        unitLevels: {
+          ...prev.unitLevels,
+          [type]: (prev.unitLevels[type] || 1) + 1,
+        },
       };
     });
-  };
+  }, []);
 
-  const handleLevelUpCommanderLive = (newLevel: number, newXp: number) => {
-    setProgress((prev) => ({
-      ...prev,
-      busLevel: Math.max(prev.busLevel || 1, newLevel),
-      commanderXp: newXp,
-    }));
-  };
+  const handleUpgradeBusStat = useCallback(
+    (kind: 'hp' | 'bill' | 'bumper' | 'armor', cost: number) => {
+      setProgress((prev) => {
+        if (prev.coins < cost) return prev;
+        soundFX.playCouragePickup();
+        if (kind === 'hp') {
+          return { ...prev, coins: prev.coins - cost, busHpBonus: prev.busHpBonus + 50 };
+        }
+        if (kind === 'bill') {
+          return { ...prev, coins: prev.coins - cost, billDamageBonus: prev.billDamageBonus + 8 };
+        }
+        if (kind === 'bumper') {
+          return { ...prev, coins: prev.coins - cost, spikedBumper: true };
+        }
+        return {
+          ...prev,
+          coins: prev.coins - cost,
+          weldedArmor: true,
+          busHpBonus: prev.busHpBonus + 80,
+        };
+      });
+    },
+    []
+  );
 
-  const handleCollectCache = (cacheId: string, coins: number, fuel: number) => {
+  const handleLevelUpCommanderLive = useCallback((newLevel: number, newXp: number) => {
+    setProgress((prev) => {
+      const clampedLevel = Math.min(MAX_COMMANDER_LEVEL, Math.max(prev.busLevel || 1, newLevel));
+      const nextDeck = [...prev.equippedDeck];
+
+      // Auto-equip any newly unlocked units if the active 6-slot squad has space!
+      if (clampedLevel > prev.busLevel) {
+        for (const id of SURVIVOR_ORDER) {
+          if (
+            isUnitUnlocked(id, clampedLevel) &&
+            !isUnitUnlocked(id, prev.busLevel) &&
+            !nextDeck.includes(id) &&
+            nextDeck.length < MAX_EQUIPPED_DECK
+          ) {
+            nextDeck.push(id);
+          }
+        }
+      }
+
+      return {
+        ...prev,
+        busLevel: clampedLevel,
+        commanderXp: Math.max(0, Math.floor(newXp)),
+        equippedDeck: nextDeck,
+      };
+    });
+  }, []);
+
+  const handleToggleDeckUnit = useCallback((type: SurvivorType) => {
+    setProgress((prev) => {
+      if (!isUnitUnlocked(type, prev.busLevel)) return prev;
+      const exists = prev.equippedDeck.includes(type);
+      if (exists) {
+        if (prev.equippedDeck.length <= 1) return prev; // Keep at least 1 unit equipped
+        soundFX.playCouragePickup();
+        return {
+          ...prev,
+          equippedDeck: prev.equippedDeck.filter((u) => u !== type),
+        };
+      }
+      soundFX.playUnitSpawn();
+      if (prev.equippedDeck.length < MAX_EQUIPPED_DECK) {
+        return {
+          ...prev,
+          equippedDeck: [...prev.equippedDeck, type],
+        };
+      }
+      // Replace the oldest slot except keep 5 newest + new selection
+      return {
+        ...prev,
+        equippedDeck: [...prev.equippedDeck.slice(1), type],
+      };
+    });
+  }, []);
+
+  const handleResetProgress = useCallback(() => {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // Ignore
+    }
+    soundFX.playExplosion();
+    setProgress(INITIAL_PROGRESS);
+    setSelectedMissionId(1);
+    setActiveBattleMission(null);
+  }, []);
+
+  const handleCollectCache = useCallback((cacheId: string, coins: number, fuel: number) => {
     setProgress((prev) => {
       if (prev.discoveredCaches.includes(cacheId)) return prev;
       return {
@@ -224,21 +312,27 @@ export function App() {
         discoveredCaches: [...prev.discoveredCaches, cacheId],
       };
     });
-  };
+  }, []);
 
-  const handleRefillFuel = () => {
+  const handleRefillFuel = useCallback(() => {
     soundFX.playCouragePickup();
     setProgress((prev) => ({ ...prev, fuel: prev.maxFuel }));
-  };
+  }, []);
+
+  if (!unlockedApp) {
+    return <PrivateAccess onUnlock={handleUnlock} buildTimestamp={BUILD_TS} />;
+  }
 
   return (
-    <div className="relative w-screen h-[100dvh] bg-[#322f24] overflow-hidden">
+    <div className="relative w-screen h-[100dvh] bg-[#18191c] overflow-hidden">
+      {/* Keep BattleArena / RoadMapHub mounted even if phone rotates so zero units are ever lost! */}
       {activeBattleMission ? (
         <BattleArena
           mission={activeBattleMission}
           progress={progress}
+          isPortrait={isPortrait}
           onVictory={handleVictory}
-          onRetreat={() => setActiveBattleMission(null)}
+          onRetreat={handleRetreat}
           onLevelUpCommander={handleLevelUpCommanderLive}
         />
       ) : (
@@ -249,12 +343,30 @@ export function App() {
           onLaunchMission={handleLaunchMission}
           onUpgradeSurvivor={handleUpgradeSurvivor}
           onUpgradeBusStat={handleUpgradeBusStat}
+          onToggleDeckUnit={handleToggleDeckUnit}
+          onResetProgress={handleResetProgress}
           onCollectCache={handleCollectCache}
           onRefillFuel={handleRefillFuel}
         />
       )}
 
-      {/* Global Verification Timestamp in Bottom-Right Corner (Safe from iOS landscape corners) */}
+      {/* Strictly Horizontal Enforcement Overlay (never unmounts BattleArena!) */}
+      {isPortrait && (
+        <div className="fixed inset-0 z-[9998] bg-zinc-950/98 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center select-none">
+          <div className="w-20 h-20 rounded-2xl bg-yellow-500/15 border-2 border-yellow-400 flex items-center justify-center mb-4">
+            <Smartphone className="w-10 h-10 text-yellow-400 -rotate-90 animate-pulse" />
+          </div>
+          <h2 className="font-pixel text-base sm:text-lg text-yellow-400 mb-2">
+            MODO ESTRICTAMENTE HORIZONTAL
+          </h2>
+          <p className="text-xs text-zinc-300 max-w-xs leading-relaxed">
+            La batalla está <strong className="text-emerald-400">pausada de forma segura</strong>.{' '}
+            <strong className="text-white">Gira tu móvil en posición horizontal</strong> para continuar sin perder tus unidades.
+          </p>
+        </div>
+      )}
+
+      {/* Global Verification Timestamp in Bottom-Right Corner */}
       <div className="fixed bottom-2 right-3 z-[9999] text-[10px] sm:text-[11px] text-yellow-300 font-mono font-semibold bg-black/85 px-2.5 py-0.5 rounded border border-yellow-500/60 shadow-lg pointer-events-none">
         Actualizado: {BUILD_TS}
       </div>

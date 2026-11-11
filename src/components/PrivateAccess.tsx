@@ -5,6 +5,7 @@ import {
   LOGICAL_WIDTH,
   renderArmoredBus,
   renderBiomeBackground,
+  syncCanvasHiDPI,
 } from '../engine/PixelArtRenderer';
 import { soundFX } from '../engine/SoundFX';
 
@@ -28,10 +29,11 @@ export const PrivateAccess: React.FC<PrivateAccessProps> = ({ onUnlock, buildTim
       if (now - lastDraw < 42) return;
       lastDraw = now;
 
-      const ctx = bgCanvasRef.current?.getContext('2d');
+      const canvas = bgCanvasRef.current;
+      if (!canvas) return;
+      const ctx = syncCanvasHiDPI(canvas, LOGICAL_WIDTH, LOGICAL_HEIGHT);
       if (!ctx) return;
       const t = now * 0.001;
-      ctx.imageSmoothingEnabled = false;
 
       renderBiomeBackground(ctx, 'graveyard', t, 3);
       renderArmoredBus(ctx, 26, 118, 260, 260, t, 2.0, 0, true, true, 0);
@@ -78,7 +80,7 @@ export const PrivateAccess: React.FC<PrivateAccessProps> = ({ onUnlock, buildTim
         ref={bgCanvasRef}
         width={LOGICAL_WIDTH}
         height={LOGICAL_HEIGHT}
-        className="pointer-events-none absolute inset-0 w-full h-full object-cover pixel-canvas opacity-45"
+        className="pointer-events-none absolute inset-0 w-full h-full object-cover hd-canvas opacity-50"
       />
 
       {/* Dark Radial Vignette + Subtle CRT Scanlines */}
