@@ -171,7 +171,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   const [zombiesKilledCount, setZombiesKilledCount] = useState<number>(0);
   const [showDpad, setShowDpad] = useState<boolean>(false);
 
-  const initialSector = mission.id <= 3 ? 1 : mission.id <= 6 ? 2 : mission.id <= 9 ? 3 : 4;
+  const initialSector =
+    mission.id <= 6 ? 1 : mission.id <= 12 ? 2 : mission.id <= 18 ? 3 : 4;
 
   // Mutable Simulation Ref
   const simRef = useRef({
@@ -565,8 +566,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       const spawnY =
         customY ?? ROAD_Y_MIN + 8 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 16);
       const isEmerging = (cfg.emergesFromGround && customX !== undefined) || fromCorpse;
-      // Gentle late-campaign scaling (+3% HP per mission past M1) while keeping M1 crisp
-      const missionScale = 1 + Math.max(0, mission.id - 1) * 0.035;
+      // Gentle 24-mission campaign scaling (+1.8% HP per mission past M1) while keeping M1 crisp
+      const missionScale = 1 + Math.max(0, mission.id - 1) * 0.018;
       const scaledMaxHp = Math.round(cfg.baseHp * missionScale);
       const initialHp = Math.max(12, Math.round(scaledMaxHp * hpScale));
 
@@ -574,7 +575,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         id: `z_${Date.now()}_${Math.random()}`,
         team: 'zombie',
         subType: type,
-        level: Math.min(12, mission.id + 1),
+        level: Math.min(12, 1 + Math.floor(mission.id / 2)),
         x: spawnX,
         y: spawnY,
         z: 0,
@@ -1075,32 +1076,32 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   useEffect(() => {
     initDecalCanvas();
 
-    // Fair Mission-Scaled Opening Guard (NO Bloated/Crit/Armored wall in Mission 1!)
+    // Fair 24-Mission Scaled Opening Guard (NO Bloated/Crit/Armored wall in early Sector 1!)
     simRef.current.units = [];
     if (mission.id === 1) {
       // Staggered 105px apart so player's first Redneck fights 1v1 cleanly!
       spawnZombie('walker', 485, 212);
       spawnZombie('walker', 590, 248);
-    } else if (mission.id === 2) {
+    } else if (mission.id <= 3) {
       spawnZombie('walker', 490, 210);
       spawnZombie('walker', 555, 250);
       spawnZombie('runner', 595, 228);
-    } else if (mission.id === 3) {
+    } else if (mission.id <= 6) {
       spawnZombie('walker', 490, 208);
       spawnZombie('walker', 545, 250);
       spawnZombie('runner', 585, 224);
-      spawnZombie('skeleton', 520, 236);
-    } else if (mission.id === 4) {
+      spawnZombie(mission.skeletonAmbush ? 'skeleton' : 'walker', 520, 236);
+    } else if (mission.id <= 8) {
       spawnZombie('walker', 495, 212);
       spawnZombie('walker', 545, 252);
       spawnZombie('runner', 575, 222);
       spawnZombie('armored', 598, 240);
-    } else if (mission.id <= 6) {
+    } else if (mission.id <= 12) {
       spawnZombie('walker', 495, 208);
       spawnZombie('runner', 540, 248);
       spawnZombie('crit_zombie', 575, 220);
       spawnZombie('armored', 598, 242);
-    } else if (mission.id <= 9) {
+    } else if (mission.id <= 18) {
       spawnZombie('walker', 490, 208);
       spawnZombie('runner', 532, 248);
       spawnZombie('crit_zombie', 562, 218);
@@ -1114,7 +1115,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       spawnZombie('bloated', 602, 232);
     }
 
-    const sector = mission.id <= 3 ? 1 : mission.id <= 6 ? 2 : mission.id <= 9 ? 3 : 4;
+    const sector = mission.id <= 6 ? 1 : mission.id <= 12 ? 2 : mission.id <= 18 ? 3 : 4;
     const maxActiveZombies =
       mission.id === 1 ? 7 : sector === 1 ? 8 : sector === 2 ? 10 : sector === 3 ? 12 : 15;
 

@@ -15,7 +15,7 @@ import { BattleArena } from './components/BattleArena';
 import { soundFX } from './engine/SoundFX';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '6:17 AM - 11/11/2026';
+const FALLBACK_TIMESTAMP = '6:45 AM - 11/11/2026';
 export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 const CURRENT_BUILD_ID = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : '';
@@ -95,10 +95,23 @@ function sanitizeProgress(rawObj: Partial<PlayerProgress>): PlayerProgress {
       ...INITIAL_PROGRESS.unitLevels,
       ...(rawObj.unitLevels || {}),
     },
-    unlockedMissions:
-      Array.isArray(rawObj.unlockedMissions) && rawObj.unlockedMissions.length > 0
-        ? rawObj.unlockedMissions
-        : [1],
+    unlockedMissions: (() => {
+      const baseUnlocked =
+        Array.isArray(rawObj.unlockedMissions) && rawObj.unlockedMissions.length > 0
+          ? [...rawObj.unlockedMissions]
+          : [1];
+      const unlockedSet = new Set<number>(baseUnlocked);
+      unlockedSet.add(1);
+      // Unlock any North/Center/South highway branches connected to already-completed missions!
+      const savedStars = rawObj.missionStars || {};
+      MISSION_NODES.forEach((node) => {
+        if ((savedStars[node.id] || 0) > 0) {
+          if (node.id + 1 <= MISSION_NODES.length) unlockedSet.add(node.id + 1);
+          node.connectedTo.forEach((targetId) => unlockedSet.add(targetId));
+        }
+      });
+      return Array.from(unlockedSet).sort((a, b) => a - b);
+    })(),
   };
 }
 
@@ -322,14 +335,16 @@ export function App() {
         if (!currentMission) return null;
         const mId = currentMission.id;
         const nextId = mId + 1;
+        const newlyOpenedIds = new Set<number>();
+        if (nextId <= MISSION_NODES.length) newlyOpenedIds.add(nextId);
+        currentMission.connectedTo.forEach((cid) => {
+          if (cid <= MISSION_NODES.length) newlyOpenedIds.add(cid);
+        });
 
         setProgress((prev) => {
           const currentStars = prev.missionStars[mId] || 0;
-          const unlocked = prev.unlockedMissions.includes(nextId)
-            ? prev.unlockedMissions
-            : nextId <= MISSION_NODES.length
-            ? [...prev.unlockedMissions, nextId]
-            : prev.unlockedMissions;
+          const unlockedSet = new Set<number>(prev.unlockedMissions);
+          newlyOpenedIds.forEach((id) => unlockedSet.add(id));
 
           return {
             ...prev,
@@ -338,13 +353,13 @@ export function App() {
               ...prev.missionStars,
               [mId]: Math.max(currentStars, stars),
             },
-            unlockedMissions: unlocked,
+            unlockedMissions: Array.from(unlockedSet).sort((a, b) => a - b),
           };
         });
 
-        if (nextId <= MISSION_NODES.length) {
-          setSelectedMissionId(nextId);
-        }
+        const preferredNext =
+          currentMission.connectedTo[0] ?? (nextId <= MISSION_NODES.length ? nextId : mId);
+        setSelectedMissionId(preferredNext);
         return null;
       });
     },
