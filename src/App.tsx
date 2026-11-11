@@ -15,7 +15,7 @@ import { BattleArena } from './components/BattleArena';
 import { soundFX } from './engine/SoundFX';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '6:45 AM - 11/11/2026';
+const FALLBACK_TIMESTAMP = '7:04 AM - 11/11/2026';
 export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 const CURRENT_BUILD_ID = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : '';
@@ -102,15 +102,34 @@ function sanitizeProgress(rawObj: Partial<PlayerProgress>): PlayerProgress {
           : [1];
       const unlockedSet = new Set<number>(baseUnlocked);
       unlockedSet.add(1);
-      // Unlock any North/Center/South highway branches connected to already-completed missions!
+
       const savedStars = rawObj.missionStars || {};
+      let maxClassicProgress = 1;
+      for (let id = 1; id <= 12; id++) {
+        if ((savedStars[id] || 0) > 0) {
+          unlockedSet.add(id);
+          if (id + 1 <= 12) unlockedSet.add(id + 1);
+          maxClassicProgress = Math.max(maxClassicProgress, Math.min(12, id + 1));
+        } else if (unlockedSet.has(id)) {
+          maxClassicProgress = Math.max(maxClassicProgress, id);
+        }
+      }
+      // Guarantee unbroken visibility of all classic missions 1..maxClassicProgress
+      for (let id = 1; id <= maxClassicProgress; id++) {
+        unlockedSet.add(id);
+      }
+
+      // Ensure every mission with stars (1..24) is unlocked AND opens its North/Center/South branches!
       MISSION_NODES.forEach((node) => {
-        if ((savedStars[node.id] || 0) > 0) {
-          if (node.id + 1 <= MISSION_NODES.length) unlockedSet.add(node.id + 1);
+        if ((savedStars[node.id] || 0) > 0 || (node.id <= 12 && node.id < maxClassicProgress)) {
+          unlockedSet.add(node.id);
           node.connectedTo.forEach((targetId) => unlockedSet.add(targetId));
         }
       });
-      return Array.from(unlockedSet).sort((a, b) => a - b);
+
+      return Array.from(unlockedSet)
+        .filter((id) => id >= 1 && id <= MISSION_NODES.length)
+        .sort((a, b) => a - b);
     })(),
   };
 }
@@ -145,7 +164,18 @@ export function App() {
     return INITIAL_PROGRESS;
   });
 
-  const [selectedMissionId, setSelectedMissionId] = useState<number>(1);
+  const [selectedMissionId, setSelectedMissionId] = useState<number>(() => {
+    // Focus camera on the player's active classic frontier so adjacent beaten missions are right in view!
+    for (let id = 1; id <= 12; id++) {
+      if (progress.unlockedMissions.includes(id) && !(progress.missionStars[id] > 0)) {
+        return id;
+      }
+    }
+    const beatenClassic = [12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1].find(
+      (id) => (progress.missionStars[id] || 0) > 0
+    );
+    return beatenClassic || 1;
+  });
   const [activeBattleMission, setActiveBattleMission] = useState<MissionNode | null>(() => {
     try {
       if (sessionStorage.getItem('ls_auto_update_hub') === '1') {
@@ -358,7 +388,9 @@ export function App() {
         });
 
         const preferredNext =
-          currentMission.connectedTo[0] ?? (nextId <= MISSION_NODES.length ? nextId : mId);
+          (mId < 12 ? mId + 1 : undefined) ??
+          currentMission.connectedTo[0] ??
+          (nextId <= MISSION_NODES.length ? nextId : mId);
         setSelectedMissionId(preferredNext);
         return null;
       });
