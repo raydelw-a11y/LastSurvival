@@ -161,6 +161,7 @@ export interface RenderFireZone {
 
 const RANGED_SURVIVORS = new Set<string>([
   'farmer',
+  'gunslinger',
   'policeman',
   'sniper',
   'flamethrower',
@@ -546,11 +547,56 @@ export function renderUnitSprite(
     inkedRoundRect(ctx, -legW * 0.5, 6.2, legW + 1.4, 3.0, 1.2, flash ? '#ffffff' : atlas.bootColor, '#52525b', undefined, 1.2);
     ctx.restore();
 
-    // 2. Back Arm
+    // 2. Back Arm (Dual-Wield Off-Hand Pistol for Gunslinger!)
+    const isGunslinger = unit.subType === 'gunslinger';
+    const akimboLeftActive = isGunslinger && Math.floor(unit.animTime * 9) % 2 === 1;
     ctx.save();
-    ctx.translate(-2.5, -18 + bob);
-    ctx.rotate(isSurvivor ? stride * 0.35 : armAngle * 0.85);
-    inkedRoundRect(ctx, -1.8, 0, 3.6, 8.2, 1.5, flash ? '#ffffff' : atlas.shirtColor, undefined, undefined, 1.2);
+    if (isGunslinger) {
+      const offHandRecoil =
+        unit.state === 'attack' && akimboLeftActive ? -2.4 * (1 - unit.attackProgress) : 0;
+      const offHandAngle =
+        unit.state === 'reload'
+          ? 0.38
+          : unit.state === 'attack' && akimboLeftActive
+          ? -0.16 * (1 - unit.attackProgress)
+          : -0.06 + stride * 0.08;
+      ctx.translate(4.8 + offHandRecoil, -20.2 - bob);
+      ctx.rotate(offHandAngle);
+      ctx.drawImage(flash ? atlas.weaponFlash : atlas.weapon, -5, -10, 32, 19);
+      inkedRoundRect(
+        ctx,
+        -2.2,
+        -1.8,
+        5.0,
+        3.9,
+        1.4,
+        flash ? '#ffffff' : atlas.shirtColor,
+        undefined,
+        undefined,
+        1.2
+      );
+      if (unit.state === 'attack' && akimboLeftActive && unit.attackProgress < 0.45) {
+        ctx.fillStyle = '#fef08a';
+        ctx.beginPath();
+        ctx.arc(17.5, -1.2, 2.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      ctx.translate(-2.5, -18 + bob);
+      ctx.rotate(isSurvivor ? stride * 0.35 : armAngle * 0.85);
+      inkedRoundRect(
+        ctx,
+        -1.8,
+        0,
+        3.6,
+        8.2,
+        1.5,
+        flash ? '#ffffff' : atlas.shirtColor,
+        undefined,
+        undefined,
+        1.2
+      );
+    }
     ctx.restore();
 
     // 3. Articulated Torso (4x Atlas)
@@ -593,6 +639,14 @@ export function renderUnitSprite(
 
       ctx.drawImage(flash ? atlas.weaponFlash : atlas.weapon, -6, -10, 34, 20);
       inkedRoundRect(ctx, -2, -2, 5.2, 4.2, 1.5, flash ? '#ffffff' : atlas.shirtColor, undefined, undefined, 1.2);
+
+      // Dual-Pistol Main-Hand Muzzle Flash on alternating shots
+      if (isGunslinger && unit.state === 'attack' && !akimboLeftActive && unit.attackProgress < 0.45) {
+        ctx.fillStyle = '#fef08a';
+        ctx.beginPath();
+        ctx.arc(17.5, -1.2, 3.0, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       // Flamethrower Continuous Multi-Layer Jet!
       if (unit.subType === 'flamethrower' && unit.state === 'attack') {

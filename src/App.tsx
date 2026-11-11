@@ -15,7 +15,7 @@ import { BattleArena } from './components/BattleArena';
 import { soundFX } from './engine/SoundFX';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '11:11 PM - 11/10/2026';
+const FALLBACK_TIMESTAMP = '6:17 AM - 11/11/2026';
 export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 const CURRENT_BUILD_ID = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : '';
@@ -42,6 +42,7 @@ const INITIAL_PROGRESS: PlayerProgress = {
   unitLevels: {
     redneck: 1,
     farmer: 1,
+    gunslinger: 1,
     builder: 1,
     mechanic: 1,
     hound: 1,
@@ -73,6 +74,16 @@ function sanitizeProgress(rawObj: Partial<PlayerProgress>): PlayerProgress {
   }
   if (validDeck.length === 0) {
     validDeck.push('redneck');
+  }
+  // If an existing player is already Level 3+ and hasn't seen 'gunslinger' yet, auto-equip if room!
+  const hadSavedGunslinger = !!(rawObj.unitLevels && 'gunslinger' in rawObj.unitLevels);
+  if (
+    !hadSavedGunslinger &&
+    lvl >= 3 &&
+    !validDeck.includes('gunslinger') &&
+    validDeck.length < MAX_EQUIPPED_DECK
+  ) {
+    validDeck.push('gunslinger');
   }
   return {
     ...INITIAL_PROGRESS,

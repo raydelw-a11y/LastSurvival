@@ -222,6 +222,38 @@ export function getUnitAtlas(subType: SurvivorType | ZombieType): UnitPartAtlas 
       break;
     }
 
+    case 'gunslinger': {
+      skinColor = '#f6c29d';
+      shirtColor = '#1d4ed8';
+      pantColor = '#0f172a';
+      bootColor = '#09090b';
+      scale = 0.99;
+      widthFactor = 0.9;
+      // Flowing dark-chestnut ponytail behind neck
+      inkedRoundRect(hctx, 2.8, 8.6, 5.2, 7.2, 2.4, '#3b1d14', '#6b3423', '#1c0d08');
+      // Female face + tactical police visor shades
+      inkedRoundRect(hctx, 7.2, 7.4, 10.2, 10.2, 4.3, skinColor, '#ffedd5', '#d49a73');
+      drawHumanEyes(hctx, 10.3, 12.1, true, '#0f172a');
+      // Navy police peaked officer cap + gold star badge + dark visor
+      inkedRoundRect(hctx, 6.2, 3.6, 12.2, 5.0, 2.2, '#1e3a8a', '#3b82f6', '#172554');
+      inkedRoundRect(hctx, 13.4, 7.2, 6.6, 2.0, 1.0, '#09090b', '#334155');
+      inkedCircle(hctx, 13.2, 5.6, 1.35, '#fbbf24', '#fef08a');
+      // Fitted navy police shirt + dark tie + gold badge + dual-holster tactical belt
+      inkedRoundRect(tctx, 6.8, 4.6, 10.4, 13.4, 3.3, '#1e40af', '#3b82f6', '#172554');
+      tctx.fillStyle = '#0f172a';
+      tctx.fillRect(11.3, 5.6, 1.8, 7.6);
+      inkedCircle(tctx, 14.3, 8.0, 1.4, '#fbbf24', '#fef08a');
+      inkedRoundRect(tctx, 6.3, 13.8, 11.4, 3.2, 1.1, '#09090b', '#334155');
+      tctx.fillStyle = '#fbbf24';
+      tctx.fillRect(11.0, 14.3, 2.3, 2.1);
+      // Sleek semi-auto 9mm tactical police pistol (silver slide + black grip)
+      inkedRoundRect(wctx, 7.2, 9.6, 4.4, 6.2, 1.3, '#18181b', '#3f3f46');
+      inkedRoundRect(wctx, 7.0, 6.8, 13.2, 4.0, 1.2, '#64748b', '#e2e8f0', '#1e293b');
+      wctx.fillStyle = '#38bdf8';
+      wctx.fillRect(17.8, 7.3, 1.5, 1.1);
+      break;
+    }
+
     case 'builder': {
       skinColor = '#eab084';
       shirtColor = '#f97316';

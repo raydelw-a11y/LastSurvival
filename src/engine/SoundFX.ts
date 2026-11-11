@@ -246,6 +246,47 @@ class SoundSystem {
     osc.stop(now + 0.16);
   }
 
+  public playPistol() {
+    const ctx = this.getContext();
+    const dest = this.getDest();
+    if (!ctx || !dest) return;
+    const now = ctx.currentTime;
+
+    // Crisp 9mm dual-pistol pop with slight random pitch variation for rapid akimbo fire
+    const pitchJitter = 0.94 + Math.random() * 0.14;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(920 * pitchJitter, now);
+    osc.frequency.exponentialRampToValueAtTime(175, now + 0.065);
+    gain.gain.setValueAtTime(0.32, now);
+    gain.gain.exponentialRampToValueAtTime(0.008, now + 0.07);
+    osc.connect(gain);
+    gain.connect(dest);
+    osc.start(now);
+    osc.stop(now + 0.072);
+
+    const bufLen = Math.floor(ctx.sampleRate * 0.045);
+    const buf = ctx.createBuffer(1, bufLen, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufLen; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.014));
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(2200 * pitchJitter, now);
+    filter.Q.setValueAtTime(1.1, now);
+    const nGain = ctx.createGain();
+    nGain.gain.setValueAtTime(0.28, now);
+    nGain.gain.exponentialRampToValueAtTime(0.008, now + 0.045);
+    noise.connect(filter);
+    filter.connect(nGain);
+    nGain.connect(dest);
+    noise.start(now);
+  }
+
   public playRifle() {
     const ctx = this.getContext();
     const dest = this.getDest();

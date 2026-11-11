@@ -95,6 +95,7 @@ const TACTICAL_ORDER: TacticalItemType[] = ['blue_barrel', 'red_barrel', 'medkit
 const INITIAL_UNIT_COOLDOWNS: Record<SurvivorType, number> = {
   redneck: 0,
   farmer: 0,
+  gunslinger: 0,
   builder: 0,
   mechanic: 0,
   hound: 0,
@@ -1701,19 +1702,35 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
                   if (u.isRanged) {
                     u.ammo -= 1;
-                    if (u.subType === 'sniper' || u.subType === 'turret' || u.subType === 'drone') {
+                    if (u.subType === 'gunslinger') {
+                      soundFX.playPistol();
+                    } else if (
+                      u.subType === 'sniper' ||
+                      u.subType === 'turret' ||
+                      u.subType === 'drone'
+                    ) {
                       soundFX.playRifle();
                     } else {
                       soundFX.playShotgun();
                     }
-                    sim.screenShake = Math.max(sim.screenShake, u.subType === 'sniper' ? 3.2 : 2.0);
+                    sim.screenShake = Math.max(
+                      sim.screenShake,
+                      u.subType === 'sniper' ? 3.2 : u.subType === 'gunslinger' ? 0.65 : 2.0
+                    );
 
                     if (u.pellets === 1 && !u.isFlame) {
                       const wKind = u.subType === 'sniper' ? 'sniper' : 'rapid';
+                      const muzzleZ = u.isFlying
+                        ? 32
+                        : u.subType === 'gunslinger'
+                        ? u.ammo % 2 === 0
+                          ? 17.5
+                          : 20.5
+                        : 18;
                       spawnWeaponTracerAndShell(
-                        u.x,
+                        u.x + (u.subType === 'gunslinger' && u.ammo % 2 !== 0 ? 3 : 0),
                         u.y,
-                        u.isFlying ? 32 : 18,
+                        muzzleZ,
                         closestZ.x,
                         closestZ.y,
                         u.facing,
@@ -1827,12 +1844,29 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   u.attackTimer = u.attackCooldown;
                   if (u.isRanged) {
                     u.ammo -= 1;
-                    soundFX.playShotgun();
+                    if (u.subType === 'gunslinger') {
+                      soundFX.playPistol();
+                    } else if (
+                      u.subType === 'sniper' ||
+                      u.subType === 'turret' ||
+                      u.subType === 'drone'
+                    ) {
+                      soundFX.playRifle();
+                    } else {
+                      soundFX.playShotgun();
+                    }
                     if (!u.isFlame) {
+                      const muzzleZ = u.isFlying
+                        ? 32
+                        : u.subType === 'gunslinger'
+                        ? u.ammo % 2 === 0
+                          ? 17.5
+                          : 20.5
+                        : 18;
                       spawnWeaponTracerAndShell(
-                        u.x,
+                        u.x + (u.subType === 'gunslinger' && u.ammo % 2 !== 0 ? 3 : 0),
                         u.y,
-                        u.isFlying ? 32 : 18,
+                        muzzleZ,
                         sim.barricadeX - 8,
                         u.y,
                         1,

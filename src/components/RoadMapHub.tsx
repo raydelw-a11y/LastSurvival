@@ -872,7 +872,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
         >
           <Users className="w-4 h-4 text-sky-400" />
           <span>
-            Escuadrón ({unlockedCount}/11)
+            Escuadrón ({unlockedCount}/{SURVIVOR_ORDER.length})
           </span>
         </button>
 
@@ -1114,7 +1114,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                           </span>
                         </div>
                         <p className="text-[10px] text-zinc-300 mb-2 leading-relaxed">
-                          Las unidades se desbloquean combatiendo y ganando XP en carretera (1 unidad nueva por nivel hasta Nv.11, y Maestría +10% en Nv.12).
+                          Las unidades se desbloquean combatiendo y ganando XP en carretera (1 unidad nueva por nivel hasta Nv.12, más Maestría +10% global en Nv.12).
                         </p>
                       </div>
                       <div className="bg-zinc-950/90 border border-sky-800/70 rounded p-2">
