@@ -135,6 +135,26 @@ export const SURVIVOR_ORDER: SurvivorType[] = [
   'juggernaut',
 ];
 
+export const SHORT_UNIT_NAMES: Record<SurvivorType, string> = {
+  redneck: 'Redneck',
+  farmer: 'Farmer',
+  builder: 'Builder',
+  mechanic: 'Mechanic',
+  hound: 'Perro K9',
+  policeman: 'Policía',
+  sniper: 'Sniper',
+  flamethrower: 'Pyro',
+  turret: 'Torreta',
+  drone: 'Dron',
+  juggernaut: 'Juggernaut',
+};
+
+export const SHORT_TACTICAL_NAMES: Record<TacticalItemType, string> = {
+  blue_barrel: 'Barril A.',
+  red_barrel: 'Barril R.',
+  medkit: 'Botiquín',
+};
+
 export const XP_THRESHOLDS: Record<number, number> = {
   1: 110,  // Nv.1 -> Nv.2 (Farmer)
   2: 155,  // Nv.2 -> Nv.3 (Builder)

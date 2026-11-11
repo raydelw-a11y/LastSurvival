@@ -8,6 +8,7 @@ import {
   MISSION_NODES,
   MissionNode,
   PlayerProgress,
+  SHORT_UNIT_NAMES,
   SURVIVOR_CONFIGS,
   SURVIVOR_ORDER,
   SurvivorType,
@@ -974,13 +975,19 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
               </button>
             </div>
 
-            <div className="p-3 overflow-y-auto flex flex-col gap-3">
+            <div className="p-2 sm:p-2.5 overflow-y-auto flex flex-col gap-2.5">
               {/* LIVE INTERACTIVE BUS WORKSHOP DIORAMA WHEN IN GARAGE */}
               {modalTab === 'garage' && (
                 <GarageWorkshopDiorama progress={progress} weldBurstKey={weldBurstKey} />
               )}
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5">
+              <div
+                className={
+                  modalTab === 'deck'
+                    ? 'grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-1.5'
+                    : 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5'
+                }
+              >
                 {modalTab === 'deck' &&
                   SURVIVOR_ORDER.map((sType) => {
                     const cfg = SURVIVOR_CONFIGS[sType];
@@ -996,7 +1003,8 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                     return (
                       <div
                         key={sType}
-                        className={`border rounded-lg p-2.5 flex flex-col justify-between transition ${
+                        title={`${cfg.name} (${cfg.roleTitle}) — ${cfg.description}`}
+                        className={`border rounded-lg p-1.5 flex flex-col justify-between transition ${
                           isUnlocked
                             ? isEquipped
                               ? 'bg-[#1f1e16] border-amber-400/90 shadow-md'
@@ -1005,61 +1013,57 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                         }`}
                       >
                         <div>
-                          <div className="flex items-start justify-between gap-2 mb-1.5">
-                            <SpritePreviewBox subType={sType} isZombie={false} locked={!isUnlocked} />
-                            <div className="flex-1">
-                              <div className="flex items-center justify-between text-[10px] mb-0.5">
-                                <span className="bg-sky-700 text-white px-1.5 rounded font-bold">
-                                  💧 {cfg.cost}
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <SpritePreviewBox
+                              subType={sType}
+                              isZombie={false}
+                              locked={!isUnlocked}
+                              compact={true}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center justify-between text-[8.5px] mb-0.5">
+                                <span className="bg-sky-700 text-white px-1 rounded font-bold leading-tight">
+                                  💧{cfg.cost}
                                 </span>
                                 {isUnlocked ? (
-                                  <span className="text-yellow-400 font-bold">
-                                    {isEquipped ? `[#${deckSlotIdx + 1}] ` : ''}Nv.{lvl}
+                                  <span className="text-yellow-400 font-bold leading-tight">
+                                    {isEquipped ? `#${deckSlotIdx + 1}·` : ''}Nv.{lvl}
                                   </span>
                                 ) : (
-                                  <span className="flex items-center gap-0.5 text-amber-400 font-bold">
-                                    <Lock className="w-3 h-3" /> Nv.{cfg.unlockLevel}
+                                  <span className="flex items-center gap-0.5 text-amber-400 font-bold leading-tight">
+                                    <Lock className="w-2.5 h-2.5" />
+                                    Nv.{cfg.unlockLevel}
                                   </span>
                                 )}
                               </div>
-                              <div className="font-bold text-xs text-white leading-tight">
-                                {cfg.name}
+                              <div className="font-extrabold text-[10px] text-white leading-tight truncate">
+                                {SHORT_UNIT_NAMES[sType]}
                               </div>
-                              <div className="text-[9px] text-amber-300/90 font-semibold">
+                              <div className="text-[8px] text-amber-300/85 font-semibold leading-tight truncate">
                                 {cfg.roleTitle}
                               </div>
                             </div>
                           </div>
 
-                          <p className="text-[10px] text-zinc-400 leading-tight mb-1.5">
-                            {cfg.description}
-                          </p>
-                          <div className="flex flex-wrap gap-1 text-[9px] text-zinc-200 mb-2">
-                            <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800">
-                              ❤️ {Math.round(cfg.baseHp * mult)}
-                            </span>
-                            <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800">
+                          <div className="flex items-center justify-between gap-1 text-[8.5px] text-zinc-200 mb-1.5 bg-zinc-900/85 px-1.5 py-0.5 rounded border border-zinc-800">
+                            <span>❤️ {Math.round(cfg.baseHp * mult)}</span>
+                            <span>
                               ⚔️ {Math.round(cfg.baseDamage * mult)}
                               {cfg.pellets && cfg.pellets > 1 ? `×${cfg.pellets}` : ''}
                             </span>
-                            {cfg.meleeResist ? (
-                              <span className="px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
-                                🛡️ -{Math.round(cfg.meleeResist * 100)}% Melee
-                              </span>
-                            ) : null}
-                            {cfg.armorPiercing ? (
-                              <span className="px-1.5 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-800">
-                                🎯 Perfora {Math.round(cfg.armorPiercing * 100)}%
-                              </span>
-                            ) : null}
                           </div>
                         </div>
                         {isUnlocked ? (
-                          <div className="flex flex-col gap-1.5">
+                          <div className="flex items-center gap-1">
                             <button
                               onClick={() => onToggleDeckUnit(sType)}
                               disabled={isLastEquipped}
-                              className={`w-full py-1 rounded text-[10px] font-extrabold uppercase flex items-center justify-center gap-1 border ${
+                              title={
+                                isEquipped
+                                  ? `En escuadrón activo (Tecla ${deckSlotIdx + 1})`
+                                  : 'Equipar en el escuadrón de batalla'
+                              }
+                              className={`flex-1 py-1 px-1 rounded text-[8.5px] font-extrabold uppercase flex items-center justify-center gap-0.5 border truncate ${
                                 isEquipped
                                   ? isLastEquipped
                                     ? 'bg-amber-950/60 border-amber-700/60 text-amber-300/80 cursor-default'
@@ -1069,33 +1073,30 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                             >
                               {isEquipped ? (
                                 <>
-                                  <Check className="w-3 h-3" />
-                                  <span>En Escuadrón (Tecla {deckSlotIdx + 1})</span>
+                                  <Check className="w-2.5 h-2.5 shrink-0" />
+                                  <span>Mazo</span>
                                 </>
                               ) : (
-                                <span>
-                                  {equippedDeck.length >= MAX_EQUIPPED_DECK
-                                    ? '↻ Reemplazar en Mazo'
-                                    : '+ Equipar en Escuadrón'}
-                                </span>
+                                <span>+Mazo</span>
                               )}
                             </button>
                             <button
                               onClick={() => onUpgradeSurvivor(sType, cost)}
                               disabled={!canAfford}
-                              className={`w-full py-1.5 rounded text-[10px] font-extrabold uppercase ${
+                              title={`Mejorar a Nivel ${lvl + 1} por ${cost} monedas`}
+                              className={`flex-1 py-1 px-1 rounded text-[8.5px] font-extrabold uppercase truncate ${
                                 canAfford
                                   ? 'bg-emerald-500 hover:bg-emerald-400 text-zinc-950 cursor-pointer'
                                   : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
                               }`}
                             >
-                              Mejorar Nv.{lvl + 1} ({cost} 🪙)
+                              ⬆{cost}🪙
                             </button>
                           </div>
                         ) : (
-                          <div className="w-full py-1.5 px-2 rounded bg-zinc-900/95 border border-zinc-800 text-amber-300/90 font-bold text-[10px] text-center flex items-center justify-center gap-1">
-                            <Lock className="w-3 h-3 shrink-0" />
-                            <span>Desbloquea en Nv.{cfg.unlockLevel} (XP Combate)</span>
+                          <div className="w-full py-1 px-1 rounded bg-zinc-900/95 border border-zinc-800 text-amber-300/90 font-bold text-[8.5px] text-center flex items-center justify-center gap-0.5 truncate">
+                            <Lock className="w-2.5 h-2.5 shrink-0" />
+                            <span>Nv.{cfg.unlockLevel} (XP)</span>
                           </div>
                         )}
                       </div>
@@ -1273,7 +1274,8 @@ const SpritePreviewBox: React.FC<{
   subType: SurvivorType | ZombieType;
   isZombie: boolean;
   locked?: boolean;
-}> = React.memo(({ subType, isZombie, locked }) => {
+  compact?: boolean;
+}> = React.memo(({ subType, isZombie, locked, compact }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -1285,12 +1287,18 @@ const SpritePreviewBox: React.FC<{
   }, [isZombie, subType]);
 
   return (
-    <div className="shrink-0 w-11 h-12 rounded bg-[#12120e] border border-[#3d3a2c] flex items-center justify-center shadow-inner">
+    <div
+      className={`shrink-0 ${
+        compact ? 'w-8.5 h-9.5' : 'w-11 h-12'
+      } rounded bg-[#12120e] border border-[#3d3a2c] flex items-center justify-center shadow-inner`}
+    >
       <canvas
         ref={canvasRef}
         width={40}
         height={42}
-        className={`w-10 h-[42px] hd-canvas ${locked ? 'brightness-0 opacity-55' : ''}`}
+        className={`${compact ? 'w-8 h-9' : 'w-10 h-[42px]'} hd-canvas ${
+          locked ? 'brightness-0 opacity-55' : ''
+        }`}
       />
     </div>
   );

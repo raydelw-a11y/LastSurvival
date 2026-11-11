@@ -6,6 +6,8 @@ import {
   MAX_COMMANDER_LEVEL,
   MissionNode,
   PlayerProgress,
+  SHORT_TACTICAL_NAMES,
+  SHORT_UNIT_NAMES,
   SURVIVOR_CONFIGS,
   SURVIVOR_ORDER,
   SurvivorType,
@@ -914,6 +916,25 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     sim.selectedUnitId = next.id;
   }, []);
 
+  const selectTacticalItem = useCallback((itemType: TacticalItemType) => {
+    const sim = simRef.current;
+    if (sim.phase !== 'combat' || pausedRef.current) return;
+    if (sim.draggingItem === itemType) {
+      setDraggingItem(null);
+      sim.draggingItem = null;
+      return;
+    }
+    const cfg = TACTICAL_ITEM_CONFIGS[itemType];
+    if (sim.rage < cfg.rageCost || sim.itemCooldowns[itemType] > 0) return;
+
+    if (!sim.mouseLogical.insideRoad) {
+      sim.mouseLogical = { x: 350, y: 228, insideRoad: true };
+    }
+    soundFX.playUnitSpawn();
+    setDraggingItem(itemType);
+    sim.draggingItem = itemType;
+  }, []);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
@@ -924,14 +945,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         const deckUnit = liveBridgeRef.current.progress.equippedDeck[slotIdx];
         if (deckUnit) deploySurvivor(deckUnit);
       } else if (key === 'q') {
-        const m = simRef.current.mouseLogical;
-        deployTacticalItem('blue_barrel', m.insideRoad ? m.x : 340, m.insideRoad ? m.y : 234);
+        selectTacticalItem('blue_barrel');
       } else if (key === 'x' || key === 'r') {
-        const m = simRef.current.mouseLogical;
-        deployTacticalItem('red_barrel', m.insideRoad ? m.x : 395, m.insideRoad ? m.y : 234);
+        selectTacticalItem('red_barrel');
       } else if (key === 'e') {
-        const m = simRef.current.mouseLogical;
-        deployTacticalItem('medkit', m.insideRoad ? m.x : 255, m.insideRoad ? m.y : 232);
+        selectTacticalItem('medkit');
       } else if (key === 'tab') {
         e.preventDefault();
         cycleSelectedSurvivor();
@@ -939,8 +957,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         e.preventDefault();
         triggerFuryWhiskeyBuff();
       } else if (key === 'escape') {
-        if (pausedRef.current) resumeBattle();
-        else pauseBattle();
+        if (simRef.current.draggingItem) {
+          setDraggingItem(null);
+          simRef.current.draggingItem = null;
+        } else if (pausedRef.current) {
+          resumeBattle();
+        } else {
+          pauseBattle();
+        }
       }
     };
 
@@ -957,9 +981,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   }, [
     cycleSelectedSurvivor,
     deploySurvivor,
-    deployTacticalItem,
     pauseBattle,
     resumeBattle,
+    selectTacticalItem,
     triggerFuryWhiskeyBuff,
   ]);
 
@@ -1008,13 +1032,18 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   const handleCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const coords = getLogicalCoords(e.clientX, e.clientY);
     simRef.current.mouseLogical = coords;
-    tryCollectPickupsAt(coords.x, coords.y);
 
     const sim = simRef.current;
+    // 2-Tap Tactical Item System: 2nd tap on battlefield drops selected item at tapped location!
     if (sim.draggingItem) {
-      deployTacticalItem(sim.draggingItem, coords.x, coords.y);
+      if (coords.y >= 72) {
+        sim.mouseLogical = { ...coords, insideRoad: true };
+        deployTacticalItem(sim.draggingItem, coords.x, coords.y);
+      }
       return;
     }
+
+    tryCollectPickupsAt(coords.x, coords.y);
 
     // Tactical Counterplay: Tapping a deployed Red Barrel detonates it on command!
     const clickedRedBarrelIdx = sim.obstacles.findIndex(
@@ -2146,11 +2175,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           renderFireZone(ctx, sim.fireZones[i], sim.time);
         }
 
-        // Drag & Drop Tactical Reticle on the Road (Color-coded by Item Type!)
+        // 2-Tap Tactical Target Zone on the Road (Color-coded Crosshair + Drop Guide!)
         if (sim.draggingItem) {
           const cfg = TACTICAL_ITEM_CONFIGS[sim.draggingItem];
           const tx = Math.max(142, Math.min(sim.barricadeX - 22, sim.mouseLogical.x));
           const ty = Math.max(ROAD_Y_MIN + 4, Math.min(ROAD_Y_MAX - 4, sim.mouseLogical.y));
+          const pulse = 0.85 + Math.sin(sim.time * 9) * 0.15;
           const strokeCol =
             sim.draggingItem === 'red_barrel'
               ? '#ef4444'
@@ -2159,20 +2189,39 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               : '#38bdf8';
           const fillCol =
             sim.draggingItem === 'red_barrel'
-              ? 'rgba(239, 68, 68, 0.24)'
+              ? 'rgba(239, 68, 68, 0.25)'
               : sim.draggingItem === 'medkit'
-              ? 'rgba(74, 222, 128, 0.22)'
-              : 'rgba(56, 189, 248, 0.22)';
+              ? 'rgba(74, 222, 128, 0.23)'
+              : 'rgba(56, 189, 248, 0.23)';
+
+          ctx.save();
+          ctx.fillStyle = fillCol;
+          ctx.beginPath();
+          ctx.ellipse(tx, ty, cfg.radius * pulse, cfg.radius * 0.45 * pulse, 0, 0, Math.PI * 2);
+          ctx.fill();
 
           ctx.strokeStyle = strokeCol;
           ctx.lineWidth = 2;
+          ctx.setLineDash([5, 4]);
           ctx.beginPath();
-          ctx.ellipse(tx, ty, cfg.radius, cfg.radius * 0.45, 0, 0, Math.PI * 2);
+          ctx.ellipse(tx, ty, cfg.radius * pulse, cfg.radius * 0.45 * pulse, 0, 0, Math.PI * 2);
           ctx.stroke();
-          ctx.fillStyle = fillCol;
+
+          // Vertical drop trajectory line & center crosshair
+          ctx.lineWidth = 1.4;
           ctx.beginPath();
-          ctx.ellipse(tx, ty, cfg.radius, cfg.radius * 0.45, 0, 0, Math.PI * 2);
-          ctx.fill();
+          ctx.moveTo(tx, ty - 42);
+          ctx.lineTo(tx, ty);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          ctx.beginPath();
+          ctx.moveTo(tx - 8, ty);
+          ctx.lineTo(tx + 8, ty);
+          ctx.moveTo(tx, ty - 5);
+          ctx.lineTo(tx, ty + 5);
+          ctx.stroke();
+          ctx.restore();
         }
 
         // Telegraphed Rush Lane Indicator drawn directly on road right edge
@@ -2310,21 +2359,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mission.id]);
 
-  const toggleDraggingTactical = (itemType: TacticalItemType) => {
-    const cfg = TACTICAL_ITEM_CONFIGS[itemType];
-    if (rage < cfg.rageCost || itemCooldowns[itemType] > 0) return;
-    const next = draggingItem === itemType ? null : itemType;
-    setDraggingItem(next);
-    simRef.current.draggingItem = next;
-  };
-
   // Active Tactical Squad (max 6 unlocked units) + 1 Next-Unlock Teaser Card!
   const activeSquadUnits = progress.equippedDeck.filter(
     (sType) => commanderLevel >= SURVIVOR_CONFIGS[sType].unlockLevel
   );
   const effectiveSquad: SurvivorType[] =
     activeSquadUnits.length > 0 ? activeSquadUnits : ['redneck'];
-  const nextLockedCfg = getNextLockedUnit(commanderLevel);
+  const nextLockedCfg = effectiveSquad.length < 6 ? getNextLockedUnit(commanderLevel) : null;
   const xpNeeded = getXpForNextLevel(commanderLevel);
   const xpPercent =
     commanderLevel >= MAX_COMMANDER_LEVEL
@@ -2333,22 +2374,16 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
   return (
     <div className="relative w-full h-full bg-[#24221a] select-none overflow-hidden">
-      {/* FULLSCREEN LANDSCAPE PIXEL-ART CANVAS */}
+      {/* FULLSCREEN LANDSCAPE 2D HD CANVAS */}
       <canvas
         ref={canvasRef}
         width={LOGICAL_WIDTH}
         height={LOGICAL_HEIGHT}
         onPointerMove={handleCanvasPointerMove}
         onPointerDown={handleCanvasPointerDown}
-        onPointerUp={(e) => {
-          if (simRef.current.draggingItem) {
-            const coords = getLogicalCoords(e.clientX, e.clientY);
-            if (coords.insideRoad) {
-              deployTacticalItem(simRef.current.draggingItem, coords.x, coords.y);
-            }
-          }
-        }}
-        className="absolute inset-0 w-full h-full object-cover pixel-canvas cursor-crosshair"
+        className={`absolute inset-0 w-full h-full object-cover hd-canvas ${
+          draggingItem ? 'cursor-crosshair' : 'cursor-pointer'
+        }`}
       />
 
       {/* ===================================================================== */}
@@ -2581,10 +2616,22 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         </div>
       )}
 
-      {/* ACTIVE DRAG DEPLOYMENT HINT BANNER */}
+      {/* ACTIVE 2-TAP DEPLOYMENT HINT BANNER */}
       {draggingItem && (
-        <div className="absolute top-13 left-1/2 -translate-x-1/2 z-30 px-3 py-1 rounded bg-zinc-950/90 border border-amber-400 text-[10px] font-bold text-amber-200 shadow-lg pointer-events-none">
-          🎯 Toca la carretera para lanzar {TACTICAL_ITEM_CONFIGS[draggingItem].name}
+        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-3 py-1 rounded-md bg-zinc-950/95 border-2 border-yellow-400 text-[10px] font-bold text-amber-200 shadow-xl">
+          <span>
+            🎯 <strong>{TACTICAL_ITEM_CONFIGS[draggingItem].name}</strong> listo — Toca en la carretera dónde soltarlo
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setDraggingItem(null);
+              simRef.current.draggingItem = null;
+            }}
+            className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-red-700 text-zinc-200 text-[9px] font-extrabold cursor-pointer"
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -2644,24 +2691,26 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       )}
 
       {/* ===================================================================== */}
-      {/* BOTTOM TACTICAL DECK: Authentic Olive Slots + 3 Rage Support Items!   */}
+      {/* BOTTOM TACTICAL DECK: Compact Slots w/ Small Names + 2-Tap Items      */}
       {/* ===================================================================== */}
-      <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 z-20 flex items-end gap-1.5 max-w-[98vw] overflow-x-auto px-2 py-0.5">
-        {/* SURVIVOR SQUAD CARDS (Max 6 Active + 1 Next-Unlock Teaser) */}
-        <div className="flex items-end gap-1.5">
+      <div className="absolute bottom-1 left-1/2 -translate-x-1/2 z-20 flex items-end justify-center gap-1 max-w-[99vw] px-1.5 py-0.5">
+        {/* SURVIVOR SQUAD CARDS (Fits completely on screen with small unit names) */}
+        <div className="flex items-end gap-1">
           {effectiveSquad.map((sType, slotIndex) => {
             const cfg = SURVIVOR_CONFIGS[sType];
             const cd = unitCooldowns[sType];
             const canAfford = courage >= cfg.cost && cd <= 0;
             const lvl = progress.unitLevels[sType] || 1;
             const slotKey = String(slotIndex + 1);
+            const shortName = SHORT_UNIT_NAMES[sType];
 
             return (
               <button
                 key={sType}
+                type="button"
                 onClick={() => deploySurvivor(sType)}
                 disabled={!canAfford}
-                className={`shrink-0 relative w-12 h-14 sm:w-13 sm:h-15 rounded transition select-none flex flex-col justify-between p-1 ${
+                className={`shrink-0 relative w-[42px] h-[56px] sm:w-[46px] sm:h-[60px] rounded transition select-none flex flex-col justify-between p-0.5 ${
                   canAfford
                     ? 'bg-[#3f4430]/95 border-2 border-[#c2c799] shadow-[0_3px_8px_rgba(0,0,0,0.8)] cursor-pointer hover:scale-105 active:scale-95'
                     : 'bg-[#26281d]/88 border border-[#4a4d38] cursor-not-allowed'
@@ -2675,12 +2724,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   />
                 )}
 
-                <div className="w-full flex justify-between items-center z-20">
-                  <span className="text-[7px] font-bold text-zinc-400">[{slotKey}]</span>
+                <div className="w-full flex justify-between items-center z-20 px-0.5">
+                  <span className="text-[6.5px] font-bold text-zinc-400 leading-none">
+                    {slotKey}
+                  </span>
                   <span
-                    className={`px-1 text-[8px] font-extrabold leading-tight rounded-xs ${
+                    className={`px-0.5 text-[7px] font-extrabold leading-tight rounded-xs ${
                       canAfford
-                        ? 'bg-[#0284c7] text-white border border-black shadow-xs'
+                        ? 'bg-[#0284c7] text-white border border-black/70'
                         : 'text-[#8c8a6e]'
                     }`}
                   >
@@ -2688,36 +2739,45 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   </span>
                 </div>
 
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="absolute inset-x-0 top-2.5 bottom-4 flex items-center justify-center pointer-events-none">
                   <CanvasUnitPortrait type={sType} active={canAfford} />
                 </div>
 
-                <div className="w-full flex items-center justify-between z-20 mt-auto">
+                <div className="w-full flex flex-col items-center z-20 mt-auto">
                   <span
-                    className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[7px] ${
-                      canAfford
-                        ? 'bg-slate-950 border border-sky-400 text-sky-300'
-                        : 'bg-zinc-900/60 text-zinc-600'
+                    className={`w-full text-center text-[6.5px] sm:text-[7px] font-bold leading-none truncate px-0.5 mb-0.5 ${
+                      canAfford ? 'text-amber-100 drop-shadow-[0_1px_1px_rgba(0,0,0,0.95)]' : 'text-zinc-500'
                     }`}
                   >
-                    💧
+                    {shortName}
                   </span>
-                  <span
-                    className={`font-tactical font-extrabold text-xs leading-none ${
-                      canAfford ? 'text-white' : 'text-[#737058]'
-                    }`}
-                    style={
-                      canAfford ? { textShadow: '1px 1px 0 #000, -1px -1px 0 #000' } : undefined
-                    }
-                  >
-                    {cfg.cost}
-                  </span>
+                  <div className="w-full flex items-center justify-between px-0.5">
+                    <span
+                      className={`w-3 h-3 rounded-full flex items-center justify-center text-[6px] ${
+                        canAfford
+                          ? 'bg-slate-950 border border-sky-400 text-sky-300'
+                          : 'bg-zinc-900/60 text-zinc-600'
+                      }`}
+                    >
+                      💧
+                    </span>
+                    <span
+                      className={`font-tactical font-extrabold text-[10px] sm:text-[11px] leading-none ${
+                        canAfford ? 'text-white' : 'text-[#737058]'
+                      }`}
+                      style={
+                        canAfford ? { textShadow: '1px 1px 0 #000, -1px -1px 0 #000' } : undefined
+                      }
+                    >
+                      {cfg.cost}
+                    </span>
+                  </div>
                 </div>
               </button>
             );
           })}
 
-          {/* Single Next-Unlock Teaser Slot so player sees upcoming goal without clutter */}
+          {/* Next-Unlock Teaser Slot (Compact with small name) */}
           {nextLockedCfg && (
             <button
               type="button"
@@ -2731,18 +2791,21 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   true
                 )
               }
-              className="shrink-0 relative w-11 h-14 sm:w-12 sm:h-15 rounded bg-zinc-950/82 border border-amber-700/65 flex flex-col justify-between p-1 opacity-85 hover:opacity-100 cursor-pointer transition"
+              className="shrink-0 relative w-[38px] h-[56px] sm:w-[42px] sm:h-[60px] rounded bg-zinc-950/82 border border-amber-700/65 flex flex-col justify-between p-0.5 opacity-85 hover:opacity-100 cursor-pointer transition"
               title={`🔒 Próximo desbloqueo en Nivel ${nextLockedCfg.unlockLevel}: ${nextLockedCfg.name} (${nextLockedCfg.roleTitle})`}
             >
               <div className="w-full flex justify-center z-20">
-                <span className="px-1 text-[7px] font-extrabold bg-amber-950 text-amber-300 border border-amber-600/80 rounded-xs">
-                  🔒 NV.{nextLockedCfg.unlockLevel}
+                <span className="px-0.5 text-[6.5px] font-extrabold bg-amber-950 text-amber-300 border border-amber-600/80 rounded-xs leading-tight">
+                  🔒NV.{nextLockedCfg.unlockLevel}
                 </span>
               </div>
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className="absolute inset-x-0 top-2.5 bottom-4 flex items-center justify-center pointer-events-none">
                 <CanvasUnitPortrait type={nextLockedCfg.id} active={false} />
               </div>
-              <div className="w-full z-20 mt-auto">
+              <div className="w-full z-20 mt-auto flex flex-col items-center">
+                <span className="w-full text-center text-[6px] font-bold text-amber-200/75 leading-none truncate px-0.5 mb-0.5">
+                  {SHORT_UNIT_NAMES[nextLockedCfg.id]}
+                </span>
                 <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden border border-black">
                   <div
                     className="h-full bg-amber-400 transition-all"
@@ -2755,9 +2818,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         </div>
 
         {/* DIVIDER */}
-        <div className="h-10 w-[1px] bg-[#6e7353]/50 self-center mx-0.5" />
+        <div className="h-10 w-[1px] bg-[#6e7353]/55 self-center mx-0.5 shrink-0" />
 
-        {/* RAGE TACTICAL DOCK: Blue Barrel [Q] (6), Red Barrel [X] (12), Medkit [E] (14) */}
+        {/* RAGE TACTICAL DOCK (2-Tap Manual Throwables: 1st tap = Select, 2nd tap on road = Drop) */}
         <div className="flex items-end gap-1">
           {TACTICAL_ORDER.map((itemType) => {
             const cfg = TACTICAL_ITEM_CONFIGS[itemType];
@@ -2769,40 +2832,43 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             return (
               <button
                 key={itemType}
-                onPointerDown={() => {
-                  if (canAfford) {
-                    setDraggingItem(itemType);
-                    simRef.current.draggingItem = itemType;
-                  }
-                }}
-                onClick={() => toggleDraggingTactical(itemType)}
+                type="button"
+                onClick={() => selectTacticalItem(itemType)}
                 disabled={!canAfford}
-                className={`shrink-0 relative w-11 h-13 sm:w-12 sm:h-14 rounded-xs transition select-none flex flex-col justify-between p-1 ${
+                className={`shrink-0 relative w-[40px] h-[54px] sm:w-[44px] sm:h-[58px] rounded transition select-none flex flex-col justify-between p-0.5 ${
                   isSelected
-                    ? 'bg-amber-950/95 border-2 border-yellow-300 scale-105 shadow-lg'
+                    ? 'bg-amber-950/95 border-2 border-yellow-300 ring-2 ring-yellow-400/60 -translate-y-1 shadow-xl cursor-pointer'
                     : canAfford
-                    ? 'bg-[#453830]/92 border-2 border-[#b88774] cursor-grab hover:scale-105 shadow-[0_2px_6px_rgba(0,0,0,0.75)]'
+                    ? 'bg-[#453830]/92 border-2 border-[#b88774] cursor-pointer hover:scale-105 active:scale-95 shadow-[0_2px_6px_rgba(0,0,0,0.75)]'
                     : 'bg-[#2a2520]/82 border border-[#453c34] cursor-not-allowed'
                 }`}
-                title={`${cfg.name} (${cfg.rageCost} Ira) [${keyHint}] — ${cfg.description}`}
+                title={`${cfg.name} (${cfg.rageCost} Ira) [${keyHint}] — 1er toque: seleccionar, 2do toque en carretera: lanzar`}
               >
                 {cd > 0 && (
                   <div
-                    className="absolute bottom-0 left-0 right-0 bg-black/65 pointer-events-none z-10"
+                    className="absolute bottom-0 left-0 right-0 bg-black/65 pointer-events-none z-10 rounded-b"
                     style={{ height: `${Math.min(100, (cd / cfg.prepTime) * 100)}%` }}
                   />
                 )}
 
-                <div className="w-full flex justify-between items-center z-20">
-                  <span className="text-[7px] font-extrabold text-zinc-400">{keyHint}</span>
-                  <span className="text-[8px] text-lime-300 leading-none">⤵</span>
+                <div className="w-full flex justify-between items-center z-20 px-0.5">
+                  <span className="text-[6.5px] font-extrabold text-zinc-400 leading-none">
+                    {keyHint}
+                  </span>
+                  <span
+                    className={`text-[6.5px] font-extrabold leading-none ${
+                      isSelected ? 'text-yellow-300 animate-pulse' : 'text-lime-300'
+                    }`}
+                  >
+                    {isSelected ? '🎯' : '⤵'}
+                  </span>
                 </div>
 
-                {/* Tactical Item Pixel Icon */}
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                {/* Tactical Item Icon */}
+                <div className="absolute inset-x-0 top-2.5 bottom-4 flex items-center justify-center pointer-events-none">
                   {itemType === 'blue_barrel' && (
                     <div
-                      className={`w-5 h-7 rounded-xs border flex items-center justify-center ${
+                      className={`w-4 h-6 rounded-xs border flex items-center justify-center ${
                         canAfford
                           ? 'bg-gradient-to-r from-[#3b5d7a] via-[#527da3] to-[#243b4f] border-black'
                           : 'bg-[#1f1e18] border-[#2e2c22] opacity-55'
@@ -2813,25 +2879,25 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   )}
                   {itemType === 'red_barrel' && (
                     <div
-                      className={`w-5 h-7 rounded-xs border flex items-center justify-center ${
+                      className={`w-4 h-6 rounded-xs border flex items-center justify-center ${
                         canAfford
                           ? 'bg-gradient-to-r from-[#b91c1c] via-[#ef4444] to-[#7f1d1d] border-black'
                           : 'bg-[#241917] border-[#362522] opacity-55'
                       }`}
                     >
-                      <span className="text-[8px] leading-none">{canAfford ? '💥' : ''}</span>
+                      <span className="text-[7px] leading-none">{canAfford ? '💥' : ''}</span>
                     </div>
                   )}
                   {itemType === 'medkit' && (
                     <div
-                      className={`w-6 h-5 rounded-xs border flex items-center justify-center ${
+                      className={`w-5 h-4 rounded-xs border flex items-center justify-center ${
                         canAfford
                           ? 'bg-slate-100 border-black'
                           : 'bg-zinc-800 border-zinc-700 opacity-50'
                       }`}
                     >
                       <span
-                        className={`font-extrabold text-[10px] leading-none ${
+                        className={`font-extrabold text-[9px] leading-none ${
                           canAfford ? 'text-red-600' : 'text-zinc-600'
                         }`}
                       >
@@ -2841,24 +2907,37 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   )}
                 </div>
 
-                <div className="w-full flex items-center justify-between z-20 mt-auto">
+                <div className="w-full flex flex-col items-center z-20 mt-auto">
                   <span
-                    className={`w-2.5 h-1 rounded-full border border-black ${
-                      itemType === 'medkit'
-                        ? 'bg-emerald-400'
-                        : itemType === 'red_barrel'
-                        ? 'bg-orange-500'
-                        : 'bg-lime-400'
+                    className={`w-full text-center text-[6px] sm:text-[6.5px] font-bold leading-none truncate px-0.5 mb-0.5 ${
+                      isSelected
+                        ? 'text-yellow-300'
+                        : canAfford
+                        ? 'text-orange-100 drop-shadow-[0_1px_1px_rgba(0,0,0,0.95)]'
+                        : 'text-zinc-500'
                     }`}
-                  />
-                  <span
-                    className={`font-tactical font-extrabold text-xs leading-none ${
-                      canAfford ? 'text-[#ff6b6b]' : 'text-[#633630]'
-                    }`}
-                    style={canAfford ? { textShadow: '1px 1px 0 #000' } : undefined}
                   >
-                    {cfg.rageCost}
+                    {isSelected ? 'SOLTAR' : SHORT_TACTICAL_NAMES[itemType]}
                   </span>
+                  <div className="w-full flex items-center justify-between px-0.5">
+                    <span
+                      className={`w-2 h-1 rounded-full border border-black ${
+                        itemType === 'medkit'
+                          ? 'bg-emerald-400'
+                          : itemType === 'red_barrel'
+                          ? 'bg-orange-500'
+                          : 'bg-lime-400'
+                      }`}
+                    />
+                    <span
+                      className={`font-tactical font-extrabold text-[10px] sm:text-[11px] leading-none ${
+                        canAfford ? 'text-[#ff6b6b]' : 'text-[#633630]'
+                      }`}
+                      style={canAfford ? { textShadow: '1px 1px 0 #000' } : undefined}
+                    >
+                      {cfg.rageCost}
+                    </span>
+                  </div>
                 </div>
               </button>
             );
@@ -2977,7 +3056,7 @@ const CanvasUnitPortrait: React.FC<{ type: SurvivorType; active: boolean }> = Re
         ref={ref}
         width={34}
         height={38}
-        className={`w-8.5 h-9.5 pixel-canvas transition ${
+        className={`w-7 h-8 sm:w-7.5 sm:h-8.5 hd-canvas transition ${
           active ? 'opacity-100' : 'brightness-0 opacity-45'
         }`}
       />
