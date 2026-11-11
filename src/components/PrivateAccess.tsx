@@ -122,6 +122,11 @@ export const PrivateAccess: React.FC<PrivateAccessProps> = ({
           </div>
 
           <div className="text-center mb-5">
+            <img
+              src="./icon-192.png?v=2"
+              alt="Last Survival App Icon"
+              className="w-16 h-16 mx-auto mb-2.5 rounded-2xl border-2 border-yellow-500/80 shadow-[0_0_24px_rgba(234,179,8,0.45)] object-cover"
+            />
             <span className="inline-block text-[10px] font-extrabold uppercase tracking-widest text-yellow-300 bg-yellow-950/75 border border-yellow-600/60 px-2.5 py-0.5 rounded mb-2">
               Acceso Privado — Zona de Cuarentena
             </span>
