@@ -46,6 +46,10 @@ export function mergeEnvelopes(local: SyncEnvelope, remote: SyncEnvelope): SyncE
       ? a.commanderXp || 0
       : b.commanderXp || 0;
 
+  const aPlayed = a.lastPlayedAt || 0;
+  const bPlayed = b.lastPlayedAt || 0;
+  const lastPlayed = aPlayed >= bPlayed ? a : b;
+
   const progress: PlayerProgress = {
     ...b,
     ...a,
@@ -67,6 +71,8 @@ export function mergeEnvelopes(local: SyncEnvelope, remote: SyncEnvelope): SyncE
     ) as unknown as PlayerProgress['missionStars'],
     unlockedMissions: union(a.unlockedMissions, b.unlockedMissions).sort((x, y) => x - y),
     discoveredCaches: union(a.discoveredCaches, b.discoveredCaches),
+    lastPlayedMission: lastPlayed.lastPlayedMission,
+    lastPlayedAt: Math.max(aPlayed, bPlayed) || undefined,
   };
 
   return {

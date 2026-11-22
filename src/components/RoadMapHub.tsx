@@ -1,6 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  BUS_STAT_COSTS,
+  getMaxBusUpgrades,
+  getMaxUnitUpgrades,
   getNextLockedUnit,
+  getUnitUpgradeCost,
   getXpForNextLevel,
   isUnitUnlocked,
   MAX_COMMANDER_LEVEL,
@@ -50,12 +54,16 @@ interface RoadMapHubProps {
   onLaunchMission: (mission: MissionNode) => void;
   onUpgradeSurvivor: (type: SurvivorType, cost: number) => void;
   onUpgradeBusStat: (kind: 'hp' | 'bill' | 'bumper' | 'armor', cost: number) => void;
+  onUpgradeSurvivorMax: (type: SurvivorType) => void;
+  onUpgradeBusStatMax: (kind: 'hp' | 'bill') => void;
   onToggleDeckUnit: (type: SurvivorType) => void;
   onResetProgress: () => void;
   onCollectCache: (cacheId: string, coins: number, fuel: number) => void;
   onRefillFuel: () => void;
   cloudStatus: CloudStatus;
   onOpenCloudSync: () => void;
+  /** Disable map keyboard shortcuts (WASD / Enter) while an overlay owns the keyboard. */
+  hotkeysDisabled?: boolean;
 }
 
 // Mission/cache X coords are percentages of the original 2800px span (BASE_W);
@@ -111,12 +119,15 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
   onLaunchMission,
   onUpgradeSurvivor,
   onUpgradeBusStat,
+  onUpgradeSurvivorMax,
+  onUpgradeBusStatMax,
   onToggleDeckUnit,
   onResetProgress,
   onCollectCache,
   onRefillFuel,
   cloudStatus,
   onOpenCloudSync,
+  hotkeysDisabled = false,
 }) => {
   const [modalTab, setModalTab] = useState<'none' | 'deck' | 'garage' | 'zombiepedia'>('none');
   const [zoomedOut, setZoomedOut] = useState<boolean>(false);
@@ -663,7 +674,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
 
   // WASD movement on the Enlarged Road Map
   useEffect(() => {
-    if (modalTab !== 'none') return;
+    if (modalTab !== 'none' || hotkeysDisabled) return;
     const keys = new Set<string>();
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -726,6 +737,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
     };
   }, [
     modalTab,
+    hotkeysDisabled,
     onCollectCache,
     onLaunchMission,
     onSelectMission,
@@ -1263,8 +1275,9 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                     const isEquipped = equippedDeck.includes(sType);
                     const deckSlotIdx = equippedDeck.indexOf(sType);
                     const lvl = progress.unitLevels[sType] || 1;
-                    const cost = lvl * 35;
+                    const cost = getUnitUpgradeCost(lvl);
                     const canAfford = isUnlocked && progress.coins >= cost;
+                    const maxUp = getMaxUnitUpgrades(lvl, progress.coins);
                     const mult = 1 + (lvl - 1) * 0.14;
                     const isLastEquipped = isEquipped && equippedDeck.length <= 1;
 
@@ -1360,6 +1373,15 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                             >
                               ⬆{cost}🪙
                             </button>
+                            {maxUp.levels >= 2 && (
+                              <button
+                                onClick={() => onUpgradeSurvivorMax(sType)}
+                                title={`Mejorar al máximo: +${maxUp.levels} niveles (Nv.${lvl} → Nv.${lvl + maxUp.levels}) por ${maxUp.total} monedas`}
+                                className="py-1 px-1 rounded text-[8.5px] font-extrabold uppercase bg-amber-400 hover:bg-amber-300 text-zinc-950 cursor-pointer whitespace-nowrap"
+                              >
+                                ⏫Máx +{maxUp.levels}
+                              </button>
+                            )}
                           </div>
                         ) : (
                           <div className="w-full py-1 px-1 rounded bg-zinc-900/95 border border-zinc-800 text-amber-300/90 font-bold text-[8.5px] text-center flex items-center justify-center gap-0.5 truncate">
@@ -1415,13 +1437,27 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                           Integridad total actual: <strong className="text-white">{200 + progress.busHpBonus} HP</strong> (facilita conseguir 3★).
                         </p>
                       </div>
-                      <button
-                        onClick={() => triggerGarageUpgrade('hp', 75)}
-                        disabled={progress.coins < 75}
-                        className="py-1.5 rounded bg-yellow-500 hover:bg-yellow-400 disabled:bg-zinc-800 disabled:text-zinc-500 text-zinc-950 font-extrabold text-[10px] uppercase cursor-pointer"
-                      >
-                        Soldar Chasis (75 🪙)
-                      </button>
+                      <div className="flex gap-1.5">
+                        <button
+                          onClick={() => triggerGarageUpgrade('hp', BUS_STAT_COSTS.hp)}
+                          disabled={progress.coins < BUS_STAT_COSTS.hp}
+                          className="flex-1 py-1.5 rounded bg-yellow-500 hover:bg-yellow-400 disabled:bg-zinc-800 disabled:text-zinc-500 text-zinc-950 font-extrabold text-[10px] uppercase cursor-pointer"
+                        >
+                          Soldar Chasis ({BUS_STAT_COSTS.hp} 🪙)
+                        </button>
+                        {getMaxBusUpgrades('hp', progress.coins).times >= 2 && (
+                          <button
+                            onClick={() => {
+                              onUpgradeBusStatMax('hp');
+                              setWeldBurstKey((k) => k + 1);
+                            }}
+                            title={`Mejorar al máximo: ×${getMaxBusUpgrades('hp', progress.coins).times} por ${getMaxBusUpgrades('hp', progress.coins).total} monedas`}
+                            className="px-2 py-1.5 rounded bg-amber-400 hover:bg-amber-300 text-zinc-950 font-extrabold text-[10px] uppercase cursor-pointer whitespace-nowrap"
+                          >
+                            ⏫Máx ×{getMaxBusUpgrades('hp', progress.coins).times}
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <div className="bg-[#1a1913] border border-[#5e5a45] rounded-lg p-3 flex flex-col justify-between">
@@ -1434,13 +1470,27 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                           Bono actual en el techo: <strong className="text-white">+{progress.billDamageBonus} daño</strong> por disparo y ráfaga.
                         </p>
                       </div>
-                      <button
-                        onClick={() => triggerGarageUpgrade('bill', 80)}
-                        disabled={progress.coins < 80}
-                        className="py-1.5 rounded bg-yellow-500 hover:bg-yellow-400 disabled:bg-zinc-800 disabled:text-zinc-500 text-zinc-950 font-extrabold text-[10px] uppercase cursor-pointer"
-                      >
-                        Calibrar Rifle (80 🪙)
-                      </button>
+                      <div className="flex gap-1.5">
+                        <button
+                          onClick={() => triggerGarageUpgrade('bill', BUS_STAT_COSTS.bill)}
+                          disabled={progress.coins < BUS_STAT_COSTS.bill}
+                          className="flex-1 py-1.5 rounded bg-yellow-500 hover:bg-yellow-400 disabled:bg-zinc-800 disabled:text-zinc-500 text-zinc-950 font-extrabold text-[10px] uppercase cursor-pointer"
+                        >
+                          Calibrar Rifle ({BUS_STAT_COSTS.bill} 🪙)
+                        </button>
+                        {getMaxBusUpgrades('bill', progress.coins).times >= 2 && (
+                          <button
+                            onClick={() => {
+                              onUpgradeBusStatMax('bill');
+                              setWeldBurstKey((k) => k + 1);
+                            }}
+                            title={`Mejorar al máximo: ×${getMaxBusUpgrades('bill', progress.coins).times} por ${getMaxBusUpgrades('bill', progress.coins).total} monedas`}
+                            className="px-2 py-1.5 rounded bg-amber-400 hover:bg-amber-300 text-zinc-950 font-extrabold text-[10px] uppercase cursor-pointer whitespace-nowrap"
+                          >
+                            ⏫Máx ×{getMaxBusUpgrades('bill', progress.coins).times}
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <div className="bg-[#1a1913] border border-[#5e5a45] rounded-lg p-3 flex flex-col justify-between">

@@ -1,5 +1,7 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  getMaxBusUpgrades,
+  getMaxUnitUpgrades,
   isUnitUnlocked,
   MAX_COMMANDER_LEVEL,
   MAX_EQUIPPED_DECK,
@@ -14,10 +16,11 @@ import { RoadMapHub } from './components/RoadMapHub';
 import { BattleArena } from './components/BattleArena';
 import { soundFX } from './engine/SoundFX';
 import { CloudSyncPanel } from './components/CloudSyncPanel';
+import { ContinuePrompt } from './components/ContinuePrompt';
 import { useCloudSync } from './sync/useCloudSync';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '2:29 PM - 11/22/2026';
+const FALLBACK_TIMESTAMP = '2:37 PM - 11/22/2026';
 export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 const CURRENT_BUILD_ID = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : '';
@@ -162,17 +165,23 @@ export function App() {
     }
     return progress.unlockedMissions[progress.unlockedMissions.length - 1] || 1;
   });
-  const [activeBattleMission, setActiveBattleMission] = useState<MissionNode | null>(() => {
+  // Always start on the campaign map; the "Continuar" prompt offers to jump back into the last mission.
+  const [activeBattleMission, setActiveBattleMission] = useState<MissionNode | null>(null);
+  // After a silent auto-update reload from the map, don't nag with the continue prompt again.
+  const [continueDismissed, setContinueDismissed] = useState<boolean>(() => {
     try {
-      if (sessionStorage.getItem('ls_auto_update_hub') === '1') {
-        sessionStorage.removeItem('ls_auto_update_hub');
-        return null;
-      }
+      return sessionStorage.getItem('ls_auto_update_hub') === '1';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      sessionStorage.removeItem('ls_auto_update_hub');
     } catch {
       // Ignore
     }
-    return MISSION_NODES[0];
-  });
+  }, []);
 
   const [showCloudPanel, setShowCloudPanel] = useState<boolean>(false);
   const applyCloudProgress = useCallback((p: PlayerProgress) => {
@@ -328,6 +337,29 @@ export function App() {
     }
   }, [progress]);
 
+  // Where "Continuar" resumes: last mission played on ANY synced device (falls back to the frontier for old saves)
+  const continueMission = useMemo<MissionNode | null>(() => {
+    let id = progress.lastPlayedMission;
+    if (!id) {
+      const anyStars = Object.values(progress.missionStars).some((s) => s > 0);
+      if (!anyStars) return null;
+      id = progress.unlockedMissions.find((m) => !(progress.missionStars[m] > 0));
+      id = id ?? progress.unlockedMissions[progress.unlockedMissions.length - 1];
+    }
+    if (!progress.unlockedMissions.includes(id)) {
+      id = progress.unlockedMissions[progress.unlockedMissions.length - 1] || 1;
+    }
+    return MISSION_NODES.find((m) => m.id === id) ?? null;
+  }, [progress.lastPlayedMission, progress.missionStars, progress.unlockedMissions]);
+
+  const showContinuePrompt =
+    unlockedApp && !activeBattleMission && !continueDismissed && !showCloudPanel && !!continueMission;
+
+  // Keep the map focused on the mission being offered (also when a cloud sync updates it)
+  useEffect(() => {
+    if (showContinuePrompt && continueMission) setSelectedMissionId(continueMission.id);
+  }, [showContinuePrompt, continueMission]);
+
   const handleUnlock = useCallback(() => {
     setUnlockedApp(true);
     try {
@@ -343,9 +375,12 @@ export function App() {
   const handleLaunchMission = useCallback((mission: MissionNode) => {
     soundFX.resumeFromBackground();
     soundFX.playUnitSpawn();
+    setContinueDismissed(true);
     setProgress((prev) => ({
       ...prev,
       fuel: prev.fuel >= mission.fuelCost ? prev.fuel - mission.fuelCost : prev.maxFuel,
+      lastPlayedMission: mission.id,
+      lastPlayedAt: Date.now(),
     }));
     setActiveBattleMission(mission);
   }, []);
@@ -376,6 +411,9 @@ export function App() {
               [mId]: Math.max(currentStars, stars),
             },
             unlockedMissions: Array.from(unlockedSet).sort((a, b) => a - b),
+            // Resume point moves on to the next mission after a win
+            lastPlayedMission: Math.min(MISSION_NODES.length, nextId),
+            lastPlayedAt: Date.now(),
           };
         });
 
@@ -400,6 +438,34 @@ export function App() {
           [type]: (prev.unitLevels[type] || 1) + 1,
         },
       };
+    });
+  }, []);
+
+  // "Mejorar máx": spend all affordable coins on one unit (rising cost per level)
+  const handleUpgradeSurvivorMax = useCallback((type: SurvivorType) => {
+    setProgress((prev) => {
+      if (!isUnitUnlocked(type, prev.busLevel)) return prev;
+      const lvl = prev.unitLevels[type] || 1;
+      const { levels, total } = getMaxUnitUpgrades(lvl, prev.coins);
+      if (levels <= 0) return prev;
+      soundFX.playCouragePickup();
+      return {
+        ...prev,
+        coins: prev.coins - total,
+        unitLevels: { ...prev.unitLevels, [type]: lvl + levels },
+      };
+    });
+  }, []);
+
+  // "Mejorar máx" for the repeatable bus upgrades (chassis HP / Bill's rifle)
+  const handleUpgradeBusStatMax = useCallback((kind: 'hp' | 'bill') => {
+    setProgress((prev) => {
+      const { times, total } = getMaxBusUpgrades(kind, prev.coins);
+      if (times <= 0) return prev;
+      soundFX.playCouragePickup();
+      return kind === 'hp'
+        ? { ...prev, coins: prev.coins - total, busHpBonus: prev.busHpBonus + 50 * times }
+        : { ...prev, coins: prev.coins - total, billDamageBonus: prev.billDamageBonus + 8 * times };
     });
   }, []);
 
@@ -545,12 +611,25 @@ export function App() {
           onLaunchMission={handleLaunchMission}
           onUpgradeSurvivor={handleUpgradeSurvivor}
           onUpgradeBusStat={handleUpgradeBusStat}
+          onUpgradeSurvivorMax={handleUpgradeSurvivorMax}
+          onUpgradeBusStatMax={handleUpgradeBusStatMax}
           onToggleDeckUnit={handleToggleDeckUnit}
           onResetProgress={handleResetProgress}
           onCollectCache={handleCollectCache}
           onRefillFuel={handleRefillFuel}
           cloudStatus={cloud.status}
           onOpenCloudSync={() => setShowCloudPanel(true)}
+          hotkeysDisabled={showContinuePrompt || showCloudPanel}
+        />
+      )}
+
+      {showContinuePrompt && continueMission && (
+        <ContinuePrompt
+          mission={continueMission}
+          stars={progress.missionStars[continueMission.id] || 0}
+          lastPlayedAt={progress.lastPlayedAt}
+          onContinue={() => handleLaunchMission(continueMission)}
+          onDismiss={() => setContinueDismissed(true)}
         />
       )}
 

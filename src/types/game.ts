@@ -119,10 +119,35 @@ export interface PlayerProgress {
   missionStars: Record<number, number>;
   unlockedMissions: number[];
   discoveredCaches: string[];
+  /** Mission to resume ("Continuar"): last one launched, or the next one after a victory. Synced across devices. */
+  lastPlayedMission?: number;
+  /** Epoch ms when lastPlayedMission was set; the most recent device wins on sync. */
+  lastPlayedAt?: number;
 }
 
 export const MAX_COMMANDER_LEVEL = 12;
 export const MAX_EQUIPPED_DECK = 6;
+
+// ---- Upgrade economy (shared by the map UI and App handlers) -----------------
+export const getUnitUpgradeCost = (level: number) => level * 35;
+export const BUS_STAT_COSTS = { hp: 75, bill: 80, bumper: 110, armor: 125 } as const;
+
+/** How many unit levels the player can buy right now with `coins` (costs rise each level). */
+export function getMaxUnitUpgrades(level: number, coins: number): { levels: number; total: number } {
+  let lvl = level;
+  let total = 0;
+  while (total + getUnitUpgradeCost(lvl) <= coins) {
+    total += getUnitUpgradeCost(lvl);
+    lvl++;
+  }
+  return { levels: lvl - level, total };
+}
+
+/** How many times a repeatable bus upgrade (chassis / Bill's rifle) can be bought with `coins`. */
+export function getMaxBusUpgrades(kind: 'hp' | 'bill', coins: number): { times: number; total: number } {
+  const times = Math.floor(coins / BUS_STAT_COSTS[kind]);
+  return { times, total: times * BUS_STAT_COSTS[kind] };
+}
 
 export const SURVIVOR_ORDER: SurvivorType[] = [
   'redneck',
