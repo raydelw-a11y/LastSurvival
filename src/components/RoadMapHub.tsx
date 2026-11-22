@@ -52,7 +52,15 @@ interface RoadMapHubProps {
   onRefillFuel: () => void;
 }
 
-const WORLD_W = 2800;
+// Mission/cache X coords are percentages of the original 2800px span (BASE_W);
+// values above 100 extend the campaign east into Sectors 5..8 (M25..M50).
+const BASE_W = 2800;
+const WORLD_W = 5800;
+const X_PCT = BASE_W / WORLD_W;
+const toWorldX = (mapX: number) => (mapX / 100) * BASE_W;
+const MAX_MAP_X = (WORLD_W / BASE_W) * 100 - 3;
+// River crossings / sector borders (world px) between consecutive sectors
+const SECTOR_BORDERS = [720, 1385, 2060, 2740, 3412, 4084, 4756];
 const WORLD_H = 980;
 
 const ROAD_CACHES = [
@@ -76,6 +84,18 @@ const ROAD_CACHES = [
   { id: 'cache_14', name: 'Contenedor Blindado Sur', x: 81.4, y: 66, coins: 235, fuel: 5 },
   { id: 'cache_15', name: 'Convoy Ártico Norte', x: 85.5, y: 34, coins: 250, fuel: 5 },
   { id: 'cache_16', name: 'Hangar Secreto Omega', x: 93.7, y: 63, coins: 280, fuel: 5 },
+  // Sector 5 (M25..M30)
+  { id: 'cache_17', name: 'Caravana del Desierto', x: 105.8, y: 65, coins: 300, fuel: 5 },
+  { id: 'cache_18', name: 'Búnker del Campo Nuclear', x: 113.8, y: 35, coins: 320, fuel: 5 },
+  // Sector 6 (M31..M36)
+  { id: 'cache_19', name: 'Furgón Blindado Urbano', x: 125.8, y: 65, coins: 345, fuel: 5 },
+  { id: 'cache_20', name: 'Azotea del Distrito', x: 137.8, y: 35, coins: 370, fuel: 6 },
+  // Sector 7 (M37..M42)
+  { id: 'cache_21', name: 'Trineo de Suministros', x: 149.8, y: 65, coins: 395, fuel: 6 },
+  { id: 'cache_22', name: 'Depósito Criogénico', x: 161.8, y: 35, coins: 420, fuel: 6 },
+  // Sector 8 (M43..M50)
+  { id: 'cache_23', name: 'Arsenal Fronterizo', x: 173.8, y: 65, coins: 450, fuel: 6 },
+  { id: 'cache_24', name: 'Laboratorio de Campaña', x: 189.8, y: 35, coins: 480, fuel: 6 },
 ];
 
 export const RoadMapHub: React.FC<RoadMapHubProps> = ({
@@ -123,7 +143,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
     setBusMapPos({ x: selectedMission.mapX, y: selectedMission.mapY });
     const container = scrollContainerRef.current;
     if (container && !zoomedOut) {
-      const targetLeft = (selectedMission.mapX / 100) * WORLD_W - container.clientWidth / 2;
+      const targetLeft = toWorldX(selectedMission.mapX) - container.clientWidth / 2;
       const targetTop = (selectedMission.mapY / 100) * WORLD_H - container.clientHeight / 2;
       container.scrollTo({
         left: Math.max(0, targetLeft),
@@ -136,10 +156,10 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
   const missionStarsRef = useRef(progress.missionStars);
   missionStarsRef.current = progress.missionStars;
 
-  // Bake static 2800x980 Continent once + Animate Live Weather, Rivers, Ocean, Flares & Conquered Road!
+  // Bake static 5800x980 Continent once + Animate Live Weather, Rivers, Ocean, Flares & Conquered Road!
   useEffect(() => {
     if (!bakedMapRef.current) {
-      const MAP_SCALE = 1.35;
+      const MAP_SCALE = 1.2;
       const off = document.createElement('canvas');
       off.width = Math.round(WORLD_W * MAP_SCALE);
       off.height = Math.round(WORLD_H * MAP_SCALE);
@@ -147,16 +167,32 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       bctx.scale(MAP_SCALE, MAP_SCALE);
       bctx.imageSmoothingEnabled = true;
 
-      // 1. Regional West-to-East Biome Grounds across the 4 Sectors
+      // 1. Regional West-to-East Biome Grounds across the 8 Sectors
       const bgGrad = bctx.createLinearGradient(0, 0, WORLD_W, 0);
-      bgGrad.addColorStop(0, '#334227');
-      bgGrad.addColorStop(0.24, '#3c4a2d');
-      bgGrad.addColorStop(0.27, '#5c462f');
-      bgGrad.addColorStop(0.49, '#46413b');
-      bgGrad.addColorStop(0.52, '#354534');
-      bgGrad.addColorStop(0.73, '#313a42');
-      bgGrad.addColorStop(0.77, '#27342b');
-      bgGrad.addColorStop(1, '#1f2b23');
+      [
+        [0, '#334227'],
+        [0.24, '#3c4a2d'],
+        [0.27, '#5c462f'],
+        [0.49, '#46413b'],
+        [0.52, '#354534'],
+        [0.73, '#313a42'],
+        [0.77, '#27342b'],
+        [0.96, '#1f2b23'],
+        // Sector 5: Red desert canyon
+        [1.0, '#6b4a2b'],
+        [1.18, '#7a5532'],
+        // Sector 6: Fallen megalopolis
+        [1.24, '#3f3f46'],
+        [1.42, '#36363c'],
+        // Sector 7: Glacier & tundra
+        [1.48, '#4b5a66'],
+        [1.66, '#56677a'],
+        // Sector 8: Ground Zero
+        [1.72, '#3b2626'],
+        [WORLD_W / BASE_W, '#2a1515'],
+      ].forEach(([stop, color]) => {
+        bgGrad.addColorStop(Math.min(1, ((stop as number) * BASE_W) / WORLD_W), color as string);
+      });
       bctx.fillStyle = bgGrad;
       bctx.fillRect(0, 0, WORLD_W, WORLD_H);
 
@@ -200,7 +236,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       bctx.fill();
 
       // Northern Alpine Snowy Mountain Ridges along the top border (y = 0..120)
-      for (let m = 0; m < 26; m++) {
+      for (let m = 0; m < Math.ceil(WORLD_W / 114) + 2; m++) {
         const mx = m * 114 - 20;
         const mw = 152 + (m % 3) * 24;
         const mh = 76 + (m % 4) * 18;
@@ -226,7 +262,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       }
 
       // Organic topographic contour plateaus
-      for (let i = 0; i < 90; i++) {
+      for (let i = 0; i < 190; i++) {
         const px = 70 + ((i * 179) % (WORLD_W - 140));
         const py = 120 + ((i * 107) % (WORLD_H - 230));
         bctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.12)';
@@ -239,6 +275,8 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       [
         { x: 350, y: 780, rx: 64, ry: 22 },
         { x: 1775, y: 805, rx: 72, ry: 24 },
+        { x: 3720, y: 790, rx: 66, ry: 22 },
+        { x: 5180, y: 812, rx: 80, ry: 26 },
       ].forEach((pond) => {
         bctx.fillStyle = '#1b3b36';
         bctx.strokeStyle = '#0f2420';
@@ -249,17 +287,21 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
         bctx.stroke();
       });
 
-      // Sector Borders & Crisp Sequential Headers (M1-M6, M7-M12, M13-M18, M19-M24)
+      // Sector Borders & Crisp Sequential Headers (M1-M6 ... M43-M50)
       const sectors = [
         { x: 30, label: 'SECTOR 1: BOSQUE, COLINAS Y RUTA 66 (M1 → M6)' },
         { x: 745, label: 'SECTOR 2: CIUDAD MUERTA Y LAB CERO (M7 → M12)' },
         { x: 1415, label: 'SECTOR 3: SIERRA NEVADA Y BAYOU (M13 → M18)' },
         { x: 2095, label: 'SECTOR 4: PUERTO, RADAR Y OMEGA (M19 → M24)' },
+        { x: 2775, label: 'SECTOR 5: DESIERTO Y CAÑÓN ROJO (M25 → M30)' },
+        { x: 3447, label: 'SECTOR 6: MEGALÓPOLIS CAÍDA (M31 → M36)' },
+        { x: 4119, label: 'SECTOR 7: GLACIAR Y TUNDRA (M37 → M42)' },
+        { x: 4791, label: 'SECTOR 8: ZONA CERO (M43 → M50)' },
       ];
       bctx.strokeStyle = 'rgba(250, 204, 21, 0.3)';
       bctx.lineWidth = 2.2;
       bctx.setLineDash([10, 10]);
-      [728, 1385, 2065].forEach((sx) => {
+      SECTOR_BORDERS.map((x, i) => (i === 0 ? 728 : i === 2 ? 2065 : x)).forEach((sx) => {
         bctx.beginPath();
         bctx.moveTo(sx, 0);
         bctx.lineTo(sx, WORLD_H);
@@ -281,7 +323,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       });
 
       // 2. Winding North-to-South Rivers emptying into the Southern Bay
-      [720, 1385, 2060].forEach((rx) => {
+      SECTOR_BORDERS.forEach((rx) => {
         const drawRiverCurve = () => {
           bctx.beginPath();
           bctx.moveTo(rx, -10);
@@ -349,11 +391,11 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
         });
       };
 
-      for (let i = 0; i < 290; i++) {
+      for (let i = 0; i < 600; i++) {
         const fx = 28 + ((i * 131) % (WORLD_W - 56));
         const fy = 105 + ((i * 83) % (WORLD_H - 210));
         if (Math.abs(fy - 490) > 45) {
-          drawPineHD(fx, fy, 1.04 + (i % 3) * 0.1, fy < 220);
+          drawPineHD(fx, fy, 1.04 + (i % 3) * 0.1, fy < 220 || (fx > 4084 && fx < 4756));
         }
       }
 
@@ -419,6 +461,11 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
         { x: 815, y: 385, w: 54, h: 92 },
         { x: 965, y: 420, w: 50, h: 72 },
         { x: 2085, y: 410, w: 58, h: 78 },
+        // Sector 6: Fallen megalopolis skyline
+        { x: 3470, y: 395, w: 52, h: 86 },
+        { x: 3610, y: 360, w: 60, h: 118 },
+        { x: 3790, y: 410, w: 48, h: 72 },
+        { x: 3930, y: 345, w: 64, h: 132 },
       ];
       cityBlocks.forEach((b, idx) => {
         bctx.fillStyle = 'rgba(0,0,0,0.42)';
@@ -443,10 +490,10 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
         }
       });
 
-      // 4. Single Ordered Sequential Highway 1 -> 2 -> 3 -> ... -> 24 with Smooth S-Curves!
+      // 4. Single Ordered Sequential Highway 1 -> 2 -> 3 -> ... -> 50 with Smooth S-Curves!
       const orderedPts = MISSION_NODES.map((m) => ({
         id: m.id,
-        x: (m.mapX / 100) * WORLD_W,
+        x: toWorldX(m.mapX),
         y: (m.mapY / 100) * WORLD_H,
       }));
 
@@ -493,7 +540,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       const canvas = mapCanvasRef.current;
       const baked = bakedMapRef.current;
       if (!canvas || !baked) return;
-      const ctx = syncCanvasHiDPI(canvas, WORLD_W, WORLD_H, 1.45);
+      const ctx = syncCanvasHiDPI(canvas, WORLD_W, WORLD_H, 1.25);
       if (!ctx) return;
 
       const t = now * 0.001;
@@ -516,13 +563,13 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
         ctx.lineWidth = 6;
         ctx.lineCap = 'round';
         ctx.beginPath();
-        const p0x = (MISSION_NODES[0].mapX / 100) * WORLD_W;
+        const p0x = toWorldX(MISSION_NODES[0].mapX);
         const p0y = (MISSION_NODES[0].mapY / 100) * WORLD_H;
         ctx.moveTo(p0x, p0y);
         for (let i = 0; i < targetIdx; i++) {
-          const x1 = (MISSION_NODES[i].mapX / 100) * WORLD_W;
+          const x1 = toWorldX(MISSION_NODES[i].mapX);
           const y1 = (MISSION_NODES[i].mapY / 100) * WORLD_H;
-          const x2 = (MISSION_NODES[i + 1].mapX / 100) * WORLD_W;
+          const x2 = toWorldX(MISSION_NODES[i + 1].mapX);
           const y2 = (MISSION_NODES[i + 1].mapY / 100) * WORLD_H;
           const midX = (x1 + x2) * 0.5;
           ctx.bezierCurveTo(midX, y1, midX, y2, x2, y2);
@@ -537,7 +584,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       ctx.lineWidth = 3;
       ctx.setLineDash([16, 28]);
       ctx.lineDashOffset = -t * 30;
-      [720, 1385, 2060].forEach((rx) => {
+      SECTOR_BORDERS.forEach((rx) => {
         ctx.beginPath();
         ctx.moveTo(rx, -10);
         ctx.bezierCurveTo(rx - 45, 310, rx + 55, 640, rx - 15, 925);
@@ -593,7 +640,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
 
       // D. Soft Drifting Cloud Shadows
       ctx.fillStyle = 'rgba(0, 0, 0, 0.11)';
-      for (let c = 0; c < 9; c++) {
+      for (let c = 0; c < 18; c++) {
         const cx = ((c * 350 + t * 18) % (WORLD_W + 260)) - 130;
         const cy = 140 + ((c * 115) % (WORLD_H - 250));
         ctx.beginPath();
@@ -634,7 +681,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
         (keys.has('w') || keys.has('arrowup') ? 1 : 0);
       if (dx !== 0 || dy !== 0) {
         setBusMapPos((prev) => {
-          const nx = Math.max(4, Math.min(97, prev.x + dx * 0.8));
+          const nx = Math.max(4, Math.min(MAX_MAP_X, prev.x + dx * 0.8));
           const ny = Math.max(8, Math.min(92, prev.y + dy * 0.95));
 
           MISSION_NODES.forEach((node) => {
@@ -680,7 +727,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
     const container = scrollContainerRef.current;
     if (!container) return;
     setZoomedOut(false);
-    const leftPositions = [0, 700, 1365, 2040];
+    const leftPositions = [0, 700, 1365, 2040, 2720, 3392, 4064, 4736];
     container.scrollTo({
       left: leftPositions[sectorIdx] || 0,
       top: Math.max(0, WORLD_H * 0.5 - container.clientHeight * 0.5),
@@ -785,7 +832,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                   soundFX.playCouragePickup();
                   onCollectCache(cache.id, cache.coins, cache.fuel);
                 }}
-                style={{ left: `${cache.x}%`, top: `${cache.y}%` }}
+                style={{ left: `${cache.x * X_PCT}%`, top: `${cache.y}%` }}
                 className="absolute -translate-x-1/2 -translate-y-1/2 z-10 px-2 py-0.5 rounded bg-amber-950/95 border border-yellow-400 text-[10px] font-bold text-yellow-200 hover:scale-110 transition shadow-lg flex items-center gap-1 animate-bounce cursor-pointer"
                 title={`${cache.name}: Toca para saquear +${cache.coins} monedas y +${cache.fuel} gasolina`}
               >
@@ -795,7 +842,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
             );
           })}
 
-          {/* 24 MISSION PINS (CLASSIC 1..12 CENTER + NORTH 13..18 + SOUTH 19..24) */}
+          {/* 50 MISSION PINS ACROSS 8 SECTORS */}
           {MISSION_NODES.map((node) => {
             const stars = progress.missionStars[node.id] || 0;
             const completed = stars > 0;
@@ -809,7 +856,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                   soundFX.playUnitSpawn();
                   onSelectMission(node.id);
                 }}
-                style={{ left: `${node.mapX}%`, top: `${node.mapY}%` }}
+                style={{ left: `${node.mapX * X_PCT}%`, top: `${node.mapY}%` }}
                 className={`absolute -translate-x-1/2 -translate-y-1/2 z-20 flex flex-col items-center transition ${
                   unlocked ? 'cursor-pointer hover:scale-110' : 'opacity-75 hover:scale-105'
                 }`}
@@ -862,7 +909,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
 
           {/* PIXEL ARMORED SCHOOL BUS MARKER WITH HEADLIGHT BEAM ON ROAD */}
           <div
-            style={{ left: `${busMapPos.x}%`, top: `${busMapPos.y}%` }}
+            style={{ left: `${busMapPos.x * X_PCT}%`, top: `${busMapPos.y}%` }}
             className="pointer-events-none absolute -translate-x-1/2 -translate-y-[150%] z-30 transition-all duration-150 flex flex-col items-center"
           >
             <div className="relative flex items-center">
@@ -986,10 +1033,11 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       {/* ===================================================================== */}
       <div className="hidden md:flex absolute top-2 left-1/2 -translate-x-1/2 z-20 items-center gap-1 bg-zinc-950/85 border border-zinc-700 px-2 py-1 rounded-lg shadow-xl">
         <Compass className="w-3.5 h-3.5 text-yellow-400 mr-1" />
-        {['S1 (1-6)', 'S2 (7-12)', 'S3 (13-18)', 'S4 (19-24)'].map((label, idx) => (
+        {['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8'].map((label, idx) => (
           <button
             key={label}
             onClick={() => jumpToSector(idx)}
+            title={`Sector ${idx + 1}: Misiones ${idx * 6 + 1}-${idx === 7 ? 50 : idx * 6 + 6}`}
             className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-yellow-500 hover:text-zinc-950 text-[10px] font-bold text-zinc-200 transition cursor-pointer"
           >
             {label}
