@@ -567,7 +567,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       const spawnY =
         customY ?? ROAD_Y_MIN + 8 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 16);
       const isEmerging = (cfg.emergesFromGround && customX !== undefined) || fromCorpse;
-      // Gentle campaign-tier scaling (+3.2% HP per tier past Tier 1) across all 24 missions
+      // Gentle campaign-tier scaling (+3.2% HP per tier past Tier 1) across all 50 missions
       const tier = mission.campaignTier || mission.id;
       const missionScale = 1 + Math.max(0, tier - 1) * 0.032;
       const scaledMaxHp = Math.round(cfg.baseHp * missionScale);
