@@ -31,6 +31,8 @@ import {
   Users,
   Wrench,
   X,
+  Cloud,
+  CloudOff,
 } from 'lucide-react';
 import {
   renderArmoredBus,
@@ -38,6 +40,8 @@ import {
   syncCanvasHiDPI,
 } from '../engine/PixelArtRenderer';
 import { soundFX } from '../engine/SoundFX';
+import { MuteButton } from './MuteButton';
+import type { CloudStatus } from '../sync/useCloudSync';
 
 interface RoadMapHubProps {
   progress: PlayerProgress;
@@ -50,6 +54,8 @@ interface RoadMapHubProps {
   onResetProgress: () => void;
   onCollectCache: (cacheId: string, coins: number, fuel: number) => void;
   onRefillFuel: () => void;
+  cloudStatus: CloudStatus;
+  onOpenCloudSync: () => void;
 }
 
 // Mission/cache X coords are percentages of the original 2800px span (BASE_W);
@@ -109,6 +115,8 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
   onResetProgress,
   onCollectCache,
   onRefillFuel,
+  cloudStatus,
+  onOpenCloudSync,
 }) => {
   const [modalTab, setModalTab] = useState<'none' | 'deck' | 'garage' | 'zombiepedia'>('none');
   const [zoomedOut, setZoomedOut] = useState<boolean>(false);
@@ -659,6 +667,9 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
     const keys = new Set<string>();
 
     const onKeyDown = (e: KeyboardEvent) => {
+      // Never hijack typing inside inputs (e.g. the cloud sync code field)
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
       const k = e.key.toLowerCase();
       keys.add(k);
       if (k === 'enter') {
@@ -1057,6 +1068,26 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       {/* TOP-RIGHT FLOATING COINS & SAFE RESET BAR                             */}
       {/* ===================================================================== */}
       <div className="absolute top-2 right-3 z-20 flex items-center gap-2">
+        <MuteButton />
+        <button
+          type="button"
+          onClick={onOpenCloudSync}
+          className={`px-2 py-1 rounded border text-[10px] font-bold flex items-center gap-1 transition cursor-pointer ${
+            cloudStatus === 'off'
+              ? 'bg-zinc-900/90 hover:bg-zinc-800 border-zinc-600 text-zinc-300'
+              : cloudStatus === 'ok' || cloudStatus === 'syncing'
+              ? 'bg-sky-950/90 hover:bg-sky-900 border-sky-500 text-sky-200'
+              : 'bg-red-950/90 hover:bg-red-900 border-red-500 text-red-200'
+          }`}
+          title="Guardado en la nube: sincroniza tu partida entre iPhone y web"
+        >
+          {cloudStatus === 'off' ? (
+            <CloudOff className="w-3 h-3" />
+          ) : (
+            <Cloud className={`w-3 h-3 ${cloudStatus === 'syncing' ? 'animate-pulse' : ''}`} />
+          )}
+          <span>Nube</span>
+        </button>
         <button
           onClick={() => {
             if (!confirmReset) {

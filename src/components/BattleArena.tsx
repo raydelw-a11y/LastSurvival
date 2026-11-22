@@ -45,6 +45,7 @@ import {
   renderUnitSprite,
   syncCanvasHiDPI,
 } from '../engine/PixelArtRenderer';
+import { MuteButton } from './MuteButton';
 import { soundFX } from '../engine/SoundFX';
 
 interface BattleArenaProps {
@@ -2420,21 +2421,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             {paused ? '▶' : '||'}
           </button>
 
-          <button
-            onClick={() => {
-              if (soundFX.muted) {
-                soundFX.muted = false;
-                soundFX.unlockAudio();
-                soundFX.playCouragePickup();
-              } else {
-                soundFX.muted = true;
-              }
-            }}
-            className="text-xs px-1 drop-shadow-[0_1px_1px_rgba(0,0,0,0.95)] cursor-pointer"
-            title="Activar / Silenciar Sonido"
-          >
-            🔊
-          </button>
+          <MuteButton variant="hud" />
         </div>
 
         <div className="flex flex-col gap-1.5">

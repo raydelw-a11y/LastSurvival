@@ -1,5 +1,7 @@
 // High-Output Mobile-Ready Web Audio API Synthesizer & Ambience Engine for LastSurvival
 
+const MUTE_KEY = 'last_survival_muted_v1';
+
 class SoundSystem {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
@@ -8,8 +10,14 @@ class SoundSystem {
   private bgmStep: number = 0;
   public muted: boolean = false;
   public appPaused: boolean = false;
+  private muteListeners = new Set<(muted: boolean) => void>();
 
   constructor() {
+    try {
+      this.muted = localStorage.getItem(MUTE_KEY) === '1';
+    } catch {
+      // Ignore
+    }
     if (typeof window !== 'undefined') {
       const unlockEvents = ['touchstart', 'touchend', 'pointerdown', 'mousedown', 'click', 'keydown'];
       const handleGesture = () => {
@@ -30,6 +38,34 @@ class SoundSystem {
       window.addEventListener('blur', () => this.suspendForBackground());
       window.addEventListener('pagehide', () => this.suspendForBackground());
     }
+  }
+
+  /** Mute/unmute everything (music + SFX), remembered on this device and shared by map & battle. */
+  public setMuted(muted: boolean) {
+    this.muted = muted;
+    try {
+      localStorage.setItem(MUTE_KEY, muted ? '1' : '0');
+    } catch {
+      // Ignore
+    }
+    if (muted) {
+      if (this.ctx && this.ctx.state === 'running') this.ctx.suspend().catch(() => {});
+    } else {
+      this.unlockAudio();
+      this.playCouragePickup();
+    }
+    this.muteListeners.forEach((fn) => fn(muted));
+  }
+
+  public toggleMuted() {
+    this.setMuted(!this.muted);
+  }
+
+  public onMutedChange(fn: (muted: boolean) => void): () => void {
+    this.muteListeners.add(fn);
+    return () => {
+      this.muteListeners.delete(fn);
+    };
   }
 
   public suspendForBackground() {
@@ -719,3 +755,7 @@ class SoundSystem {
 }
 
 export const soundFX = new SoundSystem();
+
+/** React-free subscription helper: use with useSyncExternalStore or useEffect. */
+export const subscribeMuted = (fn: () => void) => soundFX.onMutedChange(() => fn());
+export const getMutedSnapshot = () => soundFX.muted;

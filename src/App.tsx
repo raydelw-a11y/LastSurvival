@@ -13,9 +13,11 @@ import { PrivateAccess } from './components/PrivateAccess';
 import { RoadMapHub } from './components/RoadMapHub';
 import { BattleArena } from './components/BattleArena';
 import { soundFX } from './engine/SoundFX';
+import { CloudSyncPanel } from './components/CloudSyncPanel';
+import { useCloudSync } from './sync/useCloudSync';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '2:13 PM - 11/22/2026';
+const FALLBACK_TIMESTAMP = '2:29 PM - 11/22/2026';
 export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 const CURRENT_BUILD_ID = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : '';
@@ -171,6 +173,15 @@ export function App() {
     }
     return MISSION_NODES[0];
   });
+
+  const [showCloudPanel, setShowCloudPanel] = useState<boolean>(false);
+  const applyCloudProgress = useCallback((p: PlayerProgress) => {
+    const clean = sanitizeProgress(p);
+    setProgress(clean);
+    return clean;
+  }, []);
+  // Sync also runs on the access screen so the cloud save is pulled before the first battle starts
+  const cloud = useCloudSync(progress, applyCloudProgress, unlockedApp && !!activeBattleMission);
 
   const stateSnapshotRef = useRef({ unlockedApp, activeBattleMission });
   stateSnapshotRef.current = { unlockedApp, activeBattleMission };
@@ -479,10 +490,12 @@ export function App() {
       // Ignore
     }
     soundFX.playExplosion();
+    // New save generation so the cloud copy is replaced instead of merged back in
+    cloud.markReset();
     setProgress(INITIAL_PROGRESS);
     setSelectedMissionId(1);
     setActiveBattleMission(null);
-  }, []);
+  }, [cloud]);
 
   const handleCollectCache = useCallback((cacheId: string, coins: number, fuel: number) => {
     setProgress((prev) => {
@@ -536,7 +549,13 @@ export function App() {
           onResetProgress={handleResetProgress}
           onCollectCache={handleCollectCache}
           onRefillFuel={handleRefillFuel}
+          cloudStatus={cloud.status}
+          onOpenCloudSync={() => setShowCloudPanel(true)}
         />
+      )}
+
+      {showCloudPanel && !activeBattleMission && (
+        <CloudSyncPanel sync={cloud} onClose={() => setShowCloudPanel(false)} />
       )}
 
       {/* Strictly Horizontal Enforcement Overlay (never unmounts BattleArena!) */}

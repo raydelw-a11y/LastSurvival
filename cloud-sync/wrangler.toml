@@ -1,0 +1,9 @@
+name = "last-survival-sync"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "last-survival-saves"
+database_id = "8ac74d33-1213-4b34-8910-e58ff5c0897f"
