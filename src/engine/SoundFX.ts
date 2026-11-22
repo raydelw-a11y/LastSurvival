@@ -204,106 +204,333 @@ class SoundSystem {
     }, 280);
   }
 
-  public playShotgun() {
+  // ===========================================================================
+  // REALISTIC LAYERED WEAPON ENGINE
+  // Every shot = supersonic crack + muzzle blast + low-end thump + outdoor
+  // reverb tail, plus per-weapon mechanics (pump, bolt, brass, motor...).
+  // ===========================================================================
+  private noiseBuf: AudioBuffer | null = null;
+  private reverbSend: GainNode | null = null;
+  private saturator: WaveShaperNode | null = null;
+  private weaponBus: GainNode | null = null;
+  private lastPlayed: Record<string, number> = {};
+  private activeVoices = 0;
+
+  private getNoise(ctx: AudioContext): AudioBuffer {
+    if (!this.noiseBuf) {
+      const len = Math.floor(ctx.sampleRate * 2);
+      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      this.noiseBuf = buf;
+    }
+    return this.noiseBuf;
+  }
+
+  // Shared outdoor "valley" reverb (procedural impulse response) + soft-clip saturator
+  private getFxBus(ctx: AudioContext, dest: AudioNode) {
+    if (!this.reverbSend) {
+      const seconds = 1.6;
+      const len = Math.floor(ctx.sampleRate * seconds);
+      const ir = ctx.createBuffer(2, len, ctx.sampleRate);
+      for (let ch = 0; ch < 2; ch++) {
+        const d = ir.getChannelData(ch);
+        for (let i = 0; i < len; i++) {
+          const t = i / len;
+          // Early slap-back reflections, then a diffuse exponential tail
+          const early = i < ctx.sampleRate * 0.09 && Math.random() < 0.004 ? 1.6 : 0;
+          d[i] = ((Math.random() * 2 - 1) + early) * Math.pow(1 - t, 3.2);
+        }
+      }
+      const conv = ctx.createConvolver();
+      conv.buffer = ir;
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 3200;
+      this.reverbSend = ctx.createGain();
+      this.reverbSend.gain.value = 0.32;
+      this.reverbSend.connect(lp);
+      lp.connect(conv);
+      conv.connect(dest);
+
+      this.saturator = ctx.createWaveShaper();
+      const curve = new Float32Array(1024);
+      for (let i = 0; i < 1024; i++) {
+        const x = (i / 1023) * 2 - 1;
+        curve[i] = Math.tanh(x * 2.4) / Math.tanh(2.4);
+      }
+      this.saturator.curve = curve;
+      this.saturator.connect(dest);
+    }
+    return { reverb: this.reverbSend, sat: this.saturator! };
+  }
+
+  /** Weapon sub-mix: headroom so heavy guns punch through the master compressor without clipping. */
+  private getWeaponOut(dest: AudioNode): AudioNode {
+    const ctx = this.ctx!;
+    if (!this.weaponBus) {
+      this.weaponBus = ctx.createGain();
+      this.weaponBus.gain.value = 0.62;
+      this.weaponBus.connect(dest);
+    }
+    return this.weaponBus;
+  }
+
+  /** Rate-limit identical sounds and cap simultaneous voices so big squads don't clip or lag. */
+  private allow(key: string, minGap: number, ctx: AudioContext): boolean {
+    const now = ctx.currentTime;
+    if (this.activeVoices > 22) return false;
+    if (now - (this.lastPlayed[key] ?? -1) < minGap) return false;
+    this.lastPlayed[key] = now;
+    return true;
+  }
+
+  private trackVoice(src: AudioScheduledSourceNode) {
+    this.activeVoices++;
+    src.onended = () => {
+      this.activeVoices = Math.max(0, this.activeVoices - 1);
+    };
+  }
+
+  /** Filtered noise burst with sharp attack and exponential decay. */
+  private burst(
+    ctx: AudioContext,
+    out: AudioNode,
+    at: number,
+    o: {
+      type: BiquadFilterType;
+      freq: number;
+      freqEnd?: number;
+      q?: number;
+      vol: number;
+      attack?: number;
+      decay: number;
+      rate?: number;
+      send?: number;
+      saturate?: boolean;
+    }
+  ) {
+    const { reverb, sat } = this.getFxBus(ctx, out);
+    const src = ctx.createBufferSource();
+    src.buffer = this.getNoise(ctx);
+    src.playbackRate.value = o.rate ?? 1;
+    const f = ctx.createBiquadFilter();
+    f.type = o.type;
+    f.frequency.setValueAtTime(o.freq, at);
+    if (o.freqEnd) f.frequency.exponentialRampToValueAtTime(o.freqEnd, at + o.decay);
+    f.Q.value = o.q ?? 0.7;
+    const g = ctx.createGain();
+    const atk = o.attack ?? 0.0015;
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(o.vol, at + atk);
+    g.gain.exponentialRampToValueAtTime(0.0008, at + atk + o.decay);
+    src.connect(f);
+    f.connect(g);
+    g.connect(o.saturate ? sat : out);
+    if (o.send) {
+      const s = ctx.createGain();
+      s.gain.value = o.send;
+      g.connect(s);
+      s.connect(reverb);
+    }
+    const offset = Math.random() * 1.5;
+    src.start(at, offset, atk + o.decay + 0.05);
+    this.trackVoice(src);
+  }
+
+  /** Pitched oscillator hit (body thump, metal ring, bark...). */
+  private tone(
+    ctx: AudioContext,
+    out: AudioNode,
+    at: number,
+    o: { type: OscillatorType; f0: number; f1?: number; vol: number; decay: number; attack?: number }
+  ) {
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = o.type;
+    osc.frequency.setValueAtTime(o.f0, at);
+    if (o.f1) osc.frequency.exponentialRampToValueAtTime(o.f1, at + o.decay);
+    const atk = o.attack ?? 0.002;
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(o.vol, at + atk);
+    g.gain.exponentialRampToValueAtTime(0.0008, at + atk + o.decay);
+    osc.connect(g);
+    g.connect(out);
+    osc.start(at);
+    osc.stop(at + atk + o.decay + 0.02);
+    this.trackVoice(osc);
+  }
+
+  /** Small mechanical click (slide, bolt, pump, lever). */
+  private mechClick(ctx: AudioContext, out: AudioNode, at: number, freq: number, vol: number) {
+    this.burst(ctx, out, at, { type: 'bandpass', freq, q: 4, vol, decay: 0.025 });
+    this.tone(ctx, out, at, { type: 'square', f0: freq * 1.9, vol: vol * 0.25, decay: 0.012 });
+  }
+
+  /** Brass shell casing bouncing on asphalt. */
+  private brass(ctx: AudioContext, out: AudioNode, at: number, vol = 0.05) {
+    const base = 4200 + Math.random() * 1400;
+    [0, 0.07 + Math.random() * 0.03, 0.12 + Math.random() * 0.04].forEach((dt, i) => {
+      this.tone(ctx, out, at + dt, { type: 'sine', f0: base * (1 + i * 0.07), vol: vol / (i + 1), decay: 0.04 });
+    });
+  }
+
+  private jit(spread = 0.08) {
+    return 1 - spread / 2 + Math.random() * spread;
+  }
+
+  /** Plays the signature firearm / weapon sound of a squad unit. */
+  public playUnitWeapon(unit: string) {
     const ctx = this.getContext();
     const dest = this.getDest();
     if (!ctx || !dest) return;
-    const now = ctx.currentTime;
+    const out = this.getWeaponOut(dest);
+    const t = ctx.currentTime + 0.002;
+    const j = this.jit();
 
-    const bufferSize = Math.floor(ctx.sampleRate * 0.24);
-    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.07));
+    switch (unit) {
+      case 'farmer': {
+        // Double-barrel 12-gauge: huge low boom, wide spread, long valley echo
+        if (!this.allow(unit, 0.09, ctx)) return;
+        this.burst(ctx, out, t, { type: 'highpass', freq: 2800, vol: 0.55, decay: 0.008 });
+        this.burst(ctx, out, t, { type: 'lowpass', freq: 2600 * j, freqEnd: 500, vol: 0.95, decay: 0.3, send: 0.6, saturate: true });
+        this.tone(ctx, out, t, { type: 'sine', f0: 125 * j, f1: 36, vol: 0.75, decay: 0.26 });
+        this.burst(ctx, out, t + 0.012, { type: 'bandpass', freq: 650, q: 0.9, vol: 0.35, decay: 0.18 });
+        break;
+      }
+      case 'policeman': {
+        // Pump-action riot shotgun: bright boom followed by the iconic "chk-chk" rack
+        if (!this.allow(unit, 0.09, ctx)) return;
+        this.burst(ctx, out, t, { type: 'highpass', freq: 3200, vol: 0.55, decay: 0.007 });
+        this.burst(ctx, out, t, { type: 'bandpass', freq: 1500 * j, freqEnd: 600, q: 0.6, vol: 0.9, decay: 0.24, send: 0.5, saturate: true });
+        this.tone(ctx, out, t, { type: 'sine', f0: 140 * j, f1: 42, vol: 0.65, decay: 0.2 });
+        this.mechClick(ctx, out, t + 0.34, 1900, 0.22);
+        this.burst(ctx, out, t + 0.36, { type: 'bandpass', freq: 900, q: 2, vol: 0.08, decay: 0.06 });
+        this.mechClick(ctx, out, t + 0.46, 1250, 0.26);
+        break;
+      }
+      case 'gunslinger': {
+        // Akimbo 9mm: snappy crack, short blast, ejected brass tinkling
+        if (!this.allow(unit, 0.05, ctx)) return;
+        this.burst(ctx, out, t, { type: 'highpass', freq: 4200 * j, vol: 0.45, decay: 0.005 });
+        this.burst(ctx, out, t, { type: 'bandpass', freq: 1900 * j, freqEnd: 900, q: 0.9, vol: 0.75, decay: 0.075, send: 0.28, saturate: true });
+        this.tone(ctx, out, t, { type: 'sine', f0: 230 * j, f1: 85, vol: 0.32, decay: 0.06 });
+        this.mechClick(ctx, out, t + 0.018, 3000 * j, 0.07);
+        if (Math.random() < 0.6) this.brass(ctx, out, t + 0.22, 0.035);
+        break;
+      }
+      case 'sniper': {
+        // .338 Magnum: supersonic snap, heavy boom, long echo rolling back, bolt cycling
+        if (!this.allow(unit, 0.15, ctx)) return;
+        this.burst(ctx, out, t, { type: 'highpass', freq: 5200, vol: 0.75, decay: 0.004 });
+        this.burst(ctx, out, t, { type: 'lowpass', freq: 3600, freqEnd: 420, vol: 1.0, decay: 0.38, send: 0.95, saturate: true });
+        this.tone(ctx, out, t, { type: 'sine', f0: 95, f1: 28, vol: 0.85, decay: 0.36 });
+        this.burst(ctx, out, t + 0.38, { type: 'lowpass', freq: 700, vol: 0.16, attack: 0.03, decay: 0.45, send: 0.4 });
+        this.mechClick(ctx, out, t + 0.62, 1500, 0.2);
+        this.mechClick(ctx, out, t + 0.74, 2300, 0.18);
+        this.brass(ctx, out, t + 0.82, 0.04);
+        this.mechClick(ctx, out, t + 0.92, 1700, 0.22);
+        break;
+      }
+      case 'turret': {
+        // Rotary gatling: tight punchy rounds over a whining spin-motor
+        if (!this.allow(unit, 0.06, ctx)) return;
+        this.burst(ctx, out, t, { type: 'highpass', freq: 3000 * j, vol: 0.42, decay: 0.004 });
+        this.burst(ctx, out, t, { type: 'bandpass', freq: 1150 * j, q: 0.8, vol: 0.8, decay: 0.055, send: 0.18, saturate: true });
+        this.tone(ctx, out, t, { type: 'sine', f0: 165 * j, f1: 70, vol: 0.38, decay: 0.05 });
+        this.burst(ctx, out, t + 0.08, { type: 'bandpass', freq: 1250 * j, q: 0.8, vol: 0.55, decay: 0.045, saturate: true });
+        this.tone(ctx, out, t, { type: 'sawtooth', f0: 210, f1: 230, vol: 0.035, attack: 0.02, decay: 0.22 });
+        if (Math.random() < 0.35) this.brass(ctx, out, t + 0.15, 0.025);
+        break;
+      }
+      case 'drone': {
+        // Airborne MQ-9: lighter distant-sounding burst muffled by altitude + rotor buzz
+        if (!this.allow(unit, 0.07, ctx)) return;
+        this.burst(ctx, out, t, { type: 'bandpass', freq: 2600 * j, q: 0.7, vol: 0.7, decay: 0.05, send: 0.45 });
+        this.burst(ctx, out, t + 0.06, { type: 'bandpass', freq: 2400 * j, q: 0.7, vol: 0.58, decay: 0.05, send: 0.45 });
+        this.tone(ctx, out, t, { type: 'sine', f0: 300, f1: 120, vol: 0.34, decay: 0.07 });
+        this.tone(ctx, out, t, { type: 'square', f0: 118, f1: 126, vol: 0.022, attack: 0.03, decay: 0.3 });
+        break;
+      }
+      case 'flamethrower': {
+        // Pressurized napalm jet: roaring whoosh + low rumble + crackling embers
+        if (!this.allow(unit, 0.16, ctx)) return;
+        this.burst(ctx, out, t, { type: 'lowpass', freq: 700, freqEnd: 1900, vol: 0.7, attack: 0.04, decay: 0.38, send: 0.2 });
+        this.burst(ctx, out, t, { type: 'bandpass', freq: 380, q: 1.2, vol: 0.4, attack: 0.03, decay: 0.34 });
+        this.tone(ctx, out, t, { type: 'sine', f0: 58, f1: 48, vol: 0.2, attack: 0.04, decay: 0.32 });
+        for (let i = 0; i < 4; i++) {
+          this.burst(ctx, out, t + 0.05 + Math.random() * 0.3, { type: 'highpass', freq: 3500, vol: 0.05 + Math.random() * 0.05, decay: 0.01 });
+        }
+        break;
+      }
+      case 'bill':
+      default: {
+        // Bill's lever-action hunting rifle from the bus roof
+        if (!this.allow('bill', 0.08, ctx)) return;
+        this.burst(ctx, out, t, { type: 'highpass', freq: 4300, vol: 0.6, decay: 0.005 });
+        this.burst(ctx, out, t, { type: 'lowpass', freq: 3000 * j, freqEnd: 520, vol: 0.85, decay: 0.22, send: 0.6, saturate: true });
+        this.tone(ctx, out, t, { type: 'sine', f0: 115 * j, f1: 38, vol: 0.62, decay: 0.2 });
+        this.mechClick(ctx, out, t + 0.38, 1400, 0.16);
+        this.mechClick(ctx, out, t + 0.48, 2100, 0.16);
+        break;
+      }
     }
-    const noise = ctx.createBufferSource();
-    noise.buffer = buffer;
+  }
 
-    const filter = ctx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.setValueAtTime(1100, now);
-    filter.Q.setValueAtTime(0.8, now);
+  /** Signature melee impact of each close-combat squad unit. */
+  public playUnitMelee(unit: string, crit = false) {
+    const ctx = this.getContext();
+    const dest = this.getDest();
+    if (!ctx || !dest) return;
+    const out = this.getWeaponOut(dest);
+    if (!this.allow(`melee_${unit}`, 0.05, ctx)) return;
+    const t = ctx.currentTime + 0.002;
+    const j = this.jit(0.12);
+    const boost = crit ? 1.35 : 1;
 
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.65, now);
-    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.23);
+    switch (unit) {
+      case 'redneck': // Wooden baseball bat "THOK" into flesh
+        this.burst(ctx, out, t, { type: 'bandpass', freq: 950 * j, q: 2.5, vol: 0.8 * boost, decay: 0.07 });
+        this.tone(ctx, out, t, { type: 'sine', f0: 310 * j, f1: 140, vol: 0.6 * boost, decay: 0.08 });
+        this.burst(ctx, out, t + 0.01, { type: 'lowpass', freq: 500, vol: 0.3 * boost, decay: 0.1 });
+        break;
+      case 'builder': // Claw hammer: metallic clank with ring
+        this.burst(ctx, out, t, { type: 'highpass', freq: 2500, vol: 0.35 * boost, decay: 0.02 });
+        this.tone(ctx, out, t, { type: 'sine', f0: 1240 * j, vol: 0.16 * boost, decay: 0.16 });
+        this.tone(ctx, out, t, { type: 'sine', f0: 1870 * j, vol: 0.1 * boost, decay: 0.12 });
+        this.tone(ctx, out, t, { type: 'sine', f0: 220, f1: 90, vol: 0.4 * boost, decay: 0.09 });
+        break;
+      case 'mechanic': // Heavy wrench: bright steel "TINK-CLANG"
+        this.burst(ctx, out, t, { type: 'bandpass', freq: 3200, q: 3, vol: 0.35 * boost, decay: 0.03 });
+        this.tone(ctx, out, t, { type: 'triangle', f0: 2150 * j, vol: 0.13 * boost, decay: 0.2 });
+        this.tone(ctx, out, t, { type: 'sine', f0: 3310 * j, vol: 0.08 * boost, decay: 0.14 });
+        this.tone(ctx, out, t, { type: 'sine', f0: 260, f1: 110, vol: 0.32 * boost, decay: 0.08 });
+        break;
+      case 'hound': // K-9 snarling bite
+        this.tone(ctx, out, t, { type: 'sawtooth', f0: 560 * j, f1: 330, vol: 0.4 * boost, attack: 0.008, decay: 0.11 });
+        this.burst(ctx, out, t, { type: 'bandpass', freq: 1100 * j, q: 3, vol: 0.55 * boost, attack: 0.006, decay: 0.1 });
+        this.burst(ctx, out, t + 0.05, { type: 'bandpass', freq: 2600, q: 2, vol: 0.4 * boost, decay: 0.03 });
+        break;
+      case 'juggernaut': // Seismic sledgehammer: ground-shaking boom + crunch
+        this.tone(ctx, out, t, { type: 'sine', f0: 95, f1: 32, vol: 0.9 * boost, decay: 0.32 });
+        this.burst(ctx, out, t, { type: 'lowpass', freq: 900, freqEnd: 200, vol: 0.7 * boost, decay: 0.26, send: 0.4, saturate: true });
+        this.tone(ctx, out, t, { type: 'sine', f0: 720 * j, vol: 0.08 * boost, decay: 0.2 });
+        break;
+      default:
+        this.playMeleeHit(crit);
+    }
+  }
 
-    noise.connect(filter);
-    filter.connect(gain);
-    gain.connect(dest);
-    noise.start(now);
-
-    const osc = ctx.createOscillator();
-    const oscGain = ctx.createGain();
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(260, now);
-    osc.frequency.exponentialRampToValueAtTime(75, now + 0.15);
-    oscGain.gain.setValueAtTime(0.48, now);
-    oscGain.gain.exponentialRampToValueAtTime(0.01, now + 0.16);
-    osc.connect(oscGain);
-    oscGain.connect(dest);
-    osc.start(now);
-    osc.stop(now + 0.16);
+  public playShotgun() {
+    this.playUnitWeapon('farmer');
   }
 
   public playPistol() {
-    const ctx = this.getContext();
-    const dest = this.getDest();
-    if (!ctx || !dest) return;
-    const now = ctx.currentTime;
-
-    // Crisp 9mm dual-pistol pop with slight random pitch variation for rapid akimbo fire
-    const pitchJitter = 0.94 + Math.random() * 0.14;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(920 * pitchJitter, now);
-    osc.frequency.exponentialRampToValueAtTime(175, now + 0.065);
-    gain.gain.setValueAtTime(0.32, now);
-    gain.gain.exponentialRampToValueAtTime(0.008, now + 0.07);
-    osc.connect(gain);
-    gain.connect(dest);
-    osc.start(now);
-    osc.stop(now + 0.072);
-
-    const bufLen = Math.floor(ctx.sampleRate * 0.045);
-    const buf = ctx.createBuffer(1, bufLen, ctx.sampleRate);
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < bufLen; i++) {
-      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.014));
-    }
-    const noise = ctx.createBufferSource();
-    noise.buffer = buf;
-    const filter = ctx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.setValueAtTime(2200 * pitchJitter, now);
-    filter.Q.setValueAtTime(1.1, now);
-    const nGain = ctx.createGain();
-    nGain.gain.setValueAtTime(0.28, now);
-    nGain.gain.exponentialRampToValueAtTime(0.008, now + 0.045);
-    noise.connect(filter);
-    filter.connect(nGain);
-    nGain.connect(dest);
-    noise.start(now);
+    this.playUnitWeapon('gunslinger');
   }
 
   public playRifle() {
-    const ctx = this.getContext();
-    const dest = this.getDest();
-    if (!ctx || !dest) return;
-    const now = ctx.currentTime;
-
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(680, now);
-    osc.frequency.exponentialRampToValueAtTime(120, now + 0.11);
-    gain.gain.setValueAtTime(0.42, now);
-    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.12);
-    osc.connect(gain);
-    gain.connect(dest);
-    osc.start(now);
-    osc.stop(now + 0.12);
+    this.playUnitWeapon('bill');
   }
 
   public playMeleeHit(heavy = false) {

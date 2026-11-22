@@ -1706,17 +1706,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
                   if (u.isRanged) {
                     u.ammo -= 1;
-                    if (u.subType === 'gunslinger') {
-                      soundFX.playPistol();
-                    } else if (
-                      u.subType === 'sniper' ||
-                      u.subType === 'turret' ||
-                      u.subType === 'drone'
-                    ) {
-                      soundFX.playRifle();
-                    } else {
-                      soundFX.playShotgun();
-                    }
+                    soundFX.playUnitWeapon(u.subType);
                     sim.screenShake = Math.max(
                       sim.screenShake,
                       u.subType === 'sniper' ? 3.2 : u.subType === 'gunslinger' ? 0.65 : 2.0
@@ -1819,7 +1809,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                     const mult = isFirstHitCrit ? u.firstHitCritMult : isCrit ? u.critMultiplier : 1;
                     const dmg = Math.round(u.damage * mult);
 
-                    soundFX.playMeleeHit(isCrit || u.subType === 'builder' || u.subType === 'juggernaut');
+                    soundFX.playUnitMelee(u.subType, isCrit);
                     if (isCrit) {
                       sim.hitStopTimer = 0.045;
                       sim.screenShake = Math.max(sim.screenShake, 4);
@@ -1848,17 +1838,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   u.attackTimer = u.attackCooldown;
                   if (u.isRanged) {
                     u.ammo -= 1;
-                    if (u.subType === 'gunslinger') {
-                      soundFX.playPistol();
-                    } else if (
-                      u.subType === 'sniper' ||
-                      u.subType === 'turret' ||
-                      u.subType === 'drone'
-                    ) {
-                      soundFX.playRifle();
-                    } else {
-                      soundFX.playShotgun();
-                    }
+                    soundFX.playUnitWeapon(u.subType);
                     if (!u.isFlame) {
                       const muzzleZ = u.isFlying
                         ? 32
