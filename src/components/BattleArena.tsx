@@ -155,6 +155,7 @@ const HERO_TRACER_X = HERO_MUZZLE_X - 13;
 const HERO_LEVEL_AIM = HERO_MUZZLE_Z - 15;
 
 interface HeroShot extends RenderHeroShot {
+  vy: number;
   dmg: number;
   range: number;
   traveled: number;
@@ -374,6 +375,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     heroFirePointers: new Map<number, number>(),
     heroTapAttack: false,
     heroReloadStage: 0,
+    // Keeps the hero facing / aiming at the last target briefly after each shot
+    heroAimTimer: 0,
     heroDryFireCd: 0,
     heroWeapon: loadHeroWeapon() as HeroWeaponType,
     heroAmmo: Object.fromEntries(
@@ -1673,23 +1676,36 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       }
     };
 
-    // HERO: nearest live zombie in front of the hero within range (flyers only for ranged attacks)
-    const heroFindTarget = (u: InternalUnit, range: number, allowFlyers: boolean) => {
+    // HERO 360° AIM: the nearest zombie in range in ANY direction (up, down, ahead, behind).
+    // With no enemy in range the hero always aims FORWARD (toward the enemy barricade) —
+    // walking back to the bus never turns the gun around unless an enemy is on that side.
+    const heroAim = (u: InternalUnit, range: number, allowFlyers: boolean) => {
       const sim = simRef.current;
-      let best: InternalUnit | null = null;
+      let target: InternalUnit | null = null;
       let bestD = Infinity;
       for (const z of sim.units) {
         if (z.team !== 'zombie' || z.hp <= 0 || z.state === 'corpse' || z.state === 'dying') continue;
         if (!allowFlyers && z.isFlying) continue;
-        const dx = (z.x - u.x) * u.facing;
-        if (dx < -6 || dx > range || Math.abs(z.y - u.y) > 42) continue;
-        const d = dx + Math.abs(z.y - u.y) * 0.8;
-        if (d < bestD) {
+        const d = Math.hypot(z.x - u.x, (z.y - u.y) * 1.2);
+        if (d <= range && d < bestD) {
           bestD = d;
-          best = z;
+          target = z;
         }
       }
-      return best;
+      const gunY = u.y - HERO_MUZZLE_Z; // screen-space height of the gun
+      if (target) {
+        const tVisY = target.y - 15 - (target.isFlying ? FLYER_HOVER_Z * 0.7 : 0);
+        const dx = target.x - u.x;
+        const facing: 1 | -1 = dx >= 0 ? 1 : -1;
+        const pitch = Math.max(-1.15, Math.min(1.15, Math.atan2(tVisY - gunY, Math.max(10, Math.abs(dx)))));
+        return { target, facing, pitch, tVisY };
+      }
+      // No target: forward, tilted up/down by the joystick (or W/S) so you can sweep lanes
+      const keys = sim.keysPressed;
+      const vy = sim.heroJoy.active
+        ? sim.heroJoy.dy
+        : (keys.has('s') || keys.has('arrowdown') ? 1 : 0) - (keys.has('w') || keys.has('arrowup') ? 1 : 0);
+      return { target: null, facing: 1 as const, pitch: vy * 0.55, tVisY: 0 };
     };
 
     const heroHit = (z: InternalUnit, dmg: number, knock: number, dir: number, sub = 'WACK!') => {
@@ -1705,7 +1721,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       return u.facing === 1 && sim.barricadeHp > 0 && sim.barricadeX - u.x <= range + 10;
     };
 
-    /** One attack with the hero's current weapon. */
+    /** One attack with the hero's current weapon (aimed in any direction). */
     const heroAttack = (u: InternalUnit) => {
       const sim = simRef.current;
       const w = HERO_WEAPONS[sim.heroWeapon];
@@ -1735,11 +1751,16 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       }
 
       if (w.id === 'sword') {
+        // Turn toward the closest ground zombie within reach on either side, then cleave
+        const near = heroAim(u, w.range + 30, false);
+        if (near.target) u.facing = near.facing;
+        u.heroAim = 0;
+        sim.heroAimTimer = 0.35;
         let hits = 0;
         for (const z of sim.units) {
           if (z.team !== 'zombie' || z.hp <= 0 || z.state === 'corpse' || z.state === 'dying' || z.isFlying) continue;
           const dx = (z.x - u.x) * u.facing;
-          if (dx >= -6 && dx <= w.range && Math.abs(z.y - u.y) <= 24) {
+          if (dx >= -6 && dx <= w.range && Math.abs(z.y - u.y) <= 28) {
             heroHit(z, Math.round(base), w.knockback, u.facing, 'SLASH!');
             hits++;
           }
@@ -1749,15 +1770,30 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         return;
       }
 
-      // The hero is 1.45x bigger: shots leave from the real gun muzzle, level with it
-      const muzzleX = u.x + u.facing * HERO_MUZZLE_X;
+      // Aim: face the target (or forward) and rotate the gun arm to its pitch
+      const aim = heroAim(u, w.projectile === 'grenade' ? w.range : w.range, true);
+      u.facing = aim.facing;
+      u.heroAim = aim.pitch;
+      sim.heroAimTimer = 0.5;
+      const cosP = Math.cos(aim.pitch);
+      const sinP = Math.sin(aim.pitch);
+      // Muzzle in world/screen space (the 1.45x hero's gun rotates with the pitch)
+      const muzzleX = u.x + u.facing * HERO_MUZZLE_X * cosP;
+      const muzzleScreenY = u.y - HERO_MUZZLE_Z + HERO_MUZZLE_X * sinP * 0.6;
+      const muzzleZ = u.y - muzzleScreenY;
+      const tracer = (endX: number, endScreenY: number, kind: 'shotgun' | 'sniper' | 'rifle' | 'rapid') =>
+        spawnWeaponTracerAndShell(muzzleX - u.facing * 13, u.y, muzzleZ, endX, endScreenY + 15, u.facing, kind);
+
       if (w.projectile === 'arrow' || w.projectile === 'rocket') {
+        const speed = w.projectileSpeed ?? 400;
         sim.heroShots.push({
           kind: w.projectile,
           x: muzzleX,
-          y: u.y,
+          // Ground lane of the projectile: its drawn height stays at muzzle level
+          y: muzzleScreenY + HERO_MUZZLE_Z,
           z: HERO_MUZZLE_Z,
-          vx: u.facing * (w.projectileSpeed ?? 400),
+          vx: u.facing * speed * cosP,
+          vy: speed * sinP,
           dmg: Math.round(base),
           range: w.range,
           traveled: 0,
@@ -1776,15 +1812,15 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       }
 
       if (w.projectile === 'grenade') {
-        const target = heroFindTarget(u, w.range, true);
-        const tx = target ? target.x : u.x + u.facing * 170;
-        const ty = target ? target.y : u.y;
+        const tx = aim.target ? aim.target.x : u.x + u.facing * 170 * cosP;
+        const ty = aim.target ? aim.target.y : Math.max(ROAD_Y_MIN, Math.min(ROAD_Y_MAX, u.y + sinP * 150));
         sim.heroShots.push({
           kind: 'grenade',
           x: u.x,
           y: u.y,
           z: HERO_MUZZLE_Z,
           vx: u.facing,
+          vy: 0,
           dmg: Math.round(base),
           range: w.range,
           traveled: 0,
@@ -1796,28 +1832,27 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           tx,
           ty,
           t: 0,
-          dur: 0.45 + Math.min(0.4, Math.abs(tx - u.x) / 420),
+          dur: 0.45 + Math.min(0.4, Math.hypot(tx - u.x, ty - u.y) / 420),
         });
         return;
       }
 
       if (w.pellets && w.pellets > 1) {
-        // Shotgun cone: everything in front takes pellet damage (closer = more pellets land)
-        spawnWeaponTracerAndShell(
-          u.x + u.facing * HERO_TRACER_X,
-          u.y,
-          HERO_MUZZLE_Z,
-          u.x + u.facing * w.range * 0.7,
-          u.y - HERO_LEVEL_AIM,
-          u.facing,
-          'shotgun'
-        );
+        // Shotgun cone along the aim direction: closer = more pellets land
+        tracer(muzzleX + u.facing * w.range * 0.7 * cosP, muzzleScreenY + w.range * 0.7 * sinP, 'shotgun');
+        const aimAng = Math.atan2(sinP, u.facing * cosP);
         let hits = 0;
         for (const z of sim.units) {
           if (z.team !== 'zombie' || z.hp <= 0 || z.state === 'corpse' || z.state === 'dying') continue;
-          const dx = (z.x - u.x) * u.facing;
-          if (dx >= -6 && dx <= w.range && Math.abs(z.y - u.y) <= 18 + dx * 0.18) {
-            const landed = dx < w.range * 0.5 ? w.pellets : Math.ceil(w.pellets * 0.55);
+          const zVisY = z.y - 15 - (z.isFlying ? FLYER_HOVER_Z * 0.7 : 0);
+          const vx = z.x - muzzleX;
+          const vy = zVisY - muzzleScreenY;
+          const dist = Math.hypot(vx, vy);
+          if (dist > w.range + 10) continue;
+          let diff = Math.abs(Math.atan2(vy, vx) - aimAng);
+          if (diff > Math.PI) diff = Math.PI * 2 - diff;
+          if (diff <= 0.4 || dist < 18) {
+            const landed = dist < w.range * 0.5 ? w.pellets : Math.ceil(w.pellets * 0.55);
             const dmg = Math.round(base * landed * (1 - z.bulletResist * 0.6));
             heroHit(z, dmg, w.knockback, u.facing);
             hits++;
@@ -1829,36 +1864,18 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       }
 
       // Hitscan firearms (pistols, rifles, SMG)
-      const target = heroFindTarget(u, w.range, true);
       const wobble = (Math.random() - 0.5) * (w.spread ?? 0) * 2;
       const kind = w.id === 'pistol' || w.id === 'dual_pistol' ? 'rifle' : 'rapid';
-      if (target) {
-        const ty = target.y - (target.isFlying ? FLYER_HOVER_Z * 0.7 : 0);
-        spawnWeaponTracerAndShell(u.x + u.facing * HERO_TRACER_X, u.y, HERO_MUZZLE_Z, target.x, ty + wobble, u.facing, kind);
-        const dmg = Math.max(1, Math.round(base * (1 - target.bulletResist * 0.7)));
-        heroHit(target, dmg, w.knockback, u.facing);
-      } else if (barricadeInReach(u, w.range)) {
-        spawnWeaponTracerAndShell(
-          u.x + u.facing * HERO_TRACER_X,
-          u.y,
-          HERO_MUZZLE_Z,
-          sim.barricadeX - 8,
-          u.y - HERO_LEVEL_AIM + wobble,
-          u.facing,
-          kind
-        );
+      if (aim.target) {
+        tracer(aim.target.x, aim.tVisY + wobble, kind);
+        const dmg = Math.max(1, Math.round(base * (1 - aim.target.bulletResist * 0.7)));
+        heroHit(aim.target, dmg, w.knockback, u.facing);
+      } else if (barricadeInReach(u, w.range) && Math.abs(aim.pitch) < 0.35) {
+        tracer(sim.barricadeX - 8, muzzleScreenY + (sim.barricadeX - 8 - muzzleX) * Math.tan(aim.pitch) + wobble, kind);
         damageEnemyBarricade(Math.round(base * 0.8), u.y);
       } else {
-        // No target: fly straight ahead at muzzle height
-        spawnWeaponTracerAndShell(
-          u.x + u.facing * HERO_TRACER_X,
-          u.y,
-          HERO_MUZZLE_Z,
-          u.x + u.facing * w.range,
-          u.y - HERO_LEVEL_AIM + wobble * 0.4,
-          u.facing,
-          kind
-        );
+        // No target: straight along the aim direction
+        tracer(muzzleX + u.facing * w.range * cosP, muzzleScreenY + w.range * sinP + wobble * 0.4, kind);
       }
       sim.screenShake = Math.max(sim.screenShake, w.id === 'ak47' ? 1.4 : 0.6);
     };
@@ -2281,9 +2298,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               }
               continue;
             }
-            const step = p.vx * dt;
-            p.x += step;
-            p.traveled += Math.abs(step);
+            const stepX = p.vx * dt;
+            const stepY = p.vy * dt;
+            p.x += stepX;
+            p.y += stepY;
+            p.traveled += Math.hypot(stepX, stepY);
+            if (p.y < ROAD_Y_MIN - 30 || p.y > ROAD_Y_MAX + 30) p.traveled = p.range; // left the road
             let done = false;
             // Rockets / arrows smash into the enemy barricade
             if (p.vx > 0 && sim.barricadeHp > 0 && p.x >= sim.barricadeX - 16) {
@@ -2662,7 +2682,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               if (mag > 0.12) {
                 u.x += mx * u.speed * dt;
                 u.y += my * u.speed * 0.8 * dt;
-                if (Math.abs(mx) > 0.15) u.facing = mx > 0 ? 1 : -1;
+                // While shooting the hero keeps facing its aim (forward by default);
+                // otherwise it turns toward where it walks
+                if (Math.abs(mx) > 0.15 && sim.heroAimTimer <= 0) u.facing = mx > 0 ? 1 : -1;
                 sim.heroMoving = true;
               } else {
                 sim.heroMoving = false;
@@ -2679,6 +2701,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               const reloadDur = hw.reloadTime * heroOutfitCfg().reloadMult;
               if (sim.heroCd > 0) sim.heroCd -= dt;
               if (sim.heroDryFireCd > 0) sim.heroDryFireCd -= dt;
+              if (sim.heroAimTimer > 0) sim.heroAimTimer -= dt;
+              else u.heroAim = (u.heroAim ?? 0) * Math.pow(0.02, dt); // gun eases back to level
               let heldFire = keys.has('j') || keys.has('k');
               sim.heroFirePointers.forEach((t0) => {
                 if (now - t0 >= HOLD_TO_FIRE_MS) heldFire = true;

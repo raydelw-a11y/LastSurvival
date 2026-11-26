@@ -39,6 +39,8 @@ export interface RenderUnit {
   heroWeapon?: HeroWeaponType;
   /** Hero: armor / clothing set (look). */
   heroOutfit?: HeroOutfitType;
+  /** Hero: gun pitch in radians (+ = down), for 360° aiming. */
+  heroAim?: number;
   id: string;
   team: 'survivor' | 'zombie';
   subType: SurvivorType | ZombieType;
@@ -587,15 +589,22 @@ export interface RenderHeroShot {
   y: number;
   z: number;
   vx: number;
+  vy?: number;
 }
 
 export function renderHeroShots(ctx: CanvasRenderingContext2D, shots: RenderHeroShot[], time: number) {
   for (let i = 0; i < shots.length; i++) {
     const p = shots[i];
-    const dir = p.vx >= 0 ? 1 : -1;
     const sy = p.y - p.z;
     drawSoftShadow(ctx, p.x, p.y + 1, p.kind === 'rocket' ? 6 : 4, 1.4, 0.28);
     ctx.save();
+    // Arrows and rockets point along their flight direction (any angle)
+    const dir = p.vx >= 0 ? 1 : -1;
+    if (p.kind !== 'grenade' && p.vy) {
+      ctx.translate(p.x, sy);
+      ctx.rotate(Math.atan2(p.vy, Math.abs(p.vx)) * dir);
+      ctx.translate(-p.x, -sy);
+    }
     if (p.kind === 'arrow') {
       ctx.strokeStyle = '#78350f';
       ctx.lineWidth = 1.4;
@@ -1106,6 +1115,7 @@ export function renderUnitSprite(
     const isRanged =
       isSurvivor && (heroCfg ? heroCfg.category === 'ranged' : RANGED_SURVIVORS.has(unit.subType));
     const heroArt = heroWeapon ? getHeroWeaponArt(heroWeapon) : null;
+    const aimPitch = heroCfg && heroCfg.category === 'ranged' && unit.state !== 'reload' ? unit.heroAim ?? 0 : 0;
     const weaponImg = heroArt ? (flash ? heroArt.flash : heroArt.img) : flash ? atlas.weaponFlash : atlas.weapon;
 
     let torsoLean = isMoving ? (isSurvivor ? 0.06 : 0.16) : 0;
@@ -1143,6 +1153,7 @@ export function renderUnitSprite(
       armAngle = -0.45 + Math.sin(time * 5 + unit.y) * 0.12;
     }
 
+    armAngle += aimPitch; // hero aims up / down
     const legW = 4.2 * atlas.widthFactor;
 
     // 1. Back Leg & Boot
