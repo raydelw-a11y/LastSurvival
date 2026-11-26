@@ -1998,14 +1998,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
         // CAMERA: never moves on its own — only the minimap, mouse wheel, or the player moving the hero
         if (sim.camManualTimer > 0) sim.camManualTimer = Math.max(0, sim.camManualTimer - dt);
-        if (sim.heroMoving && sim.camManualTimer <= 0) {
-          const heroU = sim.units.find((h) => h.isHero && h.hp > 0);
+        // The hero is always the center of focus (clamped at the battlefield edges)
+        {
+          const heroU = sim.units.find((h) => h.isHero && h.hp > 0 && h.state !== 'dying');
           if (heroU) {
-            const sxh = heroU.x - sim.camX;
-            let target = sim.camX;
-            if (sxh < 230) target = heroU.x - 230;
-            else if (sxh > 470) target = heroU.x - 470;
-            sim.camX += (clampCam(target) - sim.camX) * Math.min(1, dt * 6);
+            sim.camManualTimer = 0;
+            const target = clampCam(heroU.x - LOGICAL_WIDTH / 2);
+            sim.camX += (target - sim.camX) * Math.min(1, dt * 7);
           }
         }
 
