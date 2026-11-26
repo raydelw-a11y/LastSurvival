@@ -488,6 +488,24 @@ class SoundSystem {
         this.tone(ctx, out, t, { type: 'square', f0: 118, f1: 126, vol: 0.022, attack: 0.03, decay: 0.3 });
         break;
       }
+      case 'tesla': {
+        // High-voltage discharge: rising capacitor whine, sharp arc snap, buzzing 120Hz hum + crackle
+        if (!this.allow(unit, 0.12, ctx)) return;
+        this.tone(ctx, out, t, { type: 'sawtooth', f0: 380 * j, f1: 1650, vol: 0.09, attack: 0.03, decay: 0.07 });
+        this.burst(ctx, out, t + 0.07, { type: 'highpass', freq: 2600, vol: 0.75, decay: 0.012, send: 0.35 });
+        this.burst(ctx, out, t + 0.07, { type: 'bandpass', freq: 3400 * j, q: 1.4, vol: 0.55, decay: 0.16, send: 0.4, saturate: true });
+        this.tone(ctx, out, t + 0.07, { type: 'square', f0: 120, f1: 116, vol: 0.13, attack: 0.004, decay: 0.26 });
+        this.tone(ctx, out, t + 0.07, { type: 'sawtooth', f0: 240, f1: 228, vol: 0.06, attack: 0.004, decay: 0.22 });
+        for (let i = 0; i < 6; i++) {
+          this.burst(ctx, out, t + 0.08 + Math.random() * 0.24, {
+            type: 'highpass',
+            freq: 3000 + Math.random() * 3000,
+            vol: 0.12 + Math.random() * 0.14,
+            decay: 0.006 + Math.random() * 0.01,
+          });
+        }
+        break;
+      }
       case 'flamethrower': {
         // Pressurized napalm jet: roaring whoosh + low rumble + crackling embers
         if (!this.allow(unit, 0.16, ctx)) return;

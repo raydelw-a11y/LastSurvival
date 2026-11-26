@@ -20,7 +20,7 @@ import { ContinuePrompt } from './components/ContinuePrompt';
 import { useCloudSync } from './sync/useCloudSync';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '2:37 PM - 11/22/2026';
+const FALLBACK_TIMESTAMP = '8:25 PM - 11/25/2026';
 export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 const CURRENT_BUILD_ID = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : '';
@@ -57,6 +57,7 @@ const INITIAL_PROGRESS: PlayerProgress = {
     turret: 1,
     drone: 1,
     juggernaut: 1,
+    tesla: 1,
   },
   missionStars: {},
   unlockedMissions: [1],
@@ -535,16 +536,10 @@ export function App() {
         };
       }
       soundFX.playUnitSpawn();
-      if (prev.equippedDeck.length < MAX_EQUIPPED_DECK) {
-        return {
-          ...prev,
-          equippedDeck: [...prev.equippedDeck, type],
-        };
-      }
-      // Replace the oldest slot except keep 5 newest + new selection
+      // No squad size cap: any number of unlocked units can be equipped
       return {
         ...prev,
-        equippedDeck: [...prev.equippedDeck.slice(1), type],
+        equippedDeck: [...prev.equippedDeck, type],
       };
     });
   }, []);
@@ -668,7 +663,10 @@ export function App() {
       <button
         type="button"
         onClick={() => checkRemoteUpdate('manual')}
-        className="fixed bottom-2 right-3 z-[9999] text-[10px] sm:text-[11px] text-yellow-300 font-mono font-semibold bg-black/85 hover:bg-zinc-900 px-2.5 py-0.5 rounded border border-yellow-500/60 shadow-lg cursor-pointer"
+        className={`fixed z-[9999] text-[10px] sm:text-[11px] text-yellow-300 font-mono font-semibold bg-black/85 hover:bg-zinc-900 px-2.5 py-0.5 rounded border border-yellow-500/60 shadow-lg cursor-pointer ${
+          // In battle the full-width unit bar owns the bottom edge: sit in the top-right sky instead
+          activeBattleMission ? 'top-9 right-2' : 'bottom-2 right-3'
+        }`}
         title="Toca para comprobar actualizaciones ahora"
       >
         {isUpdatingApp ? '⚡ Actualizando nueva versión...' : `Actualizado: ${BUILD_TS}`}

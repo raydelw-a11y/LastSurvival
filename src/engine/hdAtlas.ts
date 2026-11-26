@@ -387,7 +387,8 @@ export function getUnitAtlas(subType: SurvivorType | ZombieType): UnitPartAtlas 
 
     case 'hound':
     case 'turret':
-    case 'drone': {
+    case 'drone':
+    case 'tesla': {
       // Custom non-humanoid rigs rendered directly in PixelArtRenderer, bake fallback badge
       inkedCircle(hctx, 12, 12, 6, '#475569', '#94a3b8');
       inkedRoundRect(tctx, 6, 6, 12, 12, 3, '#334155', '#64748b');

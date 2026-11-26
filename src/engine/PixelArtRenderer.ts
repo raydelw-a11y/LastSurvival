@@ -27,6 +27,8 @@ export {
 };
 
 export interface RenderUnit {
+  /** Placement preview: draw the body only (no health bar, halos or quotes). */
+  isGhost?: boolean;
   id: string;
   team: 'survivor' | 'zombie';
   subType: SurvivorType | ZombieType;
@@ -151,6 +153,13 @@ export interface RenderFloatingText {
   isComic?: boolean;
 }
 
+/** Tesla Coil chain lightning: polyline through the coil tip and every shocked zombie. */
+export interface RenderLightningArc {
+  points: { x: number; y: number }[];
+  life: number;
+  maxLife: number;
+}
+
 export interface RenderFireZone {
   x: number;
   y: number;
@@ -167,7 +176,199 @@ const RANGED_SURVIVORS = new Set<string>([
   'flamethrower',
   'turret',
   'drone',
+  'tesla',
 ]);
+
+/** Height of the Tesla Coil tip above the ground (arc origin), in unit-local pixels. */
+export const TESLA_TIP_Z = 37;
+
+/** Jagged electric bolt between two points; regenerated every frame so it flickers. */
+function strokeJaggedBolt(
+  ctx: CanvasRenderingContext2D,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  jitter: number
+) {
+  const dist = Math.hypot(x2 - x1, y2 - y1);
+  const segs = Math.max(3, Math.round(dist / 9));
+  const nx = -(y2 - y1) / (dist || 1);
+  const ny = (x2 - x1) / (dist || 1);
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  for (let i = 1; i < segs; i++) {
+    const t = i / segs;
+    const off = (Math.random() - 0.5) * 2 * jitter * Math.sin(t * Math.PI);
+    ctx.lineTo(x1 + (x2 - x1) * t + nx * off, y1 + (y2 - y1) * t + ny * off);
+  }
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+}
+
+function renderTeslaRig(ctx: CanvasRenderingContext2D, unit: RenderUnit, time: number, flash: boolean) {
+  const firing = unit.state === 'attack';
+  const charging = unit.state === 'reload';
+  const tipY = -TESLA_TIP_Z;
+
+  // Electric glow around the toroid (pulses idle, flares when discharging)
+  const glowA = firing ? 0.85 : charging ? 0.18 : 0.32 + Math.sin(time * 6) * 0.08;
+  const glow = ctx.createRadialGradient(0, tipY + 2, 1, 0, tipY + 2, firing ? 24 : 15);
+  glow.addColorStop(0, `rgba(165, 243, 252, ${glowA})`);
+  glow.addColorStop(1, 'rgba(56, 189, 248, 0)');
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(0, tipY + 2, firing ? 24 : 15, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Concrete base slab + steel braces
+  inkedRoundRect(ctx, -12, -5.5, 24, 6.5, 2, flash ? '#ffffff' : '#57534e', '#a8a29e', '#292524', 1.4);
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(-9.5, -5);
+  ctx.lineTo(-3.5, -17);
+  ctx.moveTo(9.5, -5);
+  ctx.lineTo(3.5, -17);
+  ctx.stroke();
+  ctx.strokeStyle = flash ? '#ffffff' : '#94a3b8';
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+
+  // Hazard stripe on the base
+  ctx.fillStyle = '#facc15';
+  for (let i = -9; i < 9; i += 6) {
+    ctx.fillRect(i, -3.6, 3, 2);
+  }
+
+  // Insulated column wrapped in copper windings
+  inkedRoundRect(ctx, -3.6, -31, 7.2, 27, 2, flash ? '#ffffff' : '#1e293b', '#475569', undefined, 1.3);
+  ctx.lineWidth = 1.2;
+  for (let wy = -29; wy <= -7; wy += 2.4) {
+    ctx.strokeStyle = (Math.round(wy) & 1) === 0 ? '#f59e0b' : '#b45309';
+    ctx.beginPath();
+    ctx.moveTo(-3.2, wy);
+    ctx.lineTo(3.2, wy + 0.6);
+    ctx.stroke();
+  }
+
+  // Toroid ring + discharge sphere on top
+  ctx.fillStyle = flash ? '#ffffff' : '#94a3b8';
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.ellipse(0, tipY + 4, 9.5, 3.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#e2e8f0';
+  ctx.beginPath();
+  ctx.ellipse(0, tipY + 3, 6.5, 1.4, 0, 0, Math.PI * 2);
+  ctx.fill();
+  inkedCircle(ctx, 0, tipY, 3.2, firing ? '#ecfeff' : '#cbd5e1', '#ffffff', 1.3);
+
+  // Idle crackle: little sparks dancing off the toroid
+  if (!charging && (firing || Math.random() < 0.45)) {
+    ctx.save();
+    ctx.lineCap = 'round';
+    const n = firing ? 4 : 1 + Math.floor(Math.random() * 2);
+    for (let k = 0; k < n; k++) {
+      const ang = -Math.PI * (0.15 + Math.random() * 0.7);
+      const len = firing ? 9 + Math.random() * 8 : 5 + Math.random() * 5;
+      const ex = Math.cos(ang) * len * 1.3;
+      const ey = tipY + Math.sin(ang) * len;
+      ctx.strokeStyle = 'rgba(103, 232, 249, 0.85)';
+      ctx.lineWidth = 1.6;
+      strokeJaggedBolt(ctx, 0, tipY, ex, ey, 2.2);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 0.7;
+      strokeJaggedBolt(ctx, 0, tipY, ex, ey, 1.2);
+    }
+    ctx.restore();
+  }
+}
+
+/** Chain-lightning bolts from the Tesla Coil through each shocked zombie. */
+export function renderLightningArcs(ctx: CanvasRenderingContext2D, arcs: RenderLightningArc[]) {
+  for (let i = 0; i < arcs.length; i++) {
+    const arc = arcs[i];
+    const alpha = Math.max(0, arc.life / arc.maxLife);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (let p = 0; p < arc.points.length - 1; p++) {
+      const a = arc.points[p];
+      const b = arc.points[p + 1];
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.45)';
+      ctx.lineWidth = 6;
+      strokeJaggedBolt(ctx, a.x, a.y, b.x, b.y, 7);
+      ctx.strokeStyle = 'rgba(165, 243, 252, 0.95)';
+      ctx.lineWidth = 2.4;
+      strokeJaggedBolt(ctx, a.x, a.y, b.x, b.y, 6);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1;
+      strokeJaggedBolt(ctx, a.x, a.y, b.x, b.y, 3);
+      // Impact flash on every shocked zombie
+      const hit = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, 11);
+      hit.addColorStop(0, 'rgba(236, 254, 255, 0.95)');
+      hit.addColorStop(1, 'rgba(56, 189, 248, 0)');
+      ctx.fillStyle = hit;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, 11, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
+/** Translucent preview of a placeable unit (Turret / Tesla) + its attack range, while choosing a spot. */
+export function renderPlacementGhost(
+  ctx: CanvasRenderingContext2D,
+  subType: SurvivorType,
+  x: number,
+  y: number,
+  range: number,
+  time: number
+) {
+  const pulse = 0.94 + Math.sin(time * 7) * 0.06;
+  const col = subType === 'tesla' ? '56, 189, 248' : '250, 204, 21';
+  ctx.save();
+  ctx.fillStyle = `rgba(${col}, 0.12)`;
+  ctx.strokeStyle = `rgba(${col}, 0.85)`;
+  ctx.lineWidth = 1.6;
+  ctx.setLineDash([6, 5]);
+  ctx.beginPath();
+  ctx.ellipse(x, y, range * pulse, range * 0.36 * pulse, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 0.62;
+  renderUnitSprite(
+    ctx,
+    {
+      id: 'ghost',
+      team: 'survivor',
+      subType,
+      level: 1,
+      x,
+      y,
+      z: 0,
+      hp: 1,
+      maxHp: 1,
+      state: 'march',
+      animTime: 0,
+      attackProgress: 0,
+      reloadProgress: 0,
+      whiteFlashTimer: 0,
+      isLucky: false,
+      isPlayerControlled: false,
+      facing: 1,
+      isGhost: true,
+    },
+    time
+  );
+  ctx.restore();
+}
 
 function renderUnitGhostHealthBar(
   ctx: CanvasRenderingContext2D,
@@ -504,6 +705,8 @@ export function renderUnitSprite(
     renderTurretRig(ctx, unit, time, flash);
   } else if (unit.subType === 'drone') {
     renderDroneRig(ctx, unit, time, flash);
+  } else if (unit.subType === 'tesla') {
+    renderTeslaRig(ctx, unit, time, flash);
   } else {
     // ===============================================================
     // 7-NODE ARTICULATED HUMANOID / ZOMBIE RIG (4x Supersampled Parts)
@@ -692,7 +895,7 @@ export function renderUnitSprite(
 
   ctx.restore(); // End unit coordinate transform
 
-  if (isDying) return;
+  if (isDying || unit.isGhost) return;
 
   const topOffset =
     unit.subType === 'juggernaut' || unit.subType === 'bloated'
@@ -701,6 +904,8 @@ export function renderUnitSprite(
       ? 29
       : unit.subType === 'turret'
       ? 31
+      : unit.subType === 'tesla'
+      ? 46
       : 36;
 
   // Golden Inspiration Halo (Fortune Proc)
@@ -869,7 +1074,8 @@ export function renderDynamicLightmap(
   units: RenderUnit[],
   fireZones: RenderFireZone[],
   obstacles: RenderObstacle[],
-  tracers: RenderTracer[]
+  tracers: RenderTracer[],
+  arcs: RenderLightningArc[] = []
 ) {
   if (!lightmapCanvas && typeof document !== 'undefined') {
     lightmapCanvas = document.createElement('canvas');
@@ -914,6 +1120,9 @@ export function renderDynamicLightmap(
       drawLightHalo(lctx, u.x * 0.5, u.y * 0.5, 16, 'rgba(132, 204, 22, 0.30)');
     } else if (u.subType === 'flamethrower' && u.state === 'attack') {
       drawLightHalo(lctx, (u.x + u.facing * 28) * 0.5, (u.y - 16) * 0.5, 28, 'rgba(251, 146, 60, 0.42)');
+    } else if (u.subType === 'tesla' && u.team === 'survivor' && u.state !== 'dying') {
+      const a = u.state === 'attack' ? 0.5 : 0.18 + Math.sin(time * 6 + u.x) * 0.05;
+      drawLightHalo(lctx, u.x * 0.5, (u.y - TESLA_TIP_Z) * 0.5, u.state === 'attack' ? 34 : 18, `rgba(56, 189, 248, ${a})`);
     } else if (u.subType === 'crit_zombie') {
       drawLightHalo(lctx, u.x * 0.5, (u.y - 16) * 0.5, 14, 'rgba(239, 68, 68, 0.20)');
     }
@@ -922,6 +1131,14 @@ export function renderDynamicLightmap(
   for (let i = 0; i < tracers.length; i++) {
     const t = tracers[i];
     drawLightHalo(lctx, t.x1 * 0.5, t.y1 * 0.5, 14, 'rgba(254, 240, 138, 0.28)');
+  }
+
+  for (let i = 0; i < arcs.length; i++) {
+    const arc = arcs[i];
+    const a = 0.45 * Math.max(0, arc.life / arc.maxLife);
+    for (let p = 0; p < arc.points.length; p++) {
+      drawLightHalo(lctx, arc.points[p].x * 0.5, arc.points[p].y * 0.5, 22, `rgba(125, 211, 252, ${a})`);
+    }
   }
 
   ctx.save();

@@ -8,7 +8,6 @@ import {
   getXpForNextLevel,
   isUnitUnlocked,
   MAX_COMMANDER_LEVEL,
-  MAX_EQUIPPED_DECK,
   MISSION_NODES,
   MissionNode,
   PlayerProgress,
@@ -16,6 +15,7 @@ import {
   SURVIVOR_CONFIGS,
   SURVIVOR_ORDER,
   SurvivorType,
+  sortUnitsByRoleAndDamage,
   ZOMBIE_CONFIGS,
   ZombieType,
 } from '../types/game';
@@ -1235,7 +1235,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                 {modalTab === 'deck' && (
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="px-2 py-0.5 rounded bg-sky-950 border border-sky-500 text-sky-200 font-extrabold text-[10px] uppercase">
-                      Escuadrón Activo: {equippedDeck.length}/{MAX_EQUIPPED_DECK}
+                      Escuadrón Activo: {equippedDeck.length}/{unlockedCount}
                     </span>
                     <span className="px-2 py-0.5 rounded bg-amber-950/90 border border-amber-500/70 text-amber-200 font-bold text-[10px]">
                       {nextLockedUnit
@@ -1269,8 +1269,10 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                 }
               >
                 {modalTab === 'deck' &&
-                  SURVIVOR_ORDER.map((sType) => {
+                  sortUnitsByRoleAndDamage(SURVIVOR_ORDER, progress.unitLevels).map((sType, idx, arr) => {
                     const cfg = SURVIVOR_CONFIGS[sType];
+                    const startsGroup =
+                      idx === 0 || SURVIVOR_CONFIGS[arr[idx - 1]].isRanged !== cfg.isRanged;
                     const isUnlocked = isUnitUnlocked(sType, commanderLvl);
                     const isEquipped = equippedDeck.includes(sType);
                     const deckSlotIdx = equippedDeck.indexOf(sType);
@@ -1282,8 +1284,17 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                     const isLastEquipped = isEquipped && equippedDeck.length <= 1;
 
                     return (
+                      <React.Fragment key={sType}>
+                      {startsGroup && (
+                        <div className="col-span-full flex items-center gap-2 px-0.5 pt-0.5">
+                          <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-300">
+                            {cfg.isRanged ? '🎯 A distancia' : '⚔️ Cuerpo a cuerpo'}
+                          </span>
+                          <span className="text-[9px] text-zinc-500">de mayor a menor daño</span>
+                          <div className="flex-1 h-px bg-[#4a4737]" />
+                        </div>
+                      )}
                       <div
-                        key={sType}
                         title={`${cfg.name} (${cfg.roleTitle}) — ${cfg.description}`}
                         className={`border rounded-lg p-1.5 flex flex-col justify-between transition ${
                           isUnlocked
@@ -1390,6 +1401,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                           </div>
                         )}
                       </div>
+                      </React.Fragment>
                     );
                   })}
 
@@ -1404,7 +1416,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                           </span>
                         </div>
                         <p className="text-[10px] text-zinc-300 mb-2 leading-relaxed">
-                          Las unidades se desbloquean combatiendo y ganando XP en carretera (1 unidad nueva por nivel hasta Nv.12, más Maestría +10% global en Nv.12).
+                          Las unidades se desbloquean combatiendo y ganando XP en carretera (1 unidad nueva por nivel hasta Nv.13, y Maestría +10% global desde Nv.12).
                         </p>
                       </div>
                       <div className="bg-zinc-950/90 border border-sky-800/70 rounded p-2">

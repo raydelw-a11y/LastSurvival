@@ -3,6 +3,7 @@ import {
   getNextLockedUnit,
   getUnitUnlockedAtLevel,
   getXpForNextLevel,
+  MASTERY_LEVEL,
   MAX_COMMANDER_LEVEL,
   MissionNode,
   PlayerProgress,
@@ -11,6 +12,7 @@ import {
   SURVIVOR_CONFIGS,
   SURVIVOR_ORDER,
   SurvivorType,
+  sortUnitsByRoleAndDamage,
   TACTICAL_ITEM_CONFIGS,
   TacticalItemType,
   ZOMBIE_CONFIGS,
@@ -25,6 +27,7 @@ import {
   RenderCrow,
   RenderFireZone,
   RenderFloatingText,
+  RenderLightningArc,
   RenderObstacle,
   RenderParticle,
   RenderPickup,
@@ -40,10 +43,13 @@ import {
   renderDynamicLightmap,
   renderFireZone,
   renderForegroundLeftProps,
+  renderLightningArcs,
+  renderPlacementGhost,
   renderTacticalObstacle,
   renderTracersAndShells,
   renderUnitSprite,
   syncCanvasHiDPI,
+  TESLA_TIP_Z,
 } from '../engine/PixelArtRenderer';
 import { MuteButton } from './MuteButton';
 import { soundFX } from '../engine/SoundFX';
@@ -80,6 +86,10 @@ interface InternalUnit extends RenderUnit {
   isStationary: boolean;
   isFlying: boolean;
   isFlame: boolean;
+  chainTargets: number;
+  chainRange: number;
+  chainFalloff: number;
+  stunTime: number;
   barricadeMultiplier: number;
   infectedZombieType?: ZombieType;
   critChance: number;
@@ -92,6 +102,14 @@ interface InternalUnit extends RenderUnit {
 }
 
 const TACTICAL_ORDER: TacticalItemType[] = ['blue_barrel', 'red_barrel', 'medkit'];
+
+/** Where a placeable unit (Turret / Tesla Coil) may be installed: on the road, ahead of the bus. */
+function clampPlacement(busX: number, barricadeX: number, x: number, y: number) {
+  return {
+    x: Math.max(busX + 150, Math.min(barricadeX - 40, x)),
+    y: Math.max(ROAD_Y_MIN + 10, Math.min(ROAD_Y_MAX - 6, y)),
+  };
+}
 
 const INITIAL_UNIT_COOLDOWNS: Record<SurvivorType, number> = {
   redneck: 0,
@@ -106,6 +124,7 @@ const INITIAL_UNIT_COOLDOWNS: Record<SurvivorType, number> = {
   turret: 0,
   drone: 0,
   juggernaut: 0,
+  tesla: 0,
 };
 
 export const BattleArena: React.FC<BattleArenaProps> = ({
@@ -167,6 +186,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   const [paused, setPaused] = useState<boolean>(false);
   const pausedRef = useRef<boolean>(false);
   const [draggingItem, setDraggingItem] = useState<TacticalItemType | null>(null);
+  // Turret / Tesla Coil chosen from the deck, waiting for the player to tap where to install it
+  const [placingUnit, setPlacingUnit] = useState<SurvivorType | null>(null);
   const [battleResult, setBattleResult] = useState<'none' | 'victory' | 'defeat'>('none');
   const [starsEarned, setStarsEarned] = useState<number>(3);
   const [zombiesKilledCount, setZombiesKilledCount] = useState<number>(0);
@@ -227,6 +248,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     selectedUnitId: null as string | null,
     mouseLogical: { x: 360, y: 228, insideRoad: false },
     draggingItem: null as TacticalItemType | null,
+    placingUnit: null as SurvivorType | null,
+    lightningArcs: [] as RenderLightningArc[],
     waveTimer: initialSector === 1 ? 5.2 : initialSector === 2 ? 4.5 : 3.8,
     skeletonTimer: mission.skeletonAmbush ? 14.0 : 9999,
     timeRemaining: 150,
@@ -394,7 +417,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             ally.state !== 'dying' &&
             ally.hp > 0
           ) {
-            if (sim.commanderLevel === MAX_COMMANDER_LEVEL) {
+            if (sim.commanderLevel === MASTERY_LEVEL) {
               ally.maxHp = Math.round(ally.maxHp * 1.1);
               ally.damage = Math.round(ally.damage * 1.1);
             }
@@ -607,6 +630,10 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         isStationary: false,
         isFlying: false,
         isFlame: false,
+        chainTargets: 0,
+        chainRange: 0,
+        chainFalloff: 1,
+        stunTime: 0,
         barricadeMultiplier: 1,
         critChance: cfg.critChance,
         critMultiplier: cfg.critMultiplier,
@@ -648,17 +675,23 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
       const liveProgress = liveBridgeRef.current.progress;
       const actualLevel = liveProgress.unitLevels[type] || 1;
-      const masteryMult = sim.commanderLevel >= MAX_COMMANDER_LEVEL ? 1.1 : 1.0;
+      const masteryMult = sim.commanderLevel >= MASTERY_LEVEL ? 1.1 : 1.0;
       const statMult = (1 + (actualLevel - 1) * 0.14) * masteryMult;
       const hp = Math.round(cfg.baseHp * statMult);
       const damage = Math.round(cfg.baseDamage * statMult);
       const isLucky = freeInitial || Math.random() * 100 < cfg.fortune;
 
-      const spawnY =
+      let spawnY =
         customY ?? ROAD_Y_MIN + 14 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 28);
       const defaultSpawnX = cfg.isStationary
         ? sim.busX + 185 + Math.random() * 80
         : sim.busX + 106;
+      let spawnX = customX ?? defaultSpawnX;
+      if (cfg.placeable && customX !== undefined) {
+        const spot = clampPlacement(sim.busX, sim.barricadeX, customX, spawnY);
+        spawnX = spot.x;
+        spawnY = spot.y;
+      }
 
       if (cfg.repairsBusOnSpawn && !freeInitial) {
         const heal = cfg.repairsBusOnSpawn;
@@ -677,7 +710,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         team: 'survivor',
         subType: type,
         level: actualLevel,
-        x: customX ?? defaultSpawnX,
+        x: spawnX,
         y: spawnY,
         z: freeInitial ? 0 : 6,
         vx: freeInitial || cfg.isStationary ? 0 : 22,
@@ -705,6 +738,10 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         isStationary: !!cfg.isStationary,
         isFlying: !!cfg.isFlying,
         isFlame: !!cfg.isFlame,
+        chainTargets: cfg.chainTargets ?? 0,
+        chainRange: cfg.chainRange ?? 0,
+        chainFalloff: cfg.chainFalloff ?? 1,
+        stunTime: cfg.stunTime ?? 0,
         barricadeMultiplier: cfg.barricadeMultiplier ?? 1,
         infectedZombieType: cfg.infectedZombieType,
         critChance: (cfg.fortune / 100) * (isLucky ? 1.55 : 1),
@@ -736,6 +773,26 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       }
 
       sim.units.push(newUnit);
+
+      if (cfg.placeable && !freeInitial) {
+        // Install effect: dust ring + sparks where the structure lands
+        addFloatingText('¡INSTALADA!', spawnX, spawnY, 26, type === 'tesla' ? '#67e8f9' : '#fde047', true);
+        for (let i = 0; i < 14; i++) {
+          const ang = Math.random() * Math.PI * 2;
+          sim.particles.push({
+            x: spawnX,
+            y: spawnY,
+            z: 2,
+            vx: Math.cos(ang) * (30 + Math.random() * 40),
+            vy: Math.sin(ang) * 12,
+            vz: 20 + Math.random() * 40,
+            color: i % 2 === 0 ? '#a8a29e' : type === 'tesla' ? '#67e8f9' : '#fde047',
+            size: 2 + (i % 2),
+            life: 0.35 + Math.random() * 0.25,
+            maxLife: 0.6,
+          });
+        }
+      }
     },
     [addFloatingText, scareCrows]
   );
@@ -921,9 +978,51 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     sim.selectedUnitId = next.id;
   }, []);
 
+  const cancelPlacement = useCallback(() => {
+    simRef.current.placingUnit = null;
+    setPlacingUnit(null);
+  }, []);
+
+  /** 1st tap on a Turret / Tesla card arms placement; the next tap on the road installs it. */
+  const selectPlaceableUnit = useCallback(
+    (type: SurvivorType) => {
+      const sim = simRef.current;
+      if (sim.phase !== 'combat' || pausedRef.current) return;
+      if (sim.placingUnit === type) {
+        cancelPlacement();
+        return;
+      }
+      const cfg = SURVIVOR_CONFIGS[type];
+      if (sim.commanderLevel < cfg.unlockLevel) return;
+      if (sim.courage < cfg.cost || sim.unitCooldowns[type] > 0) return;
+      sim.draggingItem = null;
+      setDraggingItem(null);
+      if (!sim.mouseLogical.insideRoad) {
+        sim.mouseLogical = { x: 330, y: 228, insideRoad: true };
+      }
+      soundFX.playUnitSpawn();
+      sim.placingUnit = type;
+      setPlacingUnit(type);
+    },
+    [cancelPlacement]
+  );
+
+  /** Deck card / hotkey action: placeable structures ask where to go, everyone else deploys at once. */
+  const activateUnit = useCallback(
+    (type: SurvivorType) => {
+      if (SURVIVOR_CONFIGS[type].placeable) selectPlaceableUnit(type);
+      else deploySurvivor(type);
+    },
+    [deploySurvivor, selectPlaceableUnit]
+  );
+
   const selectTacticalItem = useCallback((itemType: TacticalItemType) => {
     const sim = simRef.current;
     if (sim.phase !== 'combat' || pausedRef.current) return;
+    if (sim.placingUnit) {
+      sim.placingUnit = null;
+      setPlacingUnit(null);
+    }
     if (sim.draggingItem === itemType) {
       setDraggingItem(null);
       sim.draggingItem = null;
@@ -945,10 +1044,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       const key = e.key.toLowerCase();
       simRef.current.keysPressed.add(key);
 
-      if (key >= '1' && key <= '6') {
-        const slotIdx = Number(key) - 1;
-        const deckUnit = liveBridgeRef.current.progress.equippedDeck[slotIdx];
-        if (deckUnit) deploySurvivor(deckUnit);
+      const hotkeyUnit = liveBridgeRef.current.progress.equippedDeck.find(
+        (u) => SURVIVOR_CONFIGS[u]?.hotkey.toLowerCase() === key
+      );
+      if (hotkeyUnit) {
+        activateUnit(hotkeyUnit);
       } else if (key === 'q') {
         selectTacticalItem('blue_barrel');
       } else if (key === 'x' || key === 'r') {
@@ -962,7 +1062,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         e.preventDefault();
         triggerFuryWhiskeyBuff();
       } else if (key === 'escape') {
-        if (simRef.current.draggingItem) {
+        if (simRef.current.placingUnit) {
+          cancelPlacement();
+        } else if (simRef.current.draggingItem) {
           setDraggingItem(null);
           simRef.current.draggingItem = null;
         } else if (pausedRef.current) {
@@ -984,8 +1086,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       window.removeEventListener('keyup', handleKeyUp);
     };
   }, [
+    activateUnit,
+    cancelPlacement,
     cycleSelectedSurvivor,
-    deploySurvivor,
     pauseBattle,
     resumeBattle,
     selectTacticalItem,
@@ -1039,6 +1142,18 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     simRef.current.mouseLogical = coords;
 
     const sim = simRef.current;
+    // Install the armed Turret / Tesla Coil exactly where the player tapped on the road
+    if (sim.placingUnit) {
+      if (coords.y >= 72) {
+        const type = sim.placingUnit;
+        sim.mouseLogical = { ...coords, insideRoad: true };
+        sim.placingUnit = null;
+        setPlacingUnit(null);
+        deploySurvivor(type, false, coords.x, coords.y);
+      }
+      return;
+    }
+
     // 2-Tap Tactical Item System: 2nd tap on battlefield drops selected item at tapped location!
     if (sim.draggingItem) {
       if (coords.y >= 72) {
@@ -1298,7 +1413,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
           // Sheriff Bill Roof Rifle Defense + Tracers & Roof Brass Ejection
           const liveBillBonus = liveBridgeRef.current.progress.billDamageBonus;
-          const billMastery = sim.commanderLevel >= MAX_COMMANDER_LEVEL ? 1.1 : 1.0;
+          const billMastery = sim.commanderLevel >= MASTERY_LEVEL ? 1.1 : 1.0;
           if (sim.billBarrageActiveTimer > 0) {
             sim.billBarrageActiveTimer -= dt;
             if (Math.random() < 0.32) {
@@ -1696,7 +1811,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               if (
                 closestZ &&
                 Math.abs(closestZ.x - u.x) <= u.attackRange &&
-                Math.abs(closestZ.y - u.y) <= (u.isRanged ? 38 : 18)
+                Math.abs(closestZ.y - u.y) <= (u.isRanged ? (u.chainTargets > 0 ? 64 : 38) : 18)
               ) {
                 u.facing = closestZ.x >= u.x ? 1 : -1;
                 if (u.attackTimer <= 0) {
@@ -1710,10 +1825,89 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                     soundFX.playUnitWeapon(u.subType);
                     sim.screenShake = Math.max(
                       sim.screenShake,
-                      u.subType === 'sniper' ? 3.2 : u.subType === 'gunslinger' ? 0.65 : 2.0
+                      u.subType === 'sniper'
+                        ? 3.2
+                        : u.subType === 'gunslinger'
+                        ? 0.65
+                        : u.subType === 'tesla'
+                        ? 1.6
+                        : 2.0
                     );
 
-                    if (u.pellets === 1 && !u.isFlame) {
+                    if (u.chainTargets > 0) {
+                      // TESLA COIL: lightning hits the closest zombie, then jumps to the nearest
+                      // un-shocked zombies; each jump loses damage but pierces armor and stuns.
+                      const shocked: InternalUnit[] = [closestZ];
+                      let cursor: InternalUnit = closestZ;
+                      while (shocked.length < u.chainTargets) {
+                        let next: InternalUnit | null = null;
+                        let nextDist = Infinity;
+                        for (const o of sim.units) {
+                          if (
+                            o.team !== 'zombie' ||
+                            o.state === 'corpse' ||
+                            o.state === 'dying' ||
+                            o.hp <= 0 ||
+                            shocked.includes(o)
+                          ) {
+                            continue;
+                          }
+                          const d = Math.hypot(o.x - cursor.x, (o.y - cursor.y) * 1.3);
+                          if (d <= u.chainRange && d < nextDist) {
+                            nextDist = d;
+                            next = o;
+                          }
+                        }
+                        if (!next) break;
+                        shocked.push(next);
+                        cursor = next;
+                      }
+
+                      const isCrit = Math.random() < u.critChance;
+                      const arcPoints = [{ x: u.x, y: u.y - TESLA_TIP_Z }];
+                      shocked.forEach((z, k) => {
+                        const resist = z.bulletResist * (1 - u.armorPiercing);
+                        const zapDmg = Math.max(
+                          1,
+                          Math.round(
+                            u.damage *
+                              Math.pow(u.chainFalloff, k) *
+                              (isCrit ? u.critMultiplier : 1) *
+                              (1 - resist)
+                          )
+                        );
+                        z.hp -= zapDmg;
+                        z.whiteFlashTimer = 0.16;
+                        z.vx += (z.x >= u.x ? 1 : -1) * u.knockback;
+                        z.attackTimer = Math.max(z.attackTimer, u.stunTime);
+                        arcPoints.push({ x: z.x, y: z.y - 14 });
+                        for (let sp = 0; sp < 5; sp++) {
+                          const ang = Math.random() * Math.PI * 2;
+                          sim.particles.push({
+                            x: z.x,
+                            y: z.y,
+                            z: 14,
+                            vx: Math.cos(ang) * (35 + Math.random() * 45),
+                            vy: Math.sin(ang) * 14,
+                            vz: 30 + Math.random() * 50,
+                            color: sp % 2 === 0 ? '#a5f3fc' : '#ffffff',
+                            size: 1 + (sp % 2),
+                            life: 0.2 + Math.random() * 0.15,
+                            maxLife: 0.35,
+                          });
+                        }
+                        addFloatingText(
+                          `${zapDmg}?`,
+                          z.x,
+                          z.y,
+                          20,
+                          '#67e8f9',
+                          true,
+                          k === 0 && isCrit ? 'CRIT!' : 'ZAP!'
+                        );
+                      });
+                      sim.lightningArcs.push({ points: arcPoints, life: 0.22, maxLife: 0.22 });
+                    } else if (u.pellets === 1 && !u.isFlame) {
                       const wKind = u.subType === 'sniper' ? 'sniper' : 'rapid';
                       const muzzleZ = u.isFlying
                         ? 32
@@ -2088,6 +2282,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             if (sim.tracers[i].life <= 0) sim.tracers.splice(i, 1);
           }
 
+          // Tesla chain-lightning bolts lifetime
+          for (let i = sim.lightningArcs.length - 1; i >= 0; i--) {
+            sim.lightningArcs[i].life -= dt;
+            if (sim.lightningArcs[i].life <= 0) sim.lightningArcs.splice(i, 1);
+          }
+
           // 2.5D Bouncing Brass & Shotgun Shells -> Bake onto decalCanvas when stopped!
           for (let i = sim.shells.length - 1; i >= 0; i--) {
             const s = sim.shells[i];
@@ -2304,8 +2504,27 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           }
         });
 
+        // Placement preview for an armed Turret / Tesla Coil (follows the pointer on the road)
+        if (sim.placingUnit) {
+          const spot = clampPlacement(
+            sim.busX,
+            sim.barricadeX,
+            sim.mouseLogical.x,
+            sim.mouseLogical.y
+          );
+          renderPlacementGhost(
+            ctx,
+            sim.placingUnit,
+            spot.x,
+            spot.y,
+            SURVIVOR_CONFIGS[sim.placingUnit].attackRange,
+            sim.time
+          );
+        }
+
         // LAYER 3: Supersonic Sniper Trails, Shotgun Pellets & Ejected Brass Shells
         renderTracersAndShells(ctx, sim.tracers, sim.shells);
+        renderLightningArcs(ctx, sim.lightningArcs);
 
         // LAYER 4: Foreground Left Military Truck & Oil Drums
         renderForegroundLeftProps(ctx);
@@ -2320,7 +2539,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           sim.units,
           sim.fireZones,
           sim.obstacles,
-          sim.tracers
+          sim.tracers,
+          sim.lightningArcs
         );
 
         // LAYER 6: Flying Crows, Blood Particles & Crisp Comic Popups ("17? / WACK!")
@@ -2378,13 +2598,18 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mission.id]);
 
-  // Active Tactical Squad (max 6 unlocked units) + 1 Next-Unlock Teaser Card!
+  // Active Tactical Squad (any number of unlocked units) + 1 Next-Unlock Teaser Card!
   const activeSquadUnits = progress.equippedDeck.filter(
     (sType) => commanderLevel >= SURVIVOR_CONFIGS[sType].unlockLevel
   );
-  const effectiveSquad: SurvivorType[] =
-    activeSquadUnits.length > 0 ? activeSquadUnits : ['redneck'];
-  const nextLockedCfg = effectiveSquad.length < 6 ? getNextLockedUnit(commanderLevel) : null;
+  // One full-width row: melee first, then ranged, each from highest to lowest damage
+  const effectiveSquad: SurvivorType[] = sortUnitsByRoleAndDamage(
+    activeSquadUnits.length > 0 ? activeSquadUnits : ['redneck'],
+    progress.unitLevels
+  );
+  const meleeSquad = effectiveSquad.filter((t) => !SURVIVOR_CONFIGS[t].isRanged);
+  const rangedSquad = effectiveSquad.filter((t) => SURVIVOR_CONFIGS[t].isRanged);
+  const nextLockedCfg = getNextLockedUnit(commanderLevel);
   const xpNeeded = getXpForNextLevel(commanderLevel);
   const xpPercent =
     commanderLevel >= MAX_COMMANDER_LEVEL
@@ -2401,7 +2626,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         onPointerMove={handleCanvasPointerMove}
         onPointerDown={handleCanvasPointerDown}
         className={`absolute inset-0 w-full h-full object-cover hd-canvas ${
-          draggingItem ? 'cursor-crosshair' : 'cursor-pointer'
+          draggingItem || placingUnit ? 'cursor-crosshair' : 'cursor-pointer'
         }`}
       />
 
@@ -2640,6 +2865,24 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         </div>
       )}
 
+      {/* PLACEMENT MODE BANNER (Turret / Tesla Coil) */}
+      {placingUnit && (
+        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-3 py-1 rounded-md bg-zinc-950/95 border-2 border-cyan-300 text-[10px] font-bold text-cyan-100 shadow-xl">
+          <span>
+            📍 Toca en la carretera dónde instalar la{' '}
+            <strong>{SURVIVOR_CONFIGS[placingUnit].name}</strong>
+          </span>
+          <button
+            type="button"
+            onClick={cancelPlacement}
+            className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-red-700 text-zinc-200 text-[9px] font-extrabold cursor-pointer"
+            title="Cancelar [Esc]"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* ===================================================================== */}
       {/* OPTIONAL TOUCH WASD D-PAD (bottom-left)                               */}
       {/* ===================================================================== */}
@@ -2698,89 +2941,106 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       {/* ===================================================================== */}
       {/* BOTTOM TACTICAL DECK: Compact Slots w/ Small Names + 2-Tap Items      */}
       {/* ===================================================================== */}
-      <div className="absolute bottom-1 left-1/2 -translate-x-1/2 z-20 flex items-end justify-center gap-1 max-w-[99vw] px-1.5 py-0.5">
-        {/* SURVIVOR SQUAD CARDS (Fits completely on screen with small unit names) */}
+      <div className="absolute bottom-1 inset-x-1 z-20 overflow-x-auto overscroll-x-contain">
+        <div className="flex items-end gap-1 w-max mx-auto px-1 py-0.5">
+        {/* SURVIVOR SQUAD: one full-width row — melee group, then ranged group (by damage) */}
         <div className="flex items-end gap-1">
-          {effectiveSquad.map((sType, slotIndex) => {
+          {[meleeSquad, rangedSquad].map((group, groupIdx) => (
+            <React.Fragment key={groupIdx === 0 ? 'melee' : 'ranged'}>
+              {groupIdx === 1 && meleeSquad.length > 0 && rangedSquad.length > 0 && (
+                <div
+                  className="h-9 w-[1px] bg-[#6e7353]/45 self-center shrink-0"
+                  title="Cuerpo a cuerpo | A distancia"
+                />
+              )}
+              {group.map((sType) => {
             const cfg = SURVIVOR_CONFIGS[sType];
-            const cd = unitCooldowns[sType];
-            const canAfford = courage >= cfg.cost && cd <= 0;
-            const lvl = progress.unitLevels[sType] || 1;
-            const slotKey = String(slotIndex + 1);
-            const shortName = SHORT_UNIT_NAMES[sType];
+                const cd = unitCooldowns[sType];
+                const canAfford = courage >= cfg.cost && cd <= 0;
+                const lvl = progress.unitLevels[sType] || 1;
+                const slotKey = cfg.hotkey;
+                const isPlacing = placingUnit === sType;
+                const shortName = SHORT_UNIT_NAMES[sType];
 
-            return (
-              <button
-                key={sType}
-                type="button"
-                onClick={() => deploySurvivor(sType)}
-                disabled={!canAfford}
-                className={`shrink-0 relative w-[42px] h-[56px] sm:w-[46px] sm:h-[60px] rounded transition select-none flex flex-col justify-between p-0.5 ${
-                  canAfford
-                    ? 'bg-[#3f4430]/95 border-2 border-[#c2c799] shadow-[0_3px_8px_rgba(0,0,0,0.8)] cursor-pointer hover:scale-105 active:scale-95'
-                    : 'bg-[#26281d]/88 border border-[#4a4d38] cursor-not-allowed'
-                }`}
-                title={`${cfg.name} (${cfg.roleTitle}) — ${cfg.cost} Valor [${slotKey}]`}
-              >
-                {cd > 0 && (
-                  <div
-                    className="absolute bottom-0 left-0 right-0 bg-black/68 pointer-events-none z-10 rounded-b"
-                    style={{ height: `${Math.min(100, (cd / cfg.prepTime) * 100)}%` }}
-                  />
-                )}
-
-                <div className="w-full flex justify-between items-center z-20 px-0.5">
-                  <span className="text-[6.5px] font-bold text-zinc-400 leading-none">
-                    {slotKey}
-                  </span>
-                  <span
-                    className={`px-0.5 text-[7px] font-extrabold leading-tight rounded-xs ${
-                      canAfford
-                        ? 'bg-[#0284c7] text-white border border-black/70'
-                        : 'text-[#8c8a6e]'
+                return (
+                  <button
+                    key={sType}
+                    type="button"
+                    onClick={() => activateUnit(sType)}
+                    disabled={!canAfford && !isPlacing}
+                    className={`shrink-0 relative w-[42px] h-[56px] sm:w-[46px] sm:h-[60px] rounded transition select-none flex flex-col justify-between p-0.5 ${
+                      isPlacing
+                        ? 'bg-sky-950/95 border-2 border-cyan-300 ring-2 ring-cyan-400/60 -translate-y-1 shadow-xl cursor-pointer'
+                        : canAfford
+                        ? 'bg-[#3f4430]/95 border-2 border-[#c2c799] shadow-[0_3px_8px_rgba(0,0,0,0.8)] cursor-pointer hover:scale-105 active:scale-95'
+                        : 'bg-[#26281d]/88 border border-[#4a4d38] cursor-not-allowed'
+                    }`}
+                    title={`${cfg.name} (${cfg.roleTitle}) — ${cfg.cost} Valor [${slotKey}]${
+                      cfg.placeable ? ' — 1er toque: elegir, 2do toque en la carretera: instalar' : ''
                     }`}
                   >
-                    Nv.{lvl}
-                  </span>
-                </div>
+                    {cd > 0 && (
+                      <div
+                        className="absolute bottom-0 left-0 right-0 bg-black/68 pointer-events-none z-10 rounded-b"
+                        style={{ height: `${Math.min(100, (cd / cfg.prepTime) * 100)}%` }}
+                      />
+                    )}
 
-                <div className="absolute inset-x-0 top-2.5 bottom-4 flex items-center justify-center pointer-events-none">
-                  <CanvasUnitPortrait type={sType} active={canAfford} />
-                </div>
+                    <div className="w-full flex justify-between items-center z-20 px-0.5">
+                      <span className="text-[6.5px] font-bold text-zinc-400 leading-none">
+                        {slotKey}
+                        {cfg.placeable && <span className={isPlacing ? 'animate-pulse' : ''}>📍</span>}
+                      </span>
+                      <span
+                        className={`px-0.5 text-[7px] font-extrabold leading-tight rounded-xs ${
+                          canAfford
+                            ? 'bg-[#0284c7] text-white border border-black/70'
+                            : 'text-[#8c8a6e]'
+                        }`}
+                      >
+                        Nv.{lvl}
+                      </span>
+                    </div>
 
-                <div className="w-full flex flex-col items-center z-20 mt-auto">
-                  <span
-                    className={`w-full text-center text-[6.5px] sm:text-[7px] font-bold leading-none truncate px-0.5 mb-0.5 ${
-                      canAfford ? 'text-amber-100 drop-shadow-[0_1px_1px_rgba(0,0,0,0.95)]' : 'text-zinc-500'
-                    }`}
-                  >
-                    {shortName}
-                  </span>
-                  <div className="w-full flex items-center justify-between px-0.5">
-                    <span
-                      className={`w-3 h-3 rounded-full flex items-center justify-center text-[6px] ${
-                        canAfford
-                          ? 'bg-slate-950 border border-sky-400 text-sky-300'
-                          : 'bg-zinc-900/60 text-zinc-600'
-                      }`}
-                    >
-                      💧
-                    </span>
-                    <span
-                      className={`font-tactical font-extrabold text-[10px] sm:text-[11px] leading-none ${
-                        canAfford ? 'text-white' : 'text-[#737058]'
-                      }`}
-                      style={
-                        canAfford ? { textShadow: '1px 1px 0 #000, -1px -1px 0 #000' } : undefined
-                      }
-                    >
-                      {cfg.cost}
-                    </span>
-                  </div>
-                </div>
-              </button>
-            );
-          })}
+                    <div className="absolute inset-x-0 top-2.5 bottom-4 flex items-center justify-center pointer-events-none">
+                      <CanvasUnitPortrait type={sType} active={canAfford} />
+                    </div>
+
+                    <div className="w-full flex flex-col items-center z-20 mt-auto">
+                      <span
+                        className={`w-full text-center text-[6.5px] sm:text-[7px] font-bold leading-none truncate px-0.5 mb-0.5 ${
+                          canAfford ? 'text-amber-100 drop-shadow-[0_1px_1px_rgba(0,0,0,0.95)]' : 'text-zinc-500'
+                        }`}
+                      >
+                        {isPlacing ? 'INSTALAR' : shortName}
+                      </span>
+                      <div className="w-full flex items-center justify-between px-0.5">
+                        <span
+                          className={`w-3 h-3 rounded-full flex items-center justify-center text-[6px] ${
+                            canAfford
+                              ? 'bg-slate-950 border border-sky-400 text-sky-300'
+                              : 'bg-zinc-900/60 text-zinc-600'
+                          }`}
+                        >
+                          💧
+                        </span>
+                        <span
+                          className={`font-tactical font-extrabold text-[10px] sm:text-[11px] leading-none ${
+                            canAfford ? 'text-white' : 'text-[#737058]'
+                          }`}
+                          style={
+                            canAfford ? { textShadow: '1px 1px 0 #000, -1px -1px 0 #000' } : undefined
+                          }
+                        >
+                          {cfg.cost}
+                        </span>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </React.Fragment>
+          ))}
 
           {/* Next-Unlock Teaser Slot (Compact with small name) */}
           {nextLockedCfg && (
@@ -2947,6 +3207,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               </button>
             );
           })}
+        </div>
         </div>
       </div>
 

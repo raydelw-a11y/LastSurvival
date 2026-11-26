@@ -10,7 +10,8 @@ export type SurvivorType =
   | 'flamethrower'
   | 'turret'
   | 'drone'
-  | 'juggernaut';
+  | 'juggernaut'
+  | 'tesla';
 
 export type TacticalItemType = 'blue_barrel' | 'red_barrel' | 'medkit';
 export type ZombieType = 'walker' | 'runner' | 'crit_zombie' | 'armored' | 'skeleton' | 'bloated';
@@ -44,6 +45,12 @@ export interface SurvivorConfig {
   isFlying?: boolean; // For Combat Drone (hovers above ground)
   isDog?: boolean; // Fast K-9 attack dog
   isFlame?: boolean; // Flamethrower continuous fire cone
+  chainTargets?: number; // Tesla Coil: lightning jumps to this many zombies per discharge
+  chainRange?: number; // Tesla Coil: max jump distance between chained zombies
+  chainFalloff?: number; // Tesla Coil: damage multiplier applied on every extra jump
+  stunTime?: number; // Tesla Coil: seconds each shocked zombie loses before its next attack
+  /** Player picks where to install it on the road (Turret, Tesla Coil). */
+  placeable?: boolean;
   infectedZombieType?: ZombieType;
   description: string;
   quotes: string[];
@@ -125,8 +132,9 @@ export interface PlayerProgress {
   lastPlayedAt?: number;
 }
 
-export const MAX_COMMANDER_LEVEL = 12;
-export const MAX_EQUIPPED_DECK = 6;
+export const MAX_COMMANDER_LEVEL = 13;
+/** Commander Mastery (+10% damage & HP to the whole squad) kicks in at this level. */
+export const MASTERY_LEVEL = 12;
 
 // ---- Upgrade economy (shared by the map UI and App handlers) -----------------
 export const getUnitUpgradeCost = (level: number) => level * 35;
@@ -162,7 +170,11 @@ export const SURVIVOR_ORDER: SurvivorType[] = [
   'turret',
   'drone',
   'juggernaut',
+  'tesla',
 ];
+
+/** The active squad has no size cap: any number of unlocked units can be equipped. */
+export const MAX_EQUIPPED_DECK = SURVIVOR_ORDER.length;
 
 export const SHORT_UNIT_NAMES: Record<SurvivorType, string> = {
   redneck: 'Redneck',
@@ -177,6 +189,7 @@ export const SHORT_UNIT_NAMES: Record<SurvivorType, string> = {
   turret: 'Torreta',
   drone: 'Dron',
   juggernaut: 'Juggernaut',
+  tesla: 'Tesla',
 };
 
 export const SHORT_TACTICAL_NAMES: Record<TacticalItemType, string> = {
@@ -197,10 +210,11 @@ export const XP_THRESHOLDS: Record<number, number> = {
   9: 570,  // Nv.9 -> Nv.10 (Torreta Gatling)
   10: 650, // Nv.10 -> Nv.11 (Dron MQ-9)
   11: 740, // Nv.11 -> Nv.12 (Juggernaut + Maestría +10%)
+  12: 820, // Nv.12 -> Nv.13 (Bobina Tesla)
 };
 
 export function getXpForNextLevel(level: number): number {
-  if (level >= MAX_COMMANDER_LEVEL) return XP_THRESHOLDS[11];
+  if (level >= MAX_COMMANDER_LEVEL) return XP_THRESHOLDS[MAX_COMMANDER_LEVEL - 1];
   return XP_THRESHOLDS[level] ?? 750;
 }
 
@@ -442,6 +456,7 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     bulletResist: 0.7,
     meleeResist: 0.25,
     isStationary: true,
+    placeable: true,
     description: 'Desbloquea Nv.10: Torreta trípode rotativa que barre la carretera expulsando casquillos.',
     quotes: ['[SISTEMA CENTINELA ACTIVO]', '[RÁFAGA AUTOMÁTICA]'],
     hotkey: '0',
@@ -493,7 +508,64 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     quotes: ['¡Imparable!', '¡Blindaje máximo!', '¡Aplastando cráneos!'],
     hotkey: '=',
   },
+  tesla: {
+    id: 'tesla',
+    name: 'Bobina Tesla',
+    roleTitle: 'Torre de Arco Eléctrico',
+    unlockLevel: 13,
+    cost: 30,
+    prepTime: 14.0,
+    baseHp: 96,
+    baseDamage: 15,
+    fortune: 30,
+    speed: 0,
+    attackRange: 175,
+    attackCooldown: 1.1,
+    isRanged: true,
+    pellets: 1,
+    magSize: 6,
+    reloadTime: 2.4,
+    knockback: 3,
+    bulletResist: 0.6,
+    meleeResist: 0.3,
+    armorPiercing: 0.6,
+    isStationary: true,
+    placeable: true,
+    chainTargets: 4,
+    chainRange: 78,
+    chainFalloff: 0.75,
+    stunTime: 0.35,
+    description:
+      'Desbloquea Nv.13: Bobina eléctrica que instalas donde quieras. Su rayo salta entre 4 zombis, perfora blindaje y los aturde.',
+    quotes: ['[ALTO VOLTAJE]', '[ARCO ELÉCTRICO CARGADO]'],
+    hotkey: 'T',
+  },
 };
+
+/** Damage a unit deals per attack at a given upgrade level (shotgun pellets count together). */
+export function getUnitDamagePerAttack(type: SurvivorType, level = 1): number {
+  const cfg = SURVIVOR_CONFIGS[type];
+  return Math.round(cfg.baseDamage * (cfg.pellets ?? 1) * (1 + (Math.max(1, level) - 1) * 0.14));
+}
+
+/**
+ * Display order everywhere (map squad panel + battle bar): melee first, then ranged,
+ * each group from highest to lowest damage per attack at the player's current levels.
+ */
+export function sortUnitsByRoleAndDamage(
+  units: SurvivorType[],
+  unitLevels: Partial<Record<SurvivorType, number>> = {}
+): SurvivorType[] {
+  return [...units].sort((a, b) => {
+    const ra = SURVIVOR_CONFIGS[a].isRanged ? 1 : 0;
+    const rb = SURVIVOR_CONFIGS[b].isRanged ? 1 : 0;
+    if (ra !== rb) return ra - rb;
+    const da = getUnitDamagePerAttack(a, unitLevels[a]);
+    const db = getUnitDamagePerAttack(b, unitLevels[b]);
+    if (db !== da) return db - da;
+    return SURVIVOR_ORDER.indexOf(a) - SURVIVOR_ORDER.indexOf(b);
+  });
+}
 
 export function isUnitUnlocked(type: SurvivorType, commanderLevel: number): boolean {
   return commanderLevel >= SURVIVOR_CONFIGS[type].unlockLevel;
