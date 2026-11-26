@@ -1,4 +1,4 @@
-import { SurvivorType, ZombieType } from '../types/game';
+import { HERO_OUTFITS, HeroOutfitType, SurvivorType, ZombieType } from '../types/game';
 
 export const INK = '#121014';
 export const ATLAS_SCALE = 4; // 4x supersampled vector baking for razor-sharp Retina sprites
@@ -714,5 +714,152 @@ export function getHeroWeaponArt(weapon: string): { img: HTMLCanvasElement; flas
   }
   const entry = { img, flash: makeWhiteFlashClone(img) };
   heroWeaponCache.set(weapon, entry);
+  return entry;
+}
+
+
+// =============================================================================
+// HERO OUTFITS — one atlas per armor / clothing set (head + torso + palette)
+// =============================================================================
+export function getHeroAtlas(outfit: HeroOutfitType = 'commander'): UnitPartAtlas {
+  const key = `hero:${outfit}`;
+  const cached = atlasCache.get(key);
+  if (cached) return cached;
+  const look = (HERO_OUTFITS[outfit] ?? HERO_OUTFITS.commander).look;
+  const [head, hctx] = makeCanvas(24, 24);
+  const [torso, tctx] = makeCanvas(24, 24);
+  const [weapon, wctx] = makeCanvas(34, 20);
+  const skin = '#e9b48a';
+
+  // ---------------- Head + headgear
+  if (look.headgear === 'gasmask') {
+    inkedRoundRect(hctx, 5.6, 4.2, 12.8, 7, 3, look.jacket, look.jacketHi, look.jacketDark); // hazmat hood
+    inkedRoundRect(hctx, 6.4, 7.2, 11.6, 11, 4.4, '#27272a', '#52525b', '#09090b');
+    inkedCircle(hctx, 10.6, 11.6, 1.9, look.accent, '#ecfccb', 0.9);
+    inkedCircle(hctx, 15, 11.6, 1.9, look.accent, '#ecfccb', 0.9);
+    inkedCircle(hctx, 13.6, 16.6, 2.4, '#a1a1aa', '#e4e4e7', 1);
+  } else {
+    inkedRoundRect(hctx, 6.6, 7.4, 11.2, 10.8, 4.4, skin, '#fed7aa', '#c88b61');
+    drawHumanEyes(hctx, 10.2, 12.2, true, look.headgear === 'hood' ? undefined : '#0f172a');
+    switch (look.headgear) {
+      case 'bandana':
+        inkedRoundRect(hctx, 5.6, 4.6, 12.6, 4.6, 2, look.headColor, '#f87171', '#7f1d1d');
+        inkedRoundRect(hctx, 3.2, 6.4, 3.4, 5.6, 1.2, look.headColor, undefined, undefined, 1);
+        hctx.fillStyle = 'rgba(80, 55, 35, 0.35)';
+        hctx.fillRect(9, 15, 8, 2.4);
+        break;
+      case 'cap':
+        inkedRoundRect(hctx, 5.8, 4.2, 12.2, 5.4, 2.6, look.headColor, look.jacketHi, look.jacketDark);
+        inkedRoundRect(hctx, 13.4, 7.8, 6.6, 2, 1, look.jacketDark);
+        break;
+      case 'hood':
+        inkedRoundRect(hctx, 5.2, 3.6, 13.4, 8.4, 3.6, look.headColor, look.jacketHi, look.jacketDark);
+        inkedRoundRect(hctx, 8.4, 13.2, 9.8, 4.8, 1.6, look.headColor, undefined, undefined, 1.1);
+        hctx.fillStyle = look.accent;
+        hctx.fillRect(5.6, 9.2, 12.4, 1.2);
+        break;
+      case 'helmet':
+        inkedRoundRect(hctx, 5, 3, 14, 7.6, 4, look.headColor, look.jacketHi, look.jacketDark);
+        hctx.fillStyle = look.accent;
+        hctx.fillRect(12.4, 8.4, 6, 1.3);
+        break;
+      case 'beret':
+        inkedRoundRect(hctx, 5.4, 3.6, 12, 4.8, 2.4, look.headColor, '#b91c1c', '#450a0a');
+        inkedCircle(hctx, 8, 5.8, 1.3, look.accent, '#fef9c3', 0.8);
+        hctx.fillStyle = 'rgba(80, 55, 35, 0.3)';
+        hctx.fillRect(9, 15, 8, 2.4);
+        break;
+    }
+  }
+
+  // ---------------- Torso + outfit details
+  inkedRoundRect(tctx, 5.6, 4.2, 12.8, 14, 3.4, look.jacket, look.jacketHi, look.jacketDark);
+  switch (outfit) {
+    case 'commander':
+      tctx.strokeStyle = '#a16207';
+      tctx.lineWidth = 2;
+      tctx.beginPath();
+      tctx.moveTo(7, 5.5);
+      tctx.lineTo(17, 16.5);
+      tctx.stroke();
+      inkedCircle(tctx, 14.6, 8, 1.8, look.accent, '#fef9c3', 0.9);
+      break;
+    case 'scout':
+      tctx.strokeStyle = '#78350f';
+      tctx.lineWidth = 1.6;
+      tctx.beginPath();
+      tctx.moveTo(16.5, 5);
+      tctx.lineTo(7.5, 16.5);
+      tctx.stroke();
+      inkedRoundRect(tctx, 7, 12.5, 4.4, 3.6, 1, '#a16207', '#ca8a04');
+      break;
+    case 'tactical':
+      inkedRoundRect(tctx, 6.6, 5.6, 10.8, 9.6, 2.2, '#1e293b', '#475569', '#09090b');
+      inkedRoundRect(tctx, 7.4, 12.4, 3, 3, 0.8, '#334155');
+      inkedRoundRect(tctx, 11.2, 12.4, 3, 3, 0.8, '#334155');
+      inkedRoundRect(tctx, 15, 12.4, 2.2, 3, 0.8, '#334155');
+      tctx.fillStyle = look.accent;
+      tctx.fillRect(8, 7, 3, 1.4);
+      break;
+    case 'ninja':
+      tctx.strokeStyle = look.accent;
+      tctx.lineWidth = 2.2;
+      tctx.beginPath();
+      tctx.moveTo(6.5, 12);
+      tctx.lineTo(17.5, 12.8);
+      tctx.stroke();
+      inkedRoundRect(tctx, 4, 11.4, 3.4, 4.6, 1, look.accent, undefined, undefined, 0.9);
+      break;
+    case 'hazmat':
+      inkedCircle(tctx, 12, 10.5, 3.2, '#18181b', undefined, 1);
+      tctx.fillStyle = look.accent;
+      for (let k = 0; k < 3; k++) {
+        const a = (k * Math.PI * 2) / 3 - Math.PI / 2;
+        tctx.beginPath();
+        tctx.arc(12 + Math.cos(a) * 1.6, 10.5 + Math.sin(a) * 1.6, 1, 0, Math.PI * 2);
+        tctx.fill();
+      }
+      break;
+    case 'heavy':
+      inkedRoundRect(tctx, 3.6, 3.4, 6.6, 5.6, 2.4, '#a8a29e', '#e7e5e4', '#57534e');
+      inkedRoundRect(tctx, 13.8, 3.4, 6.6, 5.6, 2.4, '#a8a29e', '#e7e5e4', '#57534e');
+      inkedRoundRect(tctx, 7.4, 8, 9.2, 8.6, 2, '#78716c', '#d6d3d1', '#44403c');
+      tctx.fillStyle = look.accent;
+      tctx.fillRect(10.4, 10.6, 3.4, 1.4);
+      break;
+    case 'commando':
+      tctx.strokeStyle = '#a16207';
+      tctx.lineWidth = 1.8;
+      tctx.beginPath();
+      tctx.moveTo(7, 5.5);
+      tctx.lineTo(17, 16.5);
+      tctx.moveTo(17, 5.5);
+      tctx.lineTo(7, 16.5);
+      tctx.stroke();
+      tctx.fillStyle = '#facc15';
+      for (let k = 0; k < 4; k++) {
+        tctx.fillRect(8.6 + k * 2.2, 7.6 + k * 2.2, 1, 1.6);
+      }
+      break;
+  }
+
+  inkedRoundRect(wctx, 10, 8.4, 20, 2.8, 1, '#cbd5e1', '#ffffff', '#64748b');
+
+  const bulky = outfit === 'heavy';
+  const entry: UnitPartAtlas = {
+    head,
+    headFlash: makeWhiteFlashClone(head),
+    torso,
+    torsoFlash: makeWhiteFlashClone(torso),
+    weapon,
+    weaponFlash: makeWhiteFlashClone(weapon),
+    skinColor: skin,
+    shirtColor: look.jacket,
+    pantColor: look.pants,
+    bootColor: look.boots,
+    scale: bulky ? 1.52 : 1.45,
+    widthFactor: bulky ? 1.5 : outfit === 'scout' || outfit === 'ninja' ? 1.2 : 1.3,
+  };
+  atlasCache.set(key, entry);
   return entry;
 }

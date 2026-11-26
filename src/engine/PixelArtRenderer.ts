@@ -1,5 +1,5 @@
-import { BiomeType, HERO_WEAPONS, HeroWeaponType, SurvivorType, TacticalItemType, ZombieType } from '../types/game';
-import { getHeroWeaponArt, getUnitAtlas, INK, inkedCircle, inkedRoundRect } from './hdAtlas';
+import { BiomeType, HERO_WEAPONS, HeroOutfitType, HeroWeaponType, SurvivorType, TacticalItemType, ZombieType } from '../types/game';
+import { getHeroAtlas, getHeroWeaponArt, getUnitAtlas, INK, inkedCircle, inkedRoundRect } from './hdAtlas';
 import {
   drawSoftShadow,
   LOGICAL_HEIGHT,
@@ -37,6 +37,8 @@ export interface RenderUnit {
   isHero?: boolean;
   /** Hero: weapon currently held (art + pose are swapped live). */
   heroWeapon?: HeroWeaponType;
+  /** Hero: armor / clothing set (look). */
+  heroOutfit?: HeroOutfitType;
   id: string;
   team: 'survivor' | 'zombie';
   subType: SurvivorType | ZombieType;
@@ -992,7 +994,7 @@ export function renderUnitSprite(
   const z = unit.z;
   const isSurvivor = unit.team === 'survivor';
   const flash = unit.whiteFlashTimer > 0;
-  const atlas = getUnitAtlas(unit.subType);
+  const atlas = unit.isHero ? getHeroAtlas(unit.heroOutfit) : getUnitAtlas(unit.subType);
 
   // Player Direct Control Ring
   if (unit.isPlayerControlled && unit.state !== 'corpse' && unit.state !== 'dying') {

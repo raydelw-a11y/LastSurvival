@@ -158,7 +158,88 @@ export interface PlayerProgress {
   lastPlayedAt?: number;
   /** Best stars per mission in ULTRA mode (much stronger enemies). */
   ultraStars?: Record<number, number>;
+  /** Hero outfits the player owns (armor / clothing). */
+  heroOutfits?: HeroOutfitType[];
+  /** Hero outfit currently worn. */
+  heroOutfit?: HeroOutfitType;
 }
+
+// ---- HERO OUTFITS: armor & clothing with different attributes -------------------
+export type HeroOutfitType = 'commander' | 'scout' | 'tactical' | 'ninja' | 'hazmat' | 'heavy' | 'commando';
+
+export interface HeroOutfitConfig {
+  id: HeroOutfitType;
+  name: string;
+  description: string;
+  cost: number;
+  hpMult: number;
+  speedMult: number;
+  /** Damage the hero receives (0.7 = takes 30% less). */
+  damageTakenMult: number;
+  rangedDamageMult: number;
+  meleeDamageMult: number;
+  /** Reload time multiplier (0.8 = 20% faster). */
+  reloadMult: number;
+  acidImmune?: boolean;
+  /** Look: jacket / trousers / headgear. */
+  look: {
+    jacket: string;
+    jacketHi: string;
+    jacketDark: string;
+    pants: string;
+    boots: string;
+    headgear: 'bandana' | 'cap' | 'hood' | 'gasmask' | 'helmet' | 'beret';
+    headColor: string;
+    accent: string;
+  };
+}
+
+export const HERO_OUTFITS: Record<HeroOutfitType, HeroOutfitConfig> = {
+  commander: {
+    id: 'commander', name: 'Comandante', cost: 0,
+    description: 'Chaqueta táctica y pañuelo rojo. Equilibrado en todo.',
+    hpMult: 1, speedMult: 1, damageTakenMult: 1, rangedDamageMult: 1, meleeDamageMult: 1, reloadMult: 1,
+    look: { jacket: '#111827', jacketHi: '#374151', jacketDark: '#030712', pants: '#334155', boots: '#1c1917', headgear: 'bandana', headColor: '#dc2626', accent: '#facc15' },
+  },
+  scout: {
+    id: 'scout', name: 'Explorador', cost: 350,
+    description: 'Ropa ligera de campo: corre mucho más y recarga rápido, pero aguanta menos.',
+    hpMult: 0.85, speedMult: 1.3, damageTakenMult: 1.05, rangedDamageMult: 1, meleeDamageMult: 1, reloadMult: 0.75,
+    look: { jacket: '#4d7c0f', jacketHi: '#84cc16', jacketDark: '#1a2e05', pants: '#78716c', boots: '#44403c', headgear: 'cap', headColor: '#65a30d', accent: '#fef08a' },
+  },
+  tactical: {
+    id: 'tactical', name: 'Chaleco Táctico', cost: 500,
+    description: 'Chaleco antibalas con placas: más vida y recibe menos daño sin perder agilidad.',
+    hpMult: 1.25, speedMult: 0.97, damageTakenMult: 0.82, rangedDamageMult: 1.05, meleeDamageMult: 1, reloadMult: 1,
+    look: { jacket: '#1e3a8a', jacketHi: '#3b82f6', jacketDark: '#0f172a', pants: '#1e293b', boots: '#0f172a', headgear: 'helmet', headColor: '#334155', accent: '#38bdf8' },
+  },
+  ninja: {
+    id: 'ninja', name: 'Ninja', cost: 700,
+    description: 'Traje sigiloso: golpes cuerpo a cuerpo devastadores y muy veloz. Ideal con la espada.',
+    hpMult: 0.95, speedMult: 1.2, damageTakenMult: 1.05, rangedDamageMult: 0.9, meleeDamageMult: 1.7, reloadMult: 0.95,
+    look: { jacket: '#18181b', jacketHi: '#3f3f46', jacketDark: '#000000', pants: '#18181b', boots: '#09090b', headgear: 'hood', headColor: '#18181b', accent: '#ef4444' },
+  },
+  hazmat: {
+    id: 'hazmat', name: 'Traje Antiácido', cost: 650,
+    description: 'Traje de materiales peligrosos con máscara: inmune al ácido de los escupidores.',
+    hpMult: 1.1, speedMult: 0.92, damageTakenMult: 0.92, rangedDamageMult: 1, meleeDamageMult: 1, reloadMult: 1.05, acidImmune: true,
+    look: { jacket: '#ca8a04', jacketHi: '#facc15', jacketDark: '#713f12', pants: '#a16207', boots: '#1c1917', headgear: 'gasmask', headColor: '#27272a', accent: '#84cc16' },
+  },
+  heavy: {
+    id: 'heavy', name: 'Armadura Pesada', cost: 1000,
+    description: 'Blindaje de asalto completo: muchísima vida y recibe mucho menos daño, pero es lento.',
+    hpMult: 1.7, speedMult: 0.75, damageTakenMult: 0.62, rangedDamageMult: 1, meleeDamageMult: 1.15, reloadMult: 1.15,
+    look: { jacket: '#57534e', jacketHi: '#a8a29e', jacketDark: '#292524', pants: '#44403c', boots: '#1c1917', headgear: 'helmet', headColor: '#57534e', accent: '#f97316' },
+  },
+  commando: {
+    id: 'commando', name: 'Élite Comando', cost: 1300,
+    description: 'Equipo de fuerzas especiales: más daño con armas de fuego y recarga veloz.',
+    hpMult: 1.1, speedMult: 1.05, damageTakenMult: 0.9, rangedDamageMult: 1.3, meleeDamageMult: 1.05, reloadMult: 0.8,
+    look: { jacket: '#3f6212', jacketHi: '#65a30d', jacketDark: '#1a2e05', pants: '#365314', boots: '#1c1917', headgear: 'beret', headColor: '#7f1d1d', accent: '#facc15' },
+  },
+};
+
+export const HERO_OUTFIT_ORDER: HeroOutfitType[] = ['commander', 'scout', 'tactical', 'ninja', 'hazmat', 'heavy', 'commando'];
 
 // ---- ULTRA mode: every mission can be replayed with much stronger enemies ----------
 export const ULTRA = {

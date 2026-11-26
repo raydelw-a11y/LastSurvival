@@ -16,6 +16,10 @@ import {
   SURVIVOR_ORDER,
   SurvivorType,
   sortUnitsByRoleAndDamage,
+  HERO_OUTFITS,
+  HERO_OUTFIT_ORDER,
+  HeroOutfitConfig,
+  HeroOutfitType,
   ZOMBIE_CONFIGS,
   ZombieType,
 } from '../types/game';
@@ -41,6 +45,7 @@ import {
 import {
   renderArmoredBus,
   renderCharacterPreview,
+  renderUnitSprite,
   syncCanvasHiDPI,
 } from '../engine/PixelArtRenderer';
 import { soundFX } from '../engine/SoundFX';
@@ -55,6 +60,8 @@ interface RoadMapHubProps {
   onUpgradeSurvivor: (type: SurvivorType, cost: number) => void;
   onUpgradeBusStat: (kind: 'hp' | 'bill' | 'bumper' | 'armor', cost: number) => void;
   onUpgradeSurvivorMax: (type: SurvivorType) => void;
+  onBuyHeroOutfit: (id: HeroOutfitType) => void;
+  onEquipHeroOutfit: (id: HeroOutfitType) => void;
   onUpgradeBusStatMax: (kind: 'hp' | 'bill') => void;
   onToggleDeckUnit: (type: SurvivorType) => void;
   onResetProgress: () => void;
@@ -120,6 +127,8 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
   onUpgradeSurvivor,
   onUpgradeBusStat,
   onUpgradeSurvivorMax,
+  onBuyHeroOutfit,
+  onEquipHeroOutfit,
   onUpgradeBusStatMax,
   onToggleDeckUnit,
   onResetProgress,
@@ -129,7 +138,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
   onOpenCloudSync,
   hotkeysDisabled = false,
 }) => {
-  const [modalTab, setModalTab] = useState<'none' | 'deck' | 'garage' | 'zombiepedia'>('none');
+  const [modalTab, setModalTab] = useState<'none' | 'deck' | 'garage' | 'zombiepedia' | 'hero'>('none');
   const [zoomedOut, setZoomedOut] = useState<boolean>(false);
   const [weldBurstKey, setWeldBurstKey] = useState<number>(0);
   const [confirmReset, setConfirmReset] = useState<boolean>(false);
@@ -1172,6 +1181,15 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
         </button>
 
         <button
+          onClick={() => setModalTab('hero')}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#3b3829]/95 hover:bg-[#4f4b37] border-2 border-yellow-500 text-xs font-extrabold text-white shadow-lg cursor-pointer"
+          title="Armaduras y ropa para tu héroe"
+        >
+          <Shield className="w-4 h-4 text-amber-300" />
+          <span>Héroe</span>
+        </button>
+
+        <button
           onClick={() => setModalTab('zombiepedia')}
           className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#3b3829]/95 hover:bg-[#4f4b37] border-2 border-[#787459] text-xs font-extrabold text-white shadow-lg cursor-pointer"
         >
@@ -1266,6 +1284,8 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                     ? `ARSENAL Y ESCUADRÓN — NV. COMANDANTE ${commanderLvl}/${MAX_COMMANDER_LEVEL}`
                     : modalTab === 'garage'
                     ? 'TALLER DE BILL — DIORAMA DE BLINDAJE DEL AUTOBÚS'
+                    : modalTab === 'hero'
+                    ? 'HÉROE — ARMADURAS Y ROPA'
                     : 'ZOMBIEPEDIA — INTELIGENCIA TÁCTICA'}
                 </h3>
                 {modalTab === 'deck' && (
@@ -1592,6 +1612,66 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                   </>
                 )}
 
+                {modalTab === 'hero' &&
+                  HERO_OUTFIT_ORDER.map((id) => {
+                    const o = HERO_OUTFITS[id];
+                    const owned = (progress.heroOutfits || ['commander']).includes(id);
+                    const equipped = (progress.heroOutfit ?? 'commander') === id;
+                    const canBuy = !owned && progress.coins >= o.cost;
+                    return (
+                      <div
+                        key={id}
+                        className={`rounded-lg p-2 flex flex-col gap-1.5 border ${
+                          equipped
+                            ? 'bg-amber-950/60 border-yellow-400 shadow-lg'
+                            : 'bg-[#1a1913] border-[#5e5a45]'
+                        }`}
+                      >
+                        <div className="flex items-start gap-2">
+                          <HeroOutfitPreview outfit={id} />
+                          <div className="min-w-0 flex-1">
+                            <div className="font-extrabold text-xs text-white leading-tight">{o.name}</div>
+                            <p className="text-[9px] text-zinc-400 leading-snug mt-0.5">{o.description}</p>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {outfitStatChips(o).map((c) => (
+                            <span
+                              key={c.label}
+                              className={`px-1 py-0.5 rounded text-[8.5px] font-bold border ${
+                                c.good
+                                  ? 'bg-emerald-950/70 border-emerald-600 text-emerald-200'
+                                  : 'bg-red-950/70 border-red-700 text-red-200'
+                              }`}
+                            >
+                              {c.label}
+                            </span>
+                          ))}
+                        </div>
+                        {equipped ? (
+                          <div className="py-1 rounded bg-yellow-500/20 border border-yellow-400 text-center text-[10px] font-extrabold text-yellow-200 uppercase">
+                            ✓ Equipado
+                          </div>
+                        ) : owned ? (
+                          <button
+                            onClick={() => onEquipHeroOutfit(id)}
+                            className="py-1 rounded bg-sky-700 hover:bg-sky-600 border border-sky-400 text-[10px] font-extrabold text-white uppercase cursor-pointer"
+                          >
+                            Equipar
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => onBuyHeroOutfit(id)}
+                            disabled={!canBuy}
+                            className="py-1 rounded bg-yellow-500 hover:bg-yellow-400 disabled:bg-zinc-800 disabled:text-zinc-500 text-zinc-950 text-[10px] font-extrabold uppercase cursor-pointer"
+                          >
+                            Comprar y equipar ({o.cost} 🪙)
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+
                 {modalTab === 'zombiepedia' &&
                   (Object.keys(ZOMBIE_CONFIGS) as ZombieType[]).map((zType) => {
                     const z = ZOMBIE_CONFIGS[zType];
@@ -1647,6 +1727,78 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
 };
 
 // Crisp 2D HD Character Preview Box for Arsenal & Zombiepedia
+/** Readable +/- chips for an outfit's attributes. */
+function outfitStatChips(o: HeroOutfitConfig): { label: string; good: boolean }[] {
+  const pct = (m: number) => `${m > 1 ? '+' : ''}${Math.round((m - 1) * 100)}%`;
+  const chips: { label: string; good: boolean }[] = [];
+  if (o.hpMult !== 1) chips.push({ label: `❤️ Vida ${pct(o.hpMult)}`, good: o.hpMult > 1 });
+  if (o.damageTakenMult !== 1)
+    chips.push({ label: `🛡️ Daño recibido ${pct(o.damageTakenMult)}`, good: o.damageTakenMult < 1 });
+  if (o.speedMult !== 1) chips.push({ label: `👟 Velocidad ${pct(o.speedMult)}`, good: o.speedMult > 1 });
+  if (o.rangedDamageMult !== 1)
+    chips.push({ label: `🔫 Daño armas ${pct(o.rangedDamageMult)}`, good: o.rangedDamageMult > 1 });
+  if (o.meleeDamageMult !== 1)
+    chips.push({ label: `🗡️ Daño melee ${pct(o.meleeDamageMult)}`, good: o.meleeDamageMult > 1 });
+  if (o.reloadMult !== 1)
+    chips.push({
+      label: `🔄 Recarga ${o.reloadMult < 1 ? 'más rápida' : 'más lenta'} ${pct(1 / o.reloadMult)}`,
+      good: o.reloadMult < 1,
+    });
+  if (o.acidImmune) chips.push({ label: '☣️ Inmune al ácido', good: true });
+  if (chips.length === 0) chips.push({ label: '⚖️ Equilibrado', good: true });
+  return chips;
+}
+
+/** Hero portrait wearing a given outfit. */
+const HeroOutfitPreview: React.FC<{ outfit: HeroOutfitType }> = ({ outfit }) => {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    if (!ref.current) return;
+    const ctx = syncCanvasHiDPI(ref.current, 52, 64, 3);
+    if (!ctx) return;
+    ctx.clearRect(0, 0, 52, 64);
+    ctx.save();
+    ctx.translate(22, 60);
+    renderUnitSprite(
+      ctx,
+      {
+        id: `prev_${outfit}`,
+        team: 'survivor',
+        subType: 'hero',
+        level: 1,
+        x: 0,
+        y: 0,
+        z: 0,
+        hp: 1,
+        maxHp: 1,
+        state: 'march',
+        animTime: 0.2,
+        attackProgress: 0,
+        reloadProgress: 0,
+        whiteFlashTimer: 0,
+        isLucky: false,
+        isPlayerControlled: false,
+        facing: 1,
+        isGhost: true,
+        isHero: true,
+        heroOutfit: outfit,
+        heroWeapon:
+          outfit === 'ninja' ? 'sword' : outfit === 'heavy' ? 'shotgun' : outfit === 'commando' ? 'm16' : 'pistol',
+      },
+      0.4
+    );
+    ctx.restore();
+  }, [outfit]);
+  return (
+    <canvas
+      ref={ref}
+      width={52}
+      height={64}
+      className="w-[52px] h-[64px] shrink-0 rounded bg-gradient-to-b from-zinc-800 to-zinc-950 border border-zinc-700 hd-canvas"
+    />
+  );
+};
+
 const SpritePreviewBox: React.FC<{
   subType: SurvivorType | ZombieType;
   isZombie: boolean;

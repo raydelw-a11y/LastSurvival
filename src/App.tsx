@@ -5,6 +5,8 @@ import {
   isUnitUnlocked,
   MAX_COMMANDER_LEVEL,
   MAX_EQUIPPED_DECK,
+  HERO_OUTFITS,
+  HeroOutfitType,
   MISSION_NODES,
   MissionNode,
   PlayerProgress,
@@ -20,7 +22,7 @@ import { ContinuePrompt } from './components/ContinuePrompt';
 import { useCloudSync } from './sync/useCloudSync';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '10:29 PM - 11/25/2026';
+const FALLBACK_TIMESTAMP = '10:38 PM - 11/25/2026';
 export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 const CURRENT_BUILD_ID = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : '';
@@ -64,6 +66,8 @@ const INITIAL_PROGRESS: PlayerProgress = {
   },
   missionStars: {},
   ultraStars: {},
+  heroOutfits: ['commander'],
+  heroOutfit: 'commander',
   unlockedMissions: [1],
   discoveredCaches: [],
 };
@@ -112,6 +116,17 @@ function sanitizeProgress(rawObj: Partial<PlayerProgress>): PlayerProgress {
       ...INITIAL_PROGRESS.unitLevels,
       ...(rawObj.unitLevels || {}),
     },
+    heroOutfits: Array.from(
+      new Set<HeroOutfitType>([
+        'commander',
+        ...(Array.isArray(rawObj.heroOutfits) ? rawObj.heroOutfits : []).filter((o) => o in HERO_OUTFITS),
+      ])
+    ),
+    heroOutfit:
+      rawObj.heroOutfit && rawObj.heroOutfit in HERO_OUTFITS &&
+      (rawObj.heroOutfit === 'commander' || (rawObj.heroOutfits || []).includes(rawObj.heroOutfit))
+        ? rawObj.heroOutfit
+        : 'commander',
     ultraStars:
       rawObj.ultraStars && typeof rawObj.ultraStars === 'object' && !Array.isArray(rawObj.ultraStars)
         ? rawObj.ultraStars
@@ -503,6 +518,26 @@ export function App() {
     });
   }, []);
 
+  // HERO OUTFITS: buy once with coins, then equip any owned outfit
+  const handleBuyHeroOutfit = useCallback((id: HeroOutfitType) => {
+    setProgress((prev) => {
+      const cfg = HERO_OUTFITS[id];
+      const owned = prev.heroOutfits || ['commander'];
+      if (owned.includes(id) || prev.coins < cfg.cost) return prev;
+      soundFX.playCouragePickup();
+      return { ...prev, coins: prev.coins - cfg.cost, heroOutfits: [...owned, id], heroOutfit: id };
+    });
+  }, []);
+
+  const handleEquipHeroOutfit = useCallback((id: HeroOutfitType) => {
+    setProgress((prev) => {
+      const owned = prev.heroOutfits || ['commander'];
+      if (!owned.includes(id) || prev.heroOutfit === id) return prev;
+      soundFX.playUnitSpawn();
+      return { ...prev, heroOutfit: id };
+    });
+  }, []);
+
   const handleUpgradeBusStat = useCallback(
     (kind: 'hp' | 'bill' | 'bumper' | 'armor', cost: number) => {
       setProgress((prev) => {
@@ -640,6 +675,8 @@ export function App() {
           onLaunchMission={handleLaunchMission}
           onUpgradeSurvivor={handleUpgradeSurvivor}
           onUpgradeBusStat={handleUpgradeBusStat}
+          onBuyHeroOutfit={handleBuyHeroOutfit}
+          onEquipHeroOutfit={handleEquipHeroOutfit}
           onUpgradeSurvivorMax={handleUpgradeSurvivorMax}
           onUpgradeBusStatMax={handleUpgradeBusStatMax}
           onToggleDeckUnit={handleToggleDeckUnit}

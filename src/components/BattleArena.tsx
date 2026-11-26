@@ -24,6 +24,7 @@ import {
   HeroWeaponCategory,
   HeroWeaponType,
   heroDamageMult,
+  HERO_OUTFITS,
 } from '../types/game';
 import {
   LOGICAL_HEIGHT,
@@ -784,13 +785,19 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     [mission.id]
   );
 
+  const heroOutfitCfg = () =>
+    HERO_OUTFITS[liveBridgeRef.current.progress.heroOutfit ?? 'commander'] ?? HERO_OUTFITS.commander;
+
   /** Spawns the player's manual hero next to the bus door (free, one at a time). */
   const spawnHero = useCallback(() => {
     const sim = simRef.current;
     if (sim.units.some((u) => u.isHero && u.hp > 0 && u.state !== 'dying')) return;
     const cfg = SURVIVOR_CONFIGS.hero;
+    const outfit = heroOutfitCfg();
     const lvlMult = 1 + (Math.max(1, sim.commanderLevel) - 1) * 0.08;
-    const hp = Math.round(cfg.baseHp * lvlMult * (sim.commanderLevel >= MASTERY_LEVEL ? 1.1 : 1));
+    const hp = Math.round(
+      cfg.baseHp * lvlMult * outfit.hpMult * (sim.commanderLevel >= MASTERY_LEVEL ? 1.1 : 1)
+    );
     const hero: InternalUnit = {
       id: `hero_${Date.now()}`,
       team: 'survivor',
@@ -806,7 +813,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       ghostHp: hp,
       maxHp: hp,
       damage: 0,
-      speed: cfg.speed,
+      speed: cfg.speed * outfit.speedMult,
       attackRange: 0,
       attackCooldown: 1,
       attackTimer: 0,
@@ -818,7 +825,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       reloadTimer: 0,
       knockback: 0,
       bulletResist: cfg.bulletResist ?? 0,
-      meleeResist: cfg.meleeResist ?? 0,
+      // Armor: damage taken from zombie hits scales with the outfit
+      meleeResist: Math.min(0.9, 1 - (1 - (cfg.meleeResist ?? 0)) * outfit.damageTakenMult),
       armorPiercing: 0,
       firstHitCritMult: 1,
       isStationary: false,
@@ -841,6 +849,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       facing: 1,
       isHero: true,
       heroWeapon: sim.heroWeapon,
+      heroOutfit: outfit.id,
       quoteText: cfg.quotes[Math.floor(Math.random() * cfg.quotes.length)],
       quoteTimer: 1.8,
     };
@@ -874,7 +883,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     const sim = simRef.current;
     const hw = HERO_WEAPONS[sim.heroWeapon];
     if (hw.magSize <= 0 || sim.heroReload > 0 || sim.heroAmmo[hw.id] >= hw.magSize) return false;
-    sim.heroReload = hw.reloadTime;
+    sim.heroReload = hw.reloadTime * heroOutfitCfg().reloadMult;
     sim.heroReloadStage = 0;
     return true;
   }, []);
@@ -1106,7 +1115,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             u.corpseTimer = -999;
             addFloatingText('CALCINADO', u.x, u.y, 15, '#f97316', true);
           } else {
-            const appliedDmg = u.team === 'zombie' ? zDmg : survivorDamage;
+            const appliedDmg =
+              u.team === 'zombie'
+                ? zDmg
+                : u.isHero
+                ? Math.round(survivorDamage * heroOutfitCfg().damageTakenMult)
+                : survivorDamage;
             if (appliedDmg > 0) {
               u.hp -= appliedDmg;
               u.whiteFlashTimer = 0.12;
@@ -1688,7 +1702,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     const heroAttack = (u: InternalUnit) => {
       const sim = simRef.current;
       const w = HERO_WEAPONS[sim.heroWeapon];
-      const base = w.damage * heroDamageMult(sim.commanderLevel);
+      const outfit = heroOutfitCfg();
+      const base =
+        w.damage *
+        heroDamageMult(sim.commanderLevel) *
+        (w.category === 'melee' ? outfit.meleeDamageMult : outfit.rangedDamageMult);
       if (w.magSize > 0 && sim.heroAmmo[w.id] <= 0) {
         // Empty: dry-fire click, the player has to tap the right side to reload
         sim.heroCd = 0.3;
@@ -2174,12 +2192,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   t.hp > 0 &&
                   t.state !== 'corpse' &&
                   t.state !== 'dying' &&
-                  Math.hypot(t.x - b.tx, (t.y - b.ty) * 1.4) <= 20
+                  Math.hypot(t.x - b.tx, (t.y - b.ty) * 1.4) <= 20 &&
+                  !(t.isHero && heroOutfitCfg().acidImmune)
                 ) {
-                  t.hp -= b.dmg;
+                  const acidDmg = t.isHero ? Math.round(b.dmg * heroOutfitCfg().damageTakenMult) : b.dmg;
+                  t.hp -= acidDmg;
                   t.whiteFlashTimer = 0.12;
                   sim.rage = Math.min(100, sim.rage + b.dmg * 0.18);
-                  addFloatingText(`${b.dmg}`, t.x, t.y, 22, '#a3e635', true, 'ÁCIDO!');
+                  addFloatingText(`${acidDmg}`, t.x, t.y, 22, '#a3e635', true, 'ÁCIDO!');
                 }
               });
             }
@@ -2201,9 +2221,10 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 t.hp > 0 &&
                 t.state !== 'corpse' &&
                 t.state !== 'dying' &&
-                Math.hypot(t.x - ap.x, (t.y - ap.y) * 1.4) <= ap.radius
+                Math.hypot(t.x - ap.x, (t.y - ap.y) * 1.4) <= ap.radius &&
+                !(t.isHero && heroOutfitCfg().acidImmune)
               ) {
-                t.hp -= ap.dps * dt;
+                t.hp -= ap.dps * dt * (t.isHero ? heroOutfitCfg().damageTakenMult : 1);
                 if (Math.random() < 0.05) t.whiteFlashTimer = 0.06;
               }
             });
@@ -2622,6 +2643,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 }
               }
               const hw = HERO_WEAPONS[sim.heroWeapon];
+              const reloadDur = hw.reloadTime * heroOutfitCfg().reloadMult;
               if (sim.heroCd > 0) sim.heroCd -= dt;
               if (sim.heroDryFireCd > 0) sim.heroDryFireCd -= dt;
               let heldFire = keys.has('j') || keys.has('k');
@@ -2640,7 +2662,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 } else {
                   u.state = 'reload';
                   sim.heroReload -= dt;
-                  const rp = Math.max(0, Math.min(1, 1 - sim.heroReload / Math.max(0.01, hw.reloadTime)));
+                  const rp = Math.max(0, Math.min(1, 1 - sim.heroReload / Math.max(0.01, reloadDur)));
                   u.reloadProgress = rp;
                   // Staged reload foley + the empty magazine flying out onto the road
                   if (hw.reloadPerShell) {
@@ -2688,7 +2710,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                     if (hw.reloadPerShell) {
                       sim.heroAmmo[hw.id] = Math.min(hw.magSize, sim.heroAmmo[hw.id] + 1);
                       if (sim.heroAmmo[hw.id] < hw.magSize) {
-                        sim.heroReload = hw.reloadTime; // next shell
+                        sim.heroReload = reloadDur; // next shell
                       }
                     } else {
                       sim.heroAmmo[hw.id] = hw.magSize;
