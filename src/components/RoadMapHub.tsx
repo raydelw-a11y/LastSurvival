@@ -51,7 +51,7 @@ interface RoadMapHubProps {
   progress: PlayerProgress;
   selectedMissionId: number;
   onSelectMission: (id: number) => void;
-  onLaunchMission: (mission: MissionNode) => void;
+  onLaunchMission: (mission: MissionNode, ultra?: boolean) => void;
   onUpgradeSurvivor: (type: SurvivorType, cost: number) => void;
   onUpgradeBusStat: (kind: 'hp' | 'bill' | 'bumper' | 'armor', cost: number) => void;
   onUpgradeSurvivorMax: (type: SurvivorType) => void;
@@ -901,9 +901,16 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                       <Check className="w-2.5 h-2.5 stroke-[3]" />
                     </span>
                   )}
-                  {node.difficulty === 'NIGHTMARE' && (
+                  {(progress.ultraStars?.[node.id] || 0) > 0 ? (
+                    <span
+                      className="absolute -top-2.5 -right-2.5 px-0.5 rounded bg-fuchsia-700 border border-fuchsia-300 text-[8px] font-extrabold text-white shadow"
+                      title={`ULTRA superado: ${progress.ultraStars?.[node.id]}★`}
+                    >
+                      ☠️{progress.ultraStars?.[node.id]}
+                    </span>
+                  ) : node.difficulty === 'NIGHTMARE' ? (
                     <span className="absolute -top-2 -right-2 text-[10px] drop-shadow">💀</span>
-                  )}
+                  ) : null}
                 </div>
                 <span
                   className={`mt-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold whitespace-nowrap border ${
@@ -1208,13 +1215,42 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
           </span>
         </div>
 
-        <button
-          onClick={() => onLaunchMission(selectedMission)}
-          className="w-full py-2 rounded-lg bg-gradient-to-b from-yellow-400 to-amber-500 hover:from-yellow-300 hover:to-amber-400 border-2 border-[#181410] text-zinc-950 font-extrabold text-xs uppercase tracking-wider shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
-        >
-          <Play className="w-4 h-4 fill-zinc-950" />
-          <span>¡ASALTAR! (-{selectedMission.fuelCost} ⛽)</span>
-        </button>
+        <div className="flex gap-1.5">
+          <button
+            onClick={() => onLaunchMission(selectedMission)}
+            className="flex-1 py-2 rounded-lg bg-gradient-to-b from-yellow-400 to-amber-500 hover:from-yellow-300 hover:to-amber-400 border-2 border-[#181410] text-zinc-950 font-extrabold text-xs uppercase tracking-wider shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <Play className="w-4 h-4 fill-zinc-950" />
+            <span>¡ASALTAR! (-{selectedMission.fuelCost} ⛽)</span>
+          </button>
+          {(() => {
+            const ultraUnlocked = (progress.missionStars[selectedMission.id] || 0) > 0;
+            const ultraBest = progress.ultraStars?.[selectedMission.id] || 0;
+            return (
+              <button
+                onClick={() => ultraUnlocked && onLaunchMission(selectedMission, true)}
+                disabled={!ultraUnlocked}
+                title={
+                  ultraUnlocked
+                    ? `MODO ULTRA: enemigos mucho más fuertes, botín x2.5${ultraBest ? ` — mejor: ${ultraBest}★` : ''}`
+                    : 'Gana esta misión en modo normal para desbloquear el MODO ULTRA'
+                }
+                className={`px-2.5 py-2 rounded-lg border-2 text-[10px] font-extrabold uppercase tracking-wide shadow-md flex flex-col items-center justify-center leading-tight ${
+                  ultraUnlocked
+                    ? 'bg-gradient-to-b from-fuchsia-600 to-purple-800 hover:from-fuchsia-500 hover:to-purple-700 border-fuchsia-300 text-white cursor-pointer'
+                    : 'bg-zinc-900 border-zinc-700 text-zinc-500 cursor-not-allowed'
+                }`}
+              >
+                <span>{ultraUnlocked ? '☠️ ULTRA' : '🔒 ULTRA'}</span>
+                {ultraUnlocked && (
+                  <span className="text-[8px] text-fuchsia-200">
+                    {[1, 2, 3].map((i) => (i <= ultraBest ? '★' : '☆')).join('')}
+                  </span>
+                )}
+              </button>
+            );
+          })()}
+        </div>
       </div>
 
       {/* ===================================================================== */}

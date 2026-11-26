@@ -1,5 +1,5 @@
-import { BiomeType, SurvivorType, TacticalItemType, ZombieType } from '../types/game';
-import { getUnitAtlas, INK, inkedCircle, inkedRoundRect } from './hdAtlas';
+import { BiomeType, HERO_WEAPONS, HeroWeaponType, SurvivorType, TacticalItemType, ZombieType } from '../types/game';
+import { getHeroWeaponArt, getUnitAtlas, INK, inkedCircle, inkedRoundRect } from './hdAtlas';
 import {
   drawSoftShadow,
   LOGICAL_HEIGHT,
@@ -33,6 +33,10 @@ export interface RenderUnit {
   isGhost?: boolean;
   /** Watchtower: a shooter is inside (green lamp) or it is still empty (blinking red). */
   occupied?: boolean;
+  /** The player's manual hero (drawn with a "TÚ" marker). */
+  isHero?: boolean;
+  /** Hero: weapon currently held (art + pose are swapped live). */
+  heroWeapon?: HeroWeaponType;
   id: string;
   team: 'survivor' | 'zombie';
   subType: SurvivorType | ZombieType;
@@ -574,6 +578,68 @@ export function renderLightningArcs(ctx: CanvasRenderingContext2D, arcs: RenderL
   }
 }
 
+/** Hero projectiles in flight: arrows, bazooka rockets and thrown grenades. */
+export interface RenderHeroShot {
+  kind: 'arrow' | 'rocket' | 'grenade';
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+}
+
+export function renderHeroShots(ctx: CanvasRenderingContext2D, shots: RenderHeroShot[], time: number) {
+  for (let i = 0; i < shots.length; i++) {
+    const p = shots[i];
+    const dir = p.vx >= 0 ? 1 : -1;
+    const sy = p.y - p.z;
+    drawSoftShadow(ctx, p.x, p.y + 1, p.kind === 'rocket' ? 6 : 4, 1.4, 0.28);
+    ctx.save();
+    if (p.kind === 'arrow') {
+      ctx.strokeStyle = '#78350f';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(p.x - dir * 12, sy);
+      ctx.lineTo(p.x, sy);
+      ctx.stroke();
+      ctx.fillStyle = '#e2e8f0';
+      ctx.beginPath();
+      ctx.moveTo(p.x, sy - 2);
+      ctx.lineTo(p.x + dir * 4, sy);
+      ctx.lineTo(p.x, sy + 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#ef4444';
+      ctx.fillRect(p.x - dir * 13, sy - 1.6, dir * 3, 3.2);
+    } else if (p.kind === 'rocket') {
+      // Smoke trail + flame
+      for (let k = 1; k <= 4; k++) {
+        ctx.fillStyle = `rgba(120, 113, 108, ${0.4 - k * 0.08})`;
+        ctx.beginPath();
+        ctx.arc(p.x - dir * (8 + k * 6), sy + Math.sin(time * 20 + k) * 1.2, 2.5 + k, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = '#f97316';
+      ctx.beginPath();
+      ctx.ellipse(p.x - dir * 8, sy, 4 + Math.random() * 2, 2.2, 0, 0, Math.PI * 2);
+      ctx.fill();
+      inkedRoundRect(ctx, p.x - (dir > 0 ? 7 : -1), sy - 2.2, 8, 4.4, 2, '#3f6212', '#84cc16', undefined, 1);
+      ctx.fillStyle = '#dc2626';
+      ctx.beginPath();
+      ctx.arc(p.x + dir * 1.5, sy, 2, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      inkedCircle(ctx, p.x, sy, 3.4, '#3f6212', '#84cc16', 1.1);
+      if (Math.sin(time * 30) > 0) {
+        ctx.fillStyle = '#fde047';
+        ctx.beginPath();
+        ctx.arc(p.x + 2.5, sy - 3, 1.3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+}
+
 /** Bubbling corrosive puddles left by acid splashes. */
 export function renderAcidPools(ctx: CanvasRenderingContext2D, pools: RenderAcidPool[], time: number) {
   for (let i = 0; i < pools.length; i++) {
@@ -1033,7 +1099,12 @@ export function renderUnitSprite(
     const walkFreq = unit.subType === 'runner' ? 16 : isSurvivor ? 12 : 8.5;
     const stride = isMoving ? Math.sin(unit.animTime * walkFreq) : 0;
     const bob = isMoving ? Math.abs(Math.cos(unit.animTime * walkFreq)) * 1.6 : Math.sin(time * 3.5 + unit.x) * 0.5;
-    const isRanged = isSurvivor && RANGED_SURVIVORS.has(unit.subType);
+    const heroWeapon = unit.isHero ? unit.heroWeapon : undefined;
+    const heroCfg = heroWeapon ? HERO_WEAPONS[heroWeapon] : undefined;
+    const isRanged =
+      isSurvivor && (heroCfg ? heroCfg.category === 'ranged' : RANGED_SURVIVORS.has(unit.subType));
+    const heroArt = heroWeapon ? getHeroWeaponArt(heroWeapon) : null;
+    const weaponImg = heroArt ? (flash ? heroArt.flash : heroArt.img) : flash ? atlas.weaponFlash : atlas.weapon;
 
     let torsoLean = isMoving ? (isSurvivor ? 0.06 : 0.16) : 0;
     let armAngle = 0;
@@ -1053,6 +1124,18 @@ export function renderUnitSprite(
       }
     } else if (unit.state === 'reload') {
       armAngle = 0.45;
+      if (heroCfg && heroCfg.magSize > 0) {
+        // HERO manual reload choreography (driven by reloadProgress 0..1)
+        const rp = unit.reloadProgress;
+        if (heroCfg.reloadPerShell) {
+          armAngle = 0.5 + Math.sin(rp * Math.PI) * 0.12; // shell-by-shell feeding
+        } else if (heroWeapon === 'bazooka') {
+          armAngle = 0.18; // shoulder-level, rocket loaded from the rear
+        } else {
+          armAngle = rp < 0.3 ? 0.6 * (rp / 0.3) : rp < 0.7 ? 0.6 : 0.6 * (1 - (rp - 0.7) / 0.3);
+          if (rp >= 0.7 && rp < 0.9) recoilX = -2.6 * Math.sin(((rp - 0.7) / 0.2) * Math.PI); // charging handle / slide rack
+        }
+      }
     } else if (!isSurvivor) {
       // Zombie outstretched shambling arms
       armAngle = -0.45 + Math.sin(time * 5 + unit.y) * 0.12;
@@ -1069,7 +1152,7 @@ export function renderUnitSprite(
     ctx.restore();
 
     // 2. Back Arm (Dual-Wield Off-Hand Pistol for Gunslinger!)
-    const isGunslinger = unit.subType === 'gunslinger';
+    const isGunslinger = unit.subType === 'gunslinger' || heroWeapon === 'dual_pistol';
     const akimboLeftActive = isGunslinger && Math.floor(unit.animTime * 9) % 2 === 1;
     ctx.save();
     if (isGunslinger) {
@@ -1083,7 +1166,7 @@ export function renderUnitSprite(
           : -0.06 + stride * 0.08;
       ctx.translate(4.8 + offHandRecoil, -20.2 - bob);
       ctx.rotate(offHandAngle);
-      ctx.drawImage(flash ? atlas.weaponFlash : atlas.weapon, -5, -10, 32, 19);
+      ctx.drawImage(weaponImg, -5, -10, 32, 19);
       inkedRoundRect(
         ctx,
         -2.2,
@@ -1158,7 +1241,72 @@ export function renderUnitSprite(
         ctx.stroke();
       }
 
-      ctx.drawImage(flash ? atlas.weaponFlash : atlas.weapon, -6, -10, 34, 20);
+      ctx.drawImage(weaponImg, -6, -10, 34, 20);
+
+      // HERO reload props in the weapon's frame: falling mag, fresh mag, shells, rocket
+      if (heroCfg && heroCfg.magSize > 0 && unit.state === 'reload') {
+        const rp = unit.reloadProgress;
+        if (heroCfg.reloadPerShell) {
+          if (rp < 0.8) {
+            const t = rp / 0.8;
+            const sx = 3 + 11 * t;
+            const sy = 12 - 9 * t;
+            inkedRoundRect(ctx, sx, sy, 4.4, 2.3, 1, '#dc2626', '#fca5a5', undefined, 0.8);
+            ctx.fillStyle = '#facc15';
+            ctx.fillRect(sx, sy, 1.3, 2.3);
+          }
+        } else if (heroWeapon === 'bazooka') {
+          if (rp > 0.15 && rp < 0.85) {
+            const t = (rp - 0.15) / 0.7;
+            const rx = -18 + 18 * t;
+            inkedRoundRect(ctx, rx, -2.2, 12, 4.4, 2, '#3f6212', '#84cc16', undefined, 1);
+            ctx.fillStyle = '#dc2626';
+            ctx.beginPath();
+            ctx.arc(rx + 12, 0, 2, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        } else {
+          // Magazine well position in this arm frame (atlas coords - (6, 10))
+          const isPistol = heroWeapon === 'pistol' || heroWeapon === 'dual_pistol';
+          const magX = isPistol ? 1.4 : heroWeapon === 'uzi' ? 4.4 : 8.2;
+          const magY = isPistol ? 0 : 1.4;
+          const drawMag = (mx: number, my: number, rot: number, alpha: number) => {
+            ctx.save();
+            ctx.globalAlpha = alpha;
+            ctx.translate(mx + 1.7, my + 3.2);
+            ctx.rotate(rot);
+            inkedRoundRect(ctx, -1.7, -3.2, 3.4, isPistol ? 5.2 : 6.6, 1, '#27272a', '#52525b', undefined, 0.9);
+            ctx.restore();
+          };
+          if (rp < 0.35) {
+            const t = rp / 0.35;
+            drawMag(magX - 1 * t, magY + 18 * t * t, t * 1.2, 1 - t * 0.6); // empty mag drops away
+          } else if (rp < 0.7) {
+            const t = (rp - 0.35) / 0.35;
+            drawMag(magX - 9 * (1 - t), magY + 14 * (1 - t), -0.4 * (1 - t), 1); // fresh mag from the belt
+          }
+        }
+      }
+
+      // Hero firearm muzzle flash (bow and dual pistols handle their own)
+      if (
+        heroCfg &&
+        heroCfg.category === 'ranged' &&
+        heroWeapon !== 'bow' &&
+        heroWeapon !== 'dual_pistol' &&
+        unit.state === 'attack' &&
+        unit.attackProgress < 0.4
+      ) {
+        const big = heroWeapon === 'bazooka' || heroWeapon === 'shotgun';
+        ctx.fillStyle = '#fb923c';
+        ctx.beginPath();
+        ctx.ellipse(big ? 33 : 29, -0.5, big ? 6 : 4, big ? 3.6 : 2.4, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#fef08a';
+        ctx.beginPath();
+        ctx.arc(big ? 31 : 27.5, -0.5, big ? 2.6 : 1.7, 0, Math.PI * 2);
+        ctx.fill();
+      }
       inkedRoundRect(ctx, -2, -2, 5.2, 4.2, 1.5, flash ? '#ffffff' : atlas.shirtColor, undefined, undefined, 1.2);
 
       // Dual-Pistol Main-Hand Muzzle Flash on alternating shots
@@ -1181,12 +1329,14 @@ export function renderUnitSprite(
           ctx.fill();
         }
       } else if (!isRanged && unit.state === 'attack' && unit.attackProgress > 0.2 && unit.attackProgress < 0.85) {
-        // Crisp Illustrated Melee Slash Arc!
-        ctx.strokeStyle = unit.subType === 'juggernaut' ? '#38bdf8' : '#fef08a';
-        ctx.lineWidth = unit.subType === 'juggernaut' ? 3.2 : 2.2;
-        ctx.beginPath();
-        ctx.arc(14, 2, 15, -0.95, 0.85);
-        ctx.stroke();
+        // Crisp Illustrated Melee Slash Arc! (the hero's grenade throw has no slash)
+        if (heroWeapon !== 'grenade') {
+          ctx.strokeStyle = heroWeapon === 'sword' ? '#fde68a' : unit.subType === 'juggernaut' ? '#38bdf8' : '#fef08a';
+          ctx.lineWidth = heroWeapon === 'sword' ? 3.4 : unit.subType === 'juggernaut' ? 3.2 : 2.2;
+          ctx.beginPath();
+          ctx.arc(14, 2, heroWeapon === 'sword' ? 21 : 15, -0.95, 0.85);
+          ctx.stroke();
+        }
       }
     } else {
       // Zombie Front Claw Arm + Slash Arc
@@ -1224,6 +1374,8 @@ export function renderUnitSprite(
       ? 62
       : unit.subType === 'watchtower'
       ? 44
+      : unit.subType === 'hero'
+      ? 54
       : unit.subType === 'turret'
       ? 31
       : unit.subType === 'tesla'
@@ -1262,6 +1414,29 @@ export function renderUnitSprite(
       unit.maxHp,
       isSurvivor
     );
+  }
+
+  // "TÚ" marker over the player's hero
+  if (unit.isHero) {
+    const my = y - z - topOffset - 20 + Math.sin(time * 5) * 1.5;
+    ctx.save();
+    ctx.fillStyle = '#facc15';
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(x - 5, my - 5);
+    ctx.lineTo(x + 5, my - 5);
+    ctx.lineTo(x, my + 1);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.font = '800 7px "Chakra Petch", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.lineWidth = 2.2;
+    ctx.strokeText('TÚ', x, my - 7);
+    ctx.fillStyle = '#fef08a';
+    ctx.fillText('TÚ', x, my - 7);
+    ctx.restore();
   }
 
   // Tactical Speech Bubble

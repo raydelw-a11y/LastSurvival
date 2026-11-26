@@ -490,6 +490,37 @@ export function getUnitAtlas(subType: SurvivorType | ZombieType): UnitPartAtlas 
       break;
     }
 
+    case 'hero': {
+      // The player's commander: red bandana, tactical shades, black jacket with gold badge
+      skinColor = '#e9b48a';
+      shirtColor = '#111827';
+      pantColor = '#334155';
+      bootColor = '#1c1917';
+      // The hero stands clearly taller and broader than every other unit
+      scale = 1.45;
+      widthFactor = 1.3;
+      inkedRoundRect(hctx, 6.6, 7.4, 11.2, 10.8, 4.4, skinColor, '#fed7aa', '#c88b61');
+      drawHumanEyes(hctx, 10.2, 12.2, true, '#0f172a');
+      // Red bandana with trailing knot
+      inkedRoundRect(hctx, 5.6, 4.6, 12.6, 4.6, 2, '#dc2626', '#f87171', '#7f1d1d');
+      inkedRoundRect(hctx, 3.2, 6.4, 3.4, 5.6, 1.2, '#b91c1c', undefined, undefined, 1);
+      // Stubble
+      hctx.fillStyle = 'rgba(80, 55, 35, 0.35)';
+      hctx.fillRect(9, 15, 8, 2.4);
+      // Black tactical jacket, gold commander badge, ammo strap
+      inkedRoundRect(tctx, 5.6, 4.2, 12.8, 14, 3.4, '#111827', '#374151', '#030712');
+      tctx.strokeStyle = '#a16207';
+      tctx.lineWidth = 2;
+      tctx.beginPath();
+      tctx.moveTo(7, 5.5);
+      tctx.lineTo(17, 16.5);
+      tctx.stroke();
+      inkedCircle(tctx, 14.6, 8, 1.8, '#facc15', '#fef9c3', 0.9);
+      // Default weapon art (the real one is swapped live from getHeroWeaponArt)
+      inkedRoundRect(wctx, 10, 8.4, 20, 2.8, 1, '#cbd5e1', '#ffffff', '#64748b');
+      break;
+    }
+
     case 'acid_spitter': {
       skinColor = '#7a9a52';
       shirtColor = '#3f6212';
@@ -540,5 +571,148 @@ export function getUnitAtlas(subType: SurvivorType | ZombieType): UnitPartAtlas 
     widthFactor,
   };
   atlasCache.set(subType, entry);
+  return entry;
+}
+
+
+// =============================================================================
+// HERO ARSENAL ART — swapped live onto the hero's arm (34x20 logical, grip ~8,10)
+// =============================================================================
+const heroWeaponCache = new Map<string, { img: HTMLCanvasElement; flash: HTMLCanvasElement }>();
+
+export function getHeroWeaponArt(weapon: string): { img: HTMLCanvasElement; flash: HTMLCanvasElement } {
+  const hit = heroWeaponCache.get(weapon);
+  if (hit) return hit;
+  const [img, w] = makeCanvas(34, 20);
+  switch (weapon) {
+    case 'sword': {
+      inkedRoundRect(w, 3, 8.6, 6.5, 2.8, 1, '#7c2d12', '#b45309');
+      inkedRoundRect(w, 9, 6, 2.4, 8, 1, '#facc15', '#fef9c3', '#a16207', 1.1);
+      w.beginPath();
+      w.moveTo(11.4, 8.4);
+      w.lineTo(31, 9.2);
+      w.lineTo(33, 10);
+      w.lineTo(31, 10.8);
+      w.lineTo(11.4, 11.6);
+      w.closePath();
+      w.fillStyle = '#e2e8f0';
+      w.fill();
+      w.strokeStyle = INK;
+      w.lineWidth = 1.2;
+      w.stroke();
+      w.strokeStyle = '#ffffff';
+      w.lineWidth = 0.7;
+      w.beginPath();
+      w.moveTo(12, 9.4);
+      w.lineTo(30, 9.6);
+      w.stroke();
+      break;
+    }
+    case 'bow': {
+      w.strokeStyle = INK;
+      w.lineWidth = 2.6;
+      w.beginPath();
+      w.arc(4, 10, 9, -1.15, 1.15);
+      w.stroke();
+      w.strokeStyle = '#a16207';
+      w.lineWidth = 1.5;
+      w.stroke();
+      w.strokeStyle = '#e5e7eb';
+      w.lineWidth = 0.6;
+      w.beginPath();
+      w.moveTo(7.7, 1.8);
+      w.lineTo(7.7, 18.2);
+      w.stroke();
+      // Nocked arrow
+      w.strokeStyle = '#78350f';
+      w.lineWidth = 1.2;
+      w.beginPath();
+      w.moveTo(6, 10);
+      w.lineTo(28, 10);
+      w.stroke();
+      w.fillStyle = '#cbd5e1';
+      w.beginPath();
+      w.moveTo(28, 8);
+      w.lineTo(32, 10);
+      w.lineTo(28, 12);
+      w.closePath();
+      w.fill();
+      break;
+    }
+    case 'pistol':
+    case 'dual_pistol': {
+      inkedRoundRect(w, 7.2, 9.6, 4.4, 6.2, 1.3, '#18181b', '#3f3f46');
+      inkedRoundRect(w, 7, 6.8, 13.2, 4, 1.2, '#1f2937', '#9ca3af', '#030712');
+      break;
+    }
+    case 'm16': {
+      inkedRoundRect(w, 1, 8.6, 8, 4, 1.2, '#18181b', '#3f3f46');
+      inkedRoundRect(w, 8, 7.6, 18, 4, 1.2, '#27272a', '#71717a', '#09090b');
+      inkedRoundRect(w, 25.5, 8.6, 7.5, 1.8, 0.8, '#09090b');
+      inkedRoundRect(w, 11, 4.6, 6, 2.6, 1, '#27272a', '#52525b'); // carry handle
+      inkedRoundRect(w, 14, 11.2, 3.6, 6.6, 1, '#18181b', '#3f3f46'); // magazine
+      break;
+    }
+    case 'ak47': {
+      inkedRoundRect(w, 1, 8.4, 8, 4.4, 1.4, '#92400e', '#c2410c', '#451a03'); // wooden stock
+      inkedRoundRect(w, 8, 7.6, 12, 4, 1.2, '#3f3f46', '#a1a1aa', '#18181b');
+      inkedRoundRect(w, 19, 8, 7, 3, 1, '#92400e', '#c2410c'); // wooden handguard
+      inkedRoundRect(w, 25.5, 8.6, 7.5, 1.8, 0.8, '#18181b');
+      // Curved banana magazine
+      w.beginPath();
+      w.moveTo(13.4, 11.4);
+      w.quadraticCurveTo(14.4, 16, 17.6, 18.2);
+      w.lineTo(19.8, 17.2);
+      w.quadraticCurveTo(17, 15, 16.6, 11.4);
+      w.closePath();
+      w.fillStyle = '#27272a';
+      w.fill();
+      w.strokeStyle = INK;
+      w.lineWidth = 1.1;
+      w.stroke();
+      break;
+    }
+    case 'uzi': {
+      inkedRoundRect(w, 7, 7, 13, 5, 1.4, '#18181b', '#52525b', '#09090b');
+      inkedRoundRect(w, 19.5, 8.4, 4, 2, 0.8, '#09090b');
+      inkedRoundRect(w, 10.4, 11.4, 3.4, 8, 1, '#27272a', '#52525b'); // long grip magazine
+      break;
+    }
+    case 'shotgun': {
+      inkedRoundRect(w, 3, 8.8, 9, 4.4, 1.4, '#78350f', '#b45309');
+      inkedRoundRect(w, 11, 7.5, 19, 3.6, 1.2, '#334155', '#94a3b8', '#0f172a');
+      inkedRoundRect(w, 15, 10.8, 8, 2.6, 1, '#57534e', '#a8a29e');
+      break;
+    }
+    case 'bazooka': {
+      inkedRoundRect(w, 0, 6.4, 33.5, 6.4, 3, '#3f6212', '#65a30d', '#1a2e05', 1.4);
+      inkedRoundRect(w, 29, 5.4, 4.6, 8.4, 1.6, '#1a2e05', '#365314');
+      inkedRoundRect(w, 12, 3, 6, 3.4, 1, '#1f2937', '#38bdf8'); // sight
+      inkedRoundRect(w, 9, 12.4, 3, 5, 1, '#1f2937');
+      w.fillStyle = '#facc15';
+      w.fillRect(4, 7.6, 2, 4);
+      break;
+    }
+    case 'grenade': {
+      inkedCircle(w, 13, 11, 4.4, '#3f6212', '#84cc16', 1.2);
+      w.strokeStyle = 'rgba(26, 46, 5, 0.6)';
+      w.lineWidth = 0.7;
+      w.beginPath();
+      w.moveTo(9, 11);
+      w.lineTo(17, 11);
+      w.moveTo(13, 7);
+      w.lineTo(13, 15);
+      w.stroke();
+      inkedRoundRect(w, 11.4, 5, 4, 2.6, 0.8, '#9ca3af', '#e5e7eb');
+      w.strokeStyle = '#facc15';
+      w.lineWidth = 0.9;
+      w.beginPath();
+      w.arc(17.4, 5.6, 1.8, 0, Math.PI * 2);
+      w.stroke();
+      break;
+    }
+  }
+  const entry = { img, flash: makeWhiteFlashClone(img) };
+  heroWeaponCache.set(weapon, entry);
   return entry;
 }

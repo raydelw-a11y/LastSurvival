@@ -20,7 +20,7 @@ import { ContinuePrompt } from './components/ContinuePrompt';
 import { useCloudSync } from './sync/useCloudSync';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '9:21 PM - 11/25/2026';
+const FALLBACK_TIMESTAMP = '10:29 PM - 11/25/2026';
 export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 const CURRENT_BUILD_ID = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : '';
@@ -60,8 +60,10 @@ const INITIAL_PROGRESS: PlayerProgress = {
     tesla: 1,
     barricade: 1,
     watchtower: 1,
+    hero: 1,
   },
   missionStars: {},
+  ultraStars: {},
   unlockedMissions: [1],
   discoveredCaches: [],
 };
@@ -110,6 +112,10 @@ function sanitizeProgress(rawObj: Partial<PlayerProgress>): PlayerProgress {
       ...INITIAL_PROGRESS.unitLevels,
       ...(rawObj.unitLevels || {}),
     },
+    ultraStars:
+      rawObj.ultraStars && typeof rawObj.ultraStars === 'object' && !Array.isArray(rawObj.ultraStars)
+        ? rawObj.ultraStars
+        : {},
     unlockedMissions: (() => {
       const savedStars = rawObj.missionStars || {};
       let highestBeaten = 0;
@@ -177,6 +183,9 @@ export function App() {
   });
   // Always start on the campaign map; the "Continuar" prompt offers to jump back into the last mission.
   const [activeBattleMission, setActiveBattleMission] = useState<MissionNode | null>(null);
+  // ULTRA mode for the battle in progress (much stronger enemies, separate stars)
+  const [activeUltra, setActiveUltra] = useState<boolean>(false);
+  const activeUltraRef = useRef(false);
   // After a silent auto-update reload from the map, don't nag with the continue prompt again.
   const [continueDismissed, setContinueDismissed] = useState<boolean>(() => {
     try {
@@ -382,7 +391,9 @@ export function App() {
     }
   }, []);
 
-  const handleLaunchMission = useCallback((mission: MissionNode) => {
+  const handleLaunchMission = useCallback((mission: MissionNode, ultra = false) => {
+    activeUltraRef.current = ultra;
+    setActiveUltra(ultra);
     soundFX.resumeFromBackground();
     soundFX.playUnitSpawn();
     setContinueDismissed(true);
@@ -405,6 +416,19 @@ export function App() {
         if (!currentMission) return null;
         const mId = currentMission.id;
         const nextId = mId + 1;
+
+        if (activeUltraRef.current) {
+          // ULTRA win: separate best-star record, the normal campaign path is untouched
+          setProgress((prev) => ({
+            ...prev,
+            coins: prev.coins + coinsEarned,
+            ultraStars: {
+              ...(prev.ultraStars || {}),
+              [mId]: Math.max((prev.ultraStars || {})[mId] || 0, stars),
+            },
+          }));
+          return null;
+        }
 
         setProgress((prev) => {
           const currentStars = prev.missionStars[mId] || 0;
@@ -601,6 +625,7 @@ export function App() {
       {activeBattleMission ? (
         <BattleArena
           mission={activeBattleMission}
+          ultra={activeUltra}
           progress={progress}
           isPortrait={isPortrait}
           onVictory={handleVictory}

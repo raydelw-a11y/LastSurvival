@@ -71,6 +71,10 @@ export function mergeEnvelopes(local: SyncEnvelope, remote: SyncEnvelope): SyncE
     ) as unknown as PlayerProgress['missionStars'],
     unlockedMissions: union(a.unlockedMissions, b.unlockedMissions).sort((x, y) => x - y),
     discoveredCaches: union(a.discoveredCaches, b.discoveredCaches),
+    ultraStars: maxRecord(
+      (a.ultraStars || {}) as unknown as Record<string, number>,
+      (b.ultraStars || {}) as unknown as Record<string, number>
+    ) as unknown as PlayerProgress['ultraStars'],
     lastPlayedMission: lastPlayed.lastPlayedMission,
     lastPlayedAt: Math.max(aPlayed, bPlayed) || undefined,
   };

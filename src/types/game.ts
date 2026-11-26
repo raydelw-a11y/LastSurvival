@@ -13,7 +13,8 @@ export type SurvivorType =
   | 'juggernaut'
   | 'tesla'
   | 'barricade'
-  | 'watchtower';
+  | 'watchtower'
+  | 'hero';
 
 export type TacticalItemType = 'blue_barrel' | 'red_barrel' | 'medkit';
 export type ZombieType =
@@ -68,6 +69,8 @@ export interface SurvivorConfig {
   isBarrier?: boolean;
   /** Watchtower: the nearest walking ranged unit climbs in and fires from it. */
   isTower?: boolean;
+  /** The player's own hero: fully manual, never deployed from the deck. */
+  isHero?: boolean;
   infectedZombieType?: ZombieType;
   description: string;
   quotes: string[];
@@ -153,7 +156,79 @@ export interface PlayerProgress {
   lastPlayedMission?: number;
   /** Epoch ms when lastPlayedMission was set; the most recent device wins on sync. */
   lastPlayedAt?: number;
+  /** Best stars per mission in ULTRA mode (much stronger enemies). */
+  ultraStars?: Record<number, number>;
 }
+
+// ---- ULTRA mode: every mission can be replayed with much stronger enemies ----------
+export const ULTRA = {
+  zombieHp: 2.3,
+  zombieDamage: 1.8,
+  zombieSpeed: 1.15,
+  barricadeHp: 1.7,
+  waveInterval: 0.72,
+  extraEnemyChance: 0.55,
+  maxZombiesBonus: 6,
+  coinsMultiplier: 2.5,
+} as const;
+
+// ---- HERO: the player's unique, fully manual unit and its arsenal -----------------
+export type HeroWeaponType =
+  | 'sword'
+  | 'bow'
+  | 'pistol'
+  | 'dual_pistol'
+  | 'm16'
+  | 'ak47'
+  | 'uzi'
+  | 'shotgun'
+  | 'bazooka'
+  | 'grenade';
+export type HeroWeaponCategory = 'melee' | 'ranged' | 'thrown';
+
+export interface HeroWeaponConfig {
+  id: HeroWeaponType;
+  name: string;
+  category: HeroWeaponCategory;
+  icon: string;
+  damage: number;
+  cooldown: number; // seconds between attacks (holding fires continuously)
+  range: number;
+  magSize: number; // 0 = no reload
+  /** Full manual reload time (s). Shotgun: time per shell inserted. */
+  reloadTime: number;
+  /** Shotgun: reloads one shell at a time (can fire mid-reload). */
+  reloadPerShell?: boolean;
+  pellets?: number;
+  spread?: number; // vertical aim wobble in px
+  knockback: number;
+  projectile?: 'arrow' | 'rocket' | 'grenade';
+  projectileSpeed?: number;
+  pierce?: number; // arrows: how many zombies one arrow can pass through
+  blastRadius?: number;
+}
+
+export const HERO_WEAPONS: Record<HeroWeaponType, HeroWeaponConfig> = {
+  sword: { id: 'sword', name: 'Espada', category: 'melee', icon: '🗡️', damage: 38, cooldown: 0.42, range: 36, magSize: 0, reloadTime: 0, knockback: 34 },
+  bow: { id: 'bow', name: 'Arco y Flecha', category: 'ranged', icon: '🏹', damage: 34, cooldown: 0.75, range: 330, magSize: 0, reloadTime: 0, knockback: 10, projectile: 'arrow', projectileSpeed: 520, pierce: 2 },
+  pistol: { id: 'pistol', name: 'Pistola', category: 'ranged', icon: '🔫', damage: 18, cooldown: 0.3, range: 250, magSize: 12, reloadTime: 1.25, spread: 2, knockback: 8 },
+  dual_pistol: { id: 'dual_pistol', name: 'Doble Pistola', category: 'ranged', icon: '🔫🔫', damage: 14, cooldown: 0.16, range: 240, magSize: 24, reloadTime: 1.9, spread: 4, knockback: 6 },
+  m16: { id: 'm16', name: 'M16', category: 'ranged', icon: 'M16', damage: 17, cooldown: 0.11, range: 300, magSize: 30, reloadTime: 2.2, spread: 3, knockback: 6 },
+  ak47: { id: 'ak47', name: 'AK-47', category: 'ranged', icon: 'AK', damage: 24, cooldown: 0.14, range: 280, magSize: 30, reloadTime: 2.4, spread: 6, knockback: 9 },
+  uzi: { id: 'uzi', name: 'Uzi', category: 'ranged', icon: 'UZI', damage: 10, cooldown: 0.065, range: 200, magSize: 32, reloadTime: 1.8, spread: 8, knockback: 4 },
+  shotgun: { id: 'shotgun', name: 'Escopeta', category: 'ranged', icon: '💥', damage: 12, cooldown: 0.8, range: 150, magSize: 6, reloadTime: 0.42, reloadPerShell: true, pellets: 6, knockback: 26 },
+  bazooka: { id: 'bazooka', name: 'Bazuca', category: 'ranged', icon: '🚀', damage: 95, cooldown: 1.5, range: 360, magSize: 1, reloadTime: 2.6, knockback: 40, projectile: 'rocket', projectileSpeed: 380, blastRadius: 52 },
+  grenade: { id: 'grenade', name: 'Granada', category: 'thrown', icon: '💣', damage: 85, cooldown: 1.1, range: 210, magSize: 0, reloadTime: 0, knockback: 40, projectile: 'grenade', blastRadius: 56 },
+};
+
+export const HERO_WEAPON_ORDER: Record<HeroWeaponCategory, HeroWeaponType[]> = {
+  melee: ['sword'],
+  ranged: ['bow', 'pistol', 'dual_pistol', 'm16', 'ak47', 'uzi', 'shotgun', 'bazooka'],
+  thrown: ['grenade'],
+};
+
+/** Hero damage grows with the commander level (+6% per level). */
+export const heroDamageMult = (commanderLevel: number) => 1 + (Math.max(1, commanderLevel) - 1) * 0.06;
 
 export const MAX_COMMANDER_LEVEL = 13;
 /** Commander Mastery (+10% damage & HP to the whole squad) kicks in at this level. */
@@ -217,6 +292,7 @@ export const SHORT_UNIT_NAMES: Record<SurvivorType, string> = {
   tesla: 'Tesla',
   barricade: 'Barricada',
   watchtower: 'Torre',
+  hero: 'Héroe',
 };
 
 export const SHORT_TACTICAL_NAMES: Record<TacticalItemType, string> = {
@@ -618,6 +694,29 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
       'Torre que instalas donde quieras. Aparece vacía: la unidad a distancia más cercana sube y dispara desde arriba con +35% de alcance, a salvo de los golpes.',
     quotes: [],
     hotkey: 'V',
+  },
+  hero: {
+    id: 'hero',
+    name: 'Comandante',
+    roleTitle: 'Héroe (control manual)',
+    unlockLevel: 1,
+    cost: 0,
+    prepTime: 0,
+    baseHp: 240,
+    baseDamage: 0,
+    fortune: 25,
+    speed: 74,
+    attackRange: 0,
+    attackCooldown: 1,
+    isRanged: false,
+    knockback: 0,
+    meleeResist: 0.25,
+    bulletResist: 0.2,
+    isHero: true,
+    description:
+      'Tu héroe único: no hace nada por sí solo. Muévelo manteniendo la izquierda de la pantalla y ataca tocando o manteniendo la derecha.',
+    quotes: ['¡Yo me encargo!', '¡Síganme!'],
+    hotkey: '',
   },
 };
 

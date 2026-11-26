@@ -575,6 +575,110 @@ class SoundSystem {
     }
   }
 
+  /** The player's hero arsenal: each weapon has its own signature sound. */
+  public playHeroWeapon(weapon: string) {
+    if (weapon === 'pistol' || weapon === 'dual_pistol') return this.playUnitWeapon('gunslinger');
+    if (weapon === 'shotgun') return this.playUnitWeapon('policeman');
+    const ctx = this.getContext();
+    const dest = this.getDest();
+    if (!ctx || !dest) return;
+    const out = this.getWeaponOut(dest);
+    const t = ctx.currentTime + 0.002;
+    const j = this.jit();
+    switch (weapon) {
+      case 'm16': {
+        // 5.56 rifle: tight supersonic crack, mid blast, short tail
+        if (!this.allow('hero_m16', 0.05, ctx)) return;
+        this.burst(ctx, out, t, { type: 'highpass', freq: 4500 * j, vol: 0.5, decay: 0.004 });
+        this.burst(ctx, out, t, { type: 'bandpass', freq: 1700 * j, freqEnd: 800, q: 0.8, vol: 0.7, decay: 0.08, send: 0.3, saturate: true });
+        this.tone(ctx, out, t, { type: 'sine', f0: 180 * j, f1: 70, vol: 0.38, decay: 0.07 });
+        break;
+      }
+      case 'ak47': {
+        // 7.62 rifle: heavier, lower and dirtier than the M16
+        if (!this.allow('hero_ak', 0.06, ctx)) return;
+        this.burst(ctx, out, t, { type: 'highpass', freq: 3500 * j, vol: 0.5, decay: 0.005 });
+        this.burst(ctx, out, t, { type: 'lowpass', freq: 2200 * j, freqEnd: 520, vol: 0.85, decay: 0.12, send: 0.35, saturate: true });
+        this.tone(ctx, out, t, { type: 'sine', f0: 140 * j, f1: 50, vol: 0.5, decay: 0.1 });
+        break;
+      }
+      case 'uzi': {
+        // 9mm SMG: light, snappy, very rapid
+        if (!this.allow('hero_uzi', 0.04, ctx)) return;
+        this.burst(ctx, out, t, { type: 'highpass', freq: 3800 * j, vol: 0.38, decay: 0.004 });
+        this.burst(ctx, out, t, { type: 'bandpass', freq: 2100 * j, q: 1, vol: 0.5, decay: 0.045, send: 0.15, saturate: true });
+        this.tone(ctx, out, t, { type: 'sine', f0: 240 * j, f1: 110, vol: 0.22, decay: 0.04 });
+        break;
+      }
+      case 'bow': {
+        // String twang + arrow whoosh
+        if (!this.allow('hero_bow', 0.1, ctx)) return;
+        this.tone(ctx, out, t, { type: 'triangle', f0: 190 * j, f1: 150, vol: 0.3, attack: 0.002, decay: 0.16 });
+        this.tone(ctx, out, t, { type: 'sine', f0: 380 * j, f1: 300, vol: 0.12, decay: 0.12 });
+        this.burst(ctx, out, t + 0.01, { type: 'bandpass', freq: 2400, freqEnd: 900, q: 1.5, vol: 0.22, attack: 0.02, decay: 0.2 });
+        break;
+      }
+      case 'bazooka': {
+        // Launch thump + rocket hiss
+        if (!this.allow('hero_bazooka', 0.2, ctx)) return;
+        this.tone(ctx, out, t, { type: 'sine', f0: 110, f1: 40, vol: 0.85, decay: 0.24 });
+        this.burst(ctx, out, t, { type: 'lowpass', freq: 1400, freqEnd: 300, vol: 0.7, decay: 0.2, send: 0.5, saturate: true });
+        this.burst(ctx, out, t + 0.05, { type: 'bandpass', freq: 3000, freqEnd: 1600, q: 0.8, vol: 0.3, attack: 0.04, decay: 0.55 });
+        break;
+      }
+      case 'grenade': {
+        // Pin clink + throw whoosh
+        if (!this.allow('hero_grenade', 0.2, ctx)) return;
+        this.tone(ctx, out, t, { type: 'sine', f0: 3800, vol: 0.12, decay: 0.06 });
+        this.burst(ctx, out, t + 0.06, { type: 'bandpass', freq: 900, freqEnd: 2200, q: 1.2, vol: 0.3, attack: 0.03, decay: 0.22 });
+        break;
+      }
+      case 'sword':
+      default: {
+        // Blade swish + steel ring
+        if (!this.allow('hero_sword', 0.08, ctx)) return;
+        this.burst(ctx, out, t, { type: 'bandpass', freq: 1400, freqEnd: 4200, q: 1.4, vol: 0.38, attack: 0.03, decay: 0.12 });
+        this.tone(ctx, out, t + 0.05, { type: 'sine', f0: 2600 * j, vol: 0.06, decay: 0.25 });
+        this.tone(ctx, out, t + 0.05, { type: 'sine', f0: 3900 * j, vol: 0.04, decay: 0.2 });
+        break;
+      }
+    }
+  }
+
+  /** Hero reload foley: mag out / mag in / charging handle, shotgun shell, rocket load, dry fire. */
+  public playHeroReload(step: 'out' | 'in' | 'rack' | 'shell' | 'rocket' | 'dry') {
+    const ctx = this.getContext();
+    const dest = this.getDest();
+    if (!ctx || !dest || !this.allow(`reload_${step}`, 0.06, ctx)) return;
+    const out = this.getWeaponOut(dest);
+    const t = ctx.currentTime + 0.002;
+    switch (step) {
+      case 'out':
+        this.mechClick(ctx, out, t, 1500, 0.2);
+        this.burst(ctx, out, t + 0.05, { type: 'bandpass', freq: 700, q: 2, vol: 0.1, decay: 0.05 });
+        break;
+      case 'in':
+        this.mechClick(ctx, out, t, 1100, 0.3);
+        this.mechClick(ctx, out, t + 0.04, 2200, 0.14);
+        break;
+      case 'rack':
+        this.mechClick(ctx, out, t, 1800, 0.24);
+        this.mechClick(ctx, out, t + 0.09, 1250, 0.3);
+        break;
+      case 'shell':
+        this.mechClick(ctx, out, t, 2400, 0.16);
+        this.tone(ctx, out, t, { type: 'sine', f0: 900, vol: 0.05, decay: 0.05 });
+        break;
+      case 'rocket':
+        this.burst(ctx, out, t, { type: 'lowpass', freq: 600, vol: 0.4, decay: 0.12 });
+        this.mechClick(ctx, out, t + 0.08, 1300, 0.28);
+        break;
+      case 'dry':
+        this.mechClick(ctx, out, t, 2600, 0.18);
+        break;
+    }
+  }
+
   /** Zombie spitter hocking an acid glob (wet gurgle + throaty spit). */
   public playAcidSpit() {
     const ctx = this.getContext();

@@ -18,6 +18,12 @@ import {
   ZOMBIE_CONFIGS,
   ZOMBIE_XP_REWARD,
   ZombieType,
+  ULTRA,
+  HERO_WEAPONS,
+  HERO_WEAPON_ORDER,
+  HeroWeaponCategory,
+  HeroWeaponType,
+  heroDamageMult,
 } from '../types/game';
 import {
   LOGICAL_HEIGHT,
@@ -56,13 +62,18 @@ import {
   RenderAcidPool,
   renderAcidPools,
   renderAcidBlobs,
+  renderHeroShots,
+  RenderHeroShot,
   WORLD_WIDTH,
 } from '../engine/PixelArtRenderer';
 import { MuteButton } from './MuteButton';
+import { getHeroWeaponArt } from '../engine/hdAtlas';
 import { soundFX } from '../engine/SoundFX';
 
 interface BattleArenaProps {
   mission: MissionNode;
+  /** ULTRA mode: much stronger enemies, bigger rewards. */
+  ultra?: boolean;
   progress: PlayerProgress;
   isPortrait?: boolean;
   onVictory: (stars: number, coinsEarned: number, zombiesKilled: number) => void;
@@ -129,6 +140,39 @@ const MINIMAP = { x: LOGICAL_WIDTH / 2 - 95, y: 50, w: 190, h: 10 };
 /** Shooter in a watchtower gets this much extra range. */
 const TOWER_RANGE_BONUS = 1.35;
 
+/** On-screen joystick radius (logical px) for moving the hero. */
+const JOY_RADIUS = 34;
+const HERO_WEAPON_KEY = 'ls_hero_weapon_v1';
+const HERO_RESPAWN_SECONDS = 10;
+/** Holding the right half longer than this fires; a shorter tap reloads. */
+const HOLD_TO_FIRE_MS = 170;
+
+interface HeroShot extends RenderHeroShot {
+  dmg: number;
+  range: number;
+  traveled: number;
+  pierce: number;
+  hitIds: string[];
+  blast: number;
+  // Grenade arc
+  sx: number;
+  sy: number;
+  tx: number;
+  ty: number;
+  t: number;
+  dur: number;
+}
+
+function loadHeroWeapon(): HeroWeaponType {
+  try {
+    const w = localStorage.getItem(HERO_WEAPON_KEY) as HeroWeaponType | null;
+    if (w && w in HERO_WEAPONS) return w;
+  } catch {
+    // Ignore
+  }
+  return 'pistol';
+}
+
 interface AcidBlob {
   x: number;
   y: number;
@@ -167,10 +211,12 @@ const INITIAL_UNIT_COOLDOWNS: Record<SurvivorType, number> = {
   tesla: 0,
   barricade: 0,
   watchtower: 0,
+  hero: 0,
 };
 
 export const BattleArena: React.FC<BattleArenaProps> = ({
   mission,
+  ultra = false,
   progress,
   isPortrait = false,
   onVictory,
@@ -210,7 +256,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   } | null>(null);
   const maxBusHp = 200 + progress.busHpBonus;
   const [busHp, setBusHp] = useState<number>(maxBusHp);
-  const [barricadeHp, setBarricadeHp] = useState<number>(mission.barricadeHp);
+  // ULTRA mode reinforces the enemy barricade too
+  const missionBarricadeHp = Math.round(mission.barricadeHp * (ultra ? ULTRA.barricadeHp : 1));
+  const [barricadeHp, setBarricadeHp] = useState<number>(missionBarricadeHp);
   const [unitCooldowns, setUnitCooldowns] =
     useState<Record<SurvivorType, number>>(INITIAL_UNIT_COOLDOWNS);
   const [itemCooldowns, setItemCooldowns] = useState<Record<TacticalItemType, number>>({
@@ -230,6 +278,21 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   const [draggingItem, setDraggingItem] = useState<TacticalItemType | null>(null);
   // Turret / Tesla Coil chosen from the deck, waiting for the player to tap where to install it
   const [placingUnit, setPlacingUnit] = useState<SurvivorType | null>(null);
+  // HERO: weapon in hand, ammo HUD, respawn countdown, weapon menu & controls hint
+  const [heroWeapon, setHeroWeaponState] = useState<HeroWeaponType>(loadHeroWeapon);
+  const [heroAmmoHud, setHeroAmmoHud] = useState<{ ammo: number; mag: number; reloading: boolean }>({
+    ammo: 0,
+    mag: 0,
+    reloading: false,
+  });
+  const [heroRespawnIn, setHeroRespawnIn] = useState<number>(0);
+  const [weaponMenu, setWeaponMenu] = useState<HeroWeaponCategory | null>(null);
+  const [showControlsHint, setShowControlsHint] = useState<boolean>(true);
+  const lastWeaponByCat = useRef<Record<HeroWeaponCategory, HeroWeaponType>>({
+    melee: 'sword',
+    ranged: HERO_WEAPONS[loadHeroWeapon()].category === 'ranged' ? loadHeroWeapon() : 'pistol',
+    thrown: 'grenade',
+  });
   const [battleResult, setBattleResult] = useState<'none' | 'victory' | 'defeat'>('none');
   const [starsEarned, setStarsEarned] = useState<number>(3);
   const [zombiesKilledCount, setZombiesKilledCount] = useState<number>(0);
@@ -254,8 +317,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     busX: -2,
     busY: 66, // Parked at the top of the (deeper) road
     doorOpenTimer: 0,
-    barricadeHp: mission.barricadeHp,
-    maxBarricadeHp: mission.barricadeHp,
+    barricadeHp: missionBarricadeHp,
+    maxBarricadeHp: missionBarricadeHp,
     barricadeX: WORLD_WIDTH - 106,
     barricadeShake: 0,
     barricadeThresholdIdx: 0,
@@ -297,7 +360,23 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     // Scrolling camera over the 1.5x battlefield
     camX: 0,
     camManualTimer: 0,
-    pan: null as null | { pointerId: number; startClientX: number; startCam: number; moved: boolean },
+    minimapPointer: null as number | null,
+    // HERO (fully manual): joystick, fire pointers, weapon state & projectiles
+    heroJoy: { active: false, pointerId: -1, ox: 0, oy: 0, dx: 0, dy: 0 },
+    // Right-half pointers → press start time (hold = fire, quick tap = reload)
+    heroFirePointers: new Map<number, number>(),
+    heroTapAttack: false,
+    heroReloadStage: 0,
+    heroDryFireCd: 0,
+    heroWeapon: loadHeroWeapon() as HeroWeaponType,
+    heroAmmo: Object.fromEntries(
+      (Object.keys(HERO_WEAPONS) as HeroWeaponType[]).map((w) => [w, HERO_WEAPONS[w].magSize])
+    ) as Record<HeroWeaponType, number>,
+    heroReload: 0,
+    heroCd: 0,
+    heroMoving: false,
+    heroRespawnTimer: 0,
+    heroShots: [] as HeroShot[],
     waveTimer: initialSector === 1 ? 5.2 : initialSector === 2 ? 4.5 : 3.8,
     skeletonTimer: mission.skeletonAmbush ? 14.0 : 9999,
     timeRemaining: 150,
@@ -642,7 +721,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       // Gentle campaign-tier scaling (+3.2% HP per tier past Tier 1) across all 50 missions
       const tier = mission.campaignTier || mission.id;
       const missionScale = 1 + Math.max(0, tier - 1) * 0.032;
-      const scaledMaxHp = Math.round(cfg.baseHp * missionScale);
+      const scaledMaxHp = Math.round(cfg.baseHp * missionScale * (ultra ? ULTRA.zombieHp : 1));
       const initialHp = Math.max(12, Math.round(scaledMaxHp * hpScale));
 
       const zUnit: InternalUnit = {
@@ -659,8 +738,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         hp: initialHp,
         ghostHp: initialHp,
         maxHp: scaledMaxHp,
-        damage: cfg.baseDamage,
-        speed: cfg.speed * (0.93 + Math.random() * 0.14),
+        damage: Math.round(cfg.baseDamage * (ultra ? ULTRA.zombieDamage : 1)),
+        speed: cfg.speed * (0.93 + Math.random() * 0.14) * (ultra ? ULTRA.zombieSpeed : 1),
         attackRange: cfg.attackRange,
         attackCooldown: cfg.attackCooldown,
         attackTimer: 0,
@@ -704,6 +783,101 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     },
     [mission.id]
   );
+
+  /** Spawns the player's manual hero next to the bus door (free, one at a time). */
+  const spawnHero = useCallback(() => {
+    const sim = simRef.current;
+    if (sim.units.some((u) => u.isHero && u.hp > 0 && u.state !== 'dying')) return;
+    const cfg = SURVIVOR_CONFIGS.hero;
+    const lvlMult = 1 + (Math.max(1, sim.commanderLevel) - 1) * 0.08;
+    const hp = Math.round(cfg.baseHp * lvlMult * (sim.commanderLevel >= MASTERY_LEVEL ? 1.1 : 1));
+    const hero: InternalUnit = {
+      id: `hero_${Date.now()}`,
+      team: 'survivor',
+      subType: 'hero',
+      level: sim.commanderLevel,
+      x: sim.busX + 130,
+      y: (ROAD_Y_MIN + ROAD_Y_MAX) / 2,
+      z: 6,
+      vx: 0,
+      vy: 0,
+      vz: 18,
+      hp,
+      ghostHp: hp,
+      maxHp: hp,
+      damage: 0,
+      speed: cfg.speed,
+      attackRange: 0,
+      attackCooldown: 1,
+      attackTimer: 0,
+      isRanged: false,
+      pellets: 1,
+      ammo: 1,
+      maxAmmo: 1,
+      reloadTime: 0,
+      reloadTimer: 0,
+      knockback: 0,
+      bulletResist: cfg.bulletResist ?? 0,
+      meleeResist: cfg.meleeResist ?? 0,
+      armorPiercing: 0,
+      firstHitCritMult: 1,
+      isStationary: false,
+      isFlying: false,
+      isFlame: false,
+      chainTargets: 0,
+      chainRange: 0,
+      chainFalloff: 1,
+      stunTime: 0,
+      barricadeMultiplier: 1,
+      critChance: 0,
+      critMultiplier: 1,
+      state: 'march',
+      animTime: 0,
+      attackProgress: 0,
+      reloadProgress: 0,
+      whiteFlashTimer: 0,
+      isLucky: false,
+      isPlayerControlled: true,
+      facing: 1,
+      isHero: true,
+      heroWeapon: sim.heroWeapon,
+      quoteText: cfg.quotes[Math.floor(Math.random() * cfg.quotes.length)],
+      quoteTimer: 1.8,
+    };
+    sim.units.forEach((u) => (u.isPlayerControlled = false));
+    sim.selectedUnitId = hero.id;
+    sim.units.push(hero);
+    sim.heroRespawnTimer = 0;
+    setHeroRespawnIn(0);
+  }, []);
+
+  const selectHeroWeapon = useCallback((w: HeroWeaponType) => {
+    const sim = simRef.current;
+    if (sim.heroWeapon === w) return;
+    sim.heroWeapon = w;
+    sim.heroReload = 0;
+    sim.heroReloadStage = 0;
+    sim.heroTapAttack = false;
+    sim.heroCd = Math.min(sim.heroCd, 0.15);
+    lastWeaponByCat.current[HERO_WEAPONS[w].category] = w;
+    setHeroWeaponState(w);
+    try {
+      localStorage.setItem(HERO_WEAPON_KEY, w);
+    } catch {
+      // Ignore
+    }
+    soundFX.playUnitSpawn();
+  }, []);
+
+  /** Manual reload (single tap on the right half, or R). Returns true if a reload started. */
+  const requestHeroReload = useCallback(() => {
+    const sim = simRef.current;
+    const hw = HERO_WEAPONS[sim.heroWeapon];
+    if (hw.magSize <= 0 || sim.heroReload > 0 || sim.heroAmmo[hw.id] >= hw.magSize) return false;
+    sim.heroReload = hw.reloadTime;
+    sim.heroReloadStage = 0;
+    return true;
+  }, []);
 
   const deploySurvivor = useCallback(
     (type: SurvivorType, freeInitial = false, customX?: number, customY?: number) => {
@@ -1129,9 +1303,20 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       );
       if (hotkeyUnit) {
         activateUnit(hotkeyUnit);
+      } else if (key === 'z') {
+        selectHeroWeapon('sword');
+      } else if (key === 'c') {
+        const list = HERO_WEAPON_ORDER.ranged;
+        const cur = simRef.current.heroWeapon;
+        const idx = list.indexOf(cur);
+        selectHeroWeapon(list[(idx + 1) % list.length]);
+      } else if (key === 'g') {
+        selectHeroWeapon('grenade');
       } else if (key === 'q') {
         selectTacticalItem('blue_barrel');
-      } else if (key === 'x' || key === 'r') {
+      } else if (key === 'r') {
+        requestHeroReload();
+      } else if (key === 'x') {
         selectTacticalItem('red_barrel');
       } else if (key === 'e') {
         selectTacticalItem('medkit');
@@ -1168,6 +1353,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   }, [
     activateUnit,
     cancelPlacement,
+    selectHeroWeapon,
+    requestHeroReload,
     cycleSelectedSurvivor,
     pauseBattle,
     resumeBattle,
@@ -1214,26 +1401,54 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     }
   };
 
+  const heroAlive = () =>
+    simRef.current.units.some((u) => u.isHero && u.hp > 0 && u.state !== 'dying' && u.state !== 'corpse');
+
+  const jumpCameraToMinimap = (sx: number) => {
+    const sim = simRef.current;
+    const frac = (sx - MINIMAP.x) / MINIMAP.w;
+    sim.camX = clampCam(frac * WORLD_WIDTH - LOGICAL_WIDTH / 2);
+    sim.camManualTimer = 4;
+  };
+
   const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const sim = simRef.current;
-    const pan = sim.pan;
-    if (pan && pan.pointerId === e.pointerId) {
-      const { scale } = getLogicalCoords(e.clientX, e.clientY);
-      const dx = e.clientX - pan.startClientX;
-      if (Math.abs(dx) > 10) pan.moved = true;
-      if (pan.moved) {
-        sim.camX = clampCam(pan.startCam - dx / (scale || 1));
-        sim.camManualTimer = 3.5;
-      }
-    }
     const coords = getLogicalCoords(e.clientX, e.clientY);
+    if (sim.minimapPointer === e.pointerId) {
+      jumpCameraToMinimap(coords.sx);
+      return;
+    }
+    const joy = sim.heroJoy;
+    if (joy.active && joy.pointerId === e.pointerId) {
+      let dx = (coords.sx - joy.ox) / JOY_RADIUS;
+      let dy = (coords.y - joy.oy) / JOY_RADIUS;
+      const len = Math.hypot(dx, dy);
+      if (len > 1) {
+        dx /= len;
+        dy /= len;
+      }
+      joy.dx = dx;
+      joy.dy = dy;
+      return;
+    }
     sim.mouseLogical = { x: coords.x, y: coords.y, insideRoad: coords.insideRoad };
-    if (!pan?.moved) tryCollectPickupsAt(coords.x, coords.y);
+    if (sim.heroFirePointers.size === 0) tryCollectPickupsAt(coords.x, coords.y);
   };
 
   const handleCanvasPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const sim = simRef.current;
-    if (sim.pan && sim.pan.pointerId === e.pointerId) sim.pan = null;
+    if (sim.minimapPointer === e.pointerId) sim.minimapPointer = null;
+    if (sim.heroJoy.pointerId === e.pointerId) {
+      sim.heroJoy = { active: false, pointerId: -1, ox: 0, oy: 0, dx: 0, dy: 0 };
+    }
+    const pressedAt = sim.heroFirePointers.get(e.pointerId);
+    if (pressedAt !== undefined) {
+      sim.heroFirePointers.delete(e.pointerId);
+      // A quick single tap on the right half reloads firearms (holding fires instead)
+      if (performance.now() - pressedAt < HOLD_TO_FIRE_MS && HERO_WEAPONS[sim.heroWeapon].magSize > 0) {
+        requestHeroReload();
+      }
+    }
   };
 
   const handleCanvasWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
@@ -1246,36 +1461,32 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   const handleCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const coords = getLogicalCoords(e.clientX, e.clientY);
     const sim = simRef.current;
-    sim.mouseLogical = { x: coords.x, y: coords.y, insideRoad: coords.insideRoad };
+    const capture = () => {
+      try {
+        (e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId);
+      } catch {
+        // Ignore
+      }
+    };
 
-    // Minimap tap: jump the camera to that part of the battlefield
+    // Minimap tap / drag: jump the camera to that part of the battlefield
     if (
       coords.sx >= MINIMAP.x - 4 &&
       coords.sx <= MINIMAP.x + MINIMAP.w + 4 &&
       coords.y >= MINIMAP.y - 6 &&
       coords.y <= MINIMAP.y + MINIMAP.h + 6
     ) {
-      const frac = (coords.sx - MINIMAP.x) / MINIMAP.w;
-      sim.camX = clampCam(frac * WORLD_WIDTH - LOGICAL_WIDTH / 2);
-      sim.camManualTimer = 4;
+      jumpCameraToMinimap(coords.sx);
+      sim.minimapPointer = e.pointerId;
+      capture();
       return;
     }
 
-    // Any press can become a drag that pans the camera (taps still act normally below)
-    if (!sim.placingUnit && !sim.draggingItem) {
-      sim.pan = { pointerId: e.pointerId, startClientX: e.clientX, startCam: sim.camX, moved: false };
-      try {
-        (e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId);
-      } catch {
-        // Ignore
-      }
-    }
-
-    // Install the armed Turret / Tesla Coil exactly where the player tapped on the road
+    // Install the armed Turret / Tesla Coil / structure exactly where the player tapped
     if (sim.placingUnit) {
       if (coords.y >= 72) {
         const type = sim.placingUnit;
-        sim.mouseLogical = { ...coords, insideRoad: true };
+        sim.mouseLogical = { x: coords.x, y: coords.y, insideRoad: true };
         sim.placingUnit = null;
         setPlacingUnit(null);
         deploySurvivor(type, false, coords.x, coords.y);
@@ -1286,12 +1497,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     // 2-Tap Tactical Item System: 2nd tap on battlefield drops selected item at tapped location!
     if (sim.draggingItem) {
       if (coords.y >= 72) {
-        sim.mouseLogical = { ...coords, insideRoad: true };
+        sim.mouseLogical = { x: coords.x, y: coords.y, insideRoad: true };
         deployTacticalItem(sim.draggingItem, coords.x, coords.y);
       }
       return;
     }
 
+    sim.mouseLogical = { x: coords.x, y: coords.y, insideRoad: coords.insideRoad };
     tryCollectPickupsAt(coords.x, coords.y);
 
     // Tactical Counterplay: Tapping a deployed Red Barrel detonates it on command!
@@ -1304,6 +1516,21 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       const rb = sim.obstacles[clickedRedBarrelIdx];
       sim.obstacles.splice(clickedRedBarrelIdx, 1);
       triggerExplosion(rb.x, rb.y, 54, 18, true, 78);
+      return;
+    }
+
+    // HERO CONTROLS: hold the left half to move (virtual joystick), tap / hold the right half to attack
+    if (heroAlive()) {
+      setShowControlsHint(false);
+      setWeaponMenu(null);
+      if (coords.sx < LOGICAL_WIDTH * 0.5) {
+        sim.heroJoy = { active: true, pointerId: e.pointerId, ox: coords.sx, oy: coords.y, dx: 0, dy: 0 };
+      } else {
+        sim.heroFirePointers.set(e.pointerId, performance.now());
+        // Sword / bow / grenade have no magazine: a tap attacks right away
+        if (HERO_WEAPONS[sim.heroWeapon].magSize === 0) sim.heroTapAttack = true;
+      }
+      capture();
       return;
     }
 
@@ -1322,6 +1549,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   // Main 60 FPS Simulation & Multi-Layer Render Loop
   useEffect(() => {
     initDecalCanvas();
+    window.setTimeout(() => setShowControlsHint(false), 7000);
 
     // Fair Campaign-Tier Scaled Opening Guard across Main, North & South routes!
     const tier = mission.campaignTier || mission.id;
@@ -1363,9 +1591,226 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       spawnZombie('bloated', 602 + FIELD_EXTRA, 232);
     }
 
+    spawnHero();
+
     const sector = tier <= 3 ? 1 : tier <= 6 ? 2 : tier <= 9 ? 3 : 4;
     const maxActiveZombies =
-      tier === 1 ? 7 : sector === 1 ? 8 : sector === 2 ? 10 : sector === 3 ? 12 : 15;
+      (tier === 1 ? 7 : sector === 1 ? 8 : sector === 2 ? 10 : sector === 3 ? 12 : 15) +
+      (ultra ? ULTRA.maxZombiesBonus : 0);
+
+    // Damage the enemy barricade (shared by squad units and the hero): defenders, XP, final ram
+    const damageEnemyBarricade = (dmg: number, y: number) => {
+      const sim = simRef.current;
+      if (sim.barricadeHp <= 0 || sim.phase !== 'combat') return;
+      sim.barricadeHp = Math.max(0, sim.barricadeHp - dmg);
+      sim.barricadeShake = 0.25;
+      addFloatingText(`${dmg}`, sim.barricadeX - 18, y, 22, '#fde047', true, 'WACK!');
+
+      // Sector-Scaled Barricade Breach Defenders (NO Armored wall in Sector 1!)
+      const thresholds =
+        mission.id === 1 ? [0.5] : sector === 1 || sector === 2 ? [0.65, 0.3] : [0.7, 0.45, 0.2];
+      const nextThresh = thresholds[sim.barricadeThresholdIdx];
+      if (
+        nextThresh !== undefined &&
+        sim.barricadeHp > 0 &&
+        sim.barricadeHp / sim.maxBarricadeHp <= nextThresh
+      ) {
+        sim.barricadeThresholdIdx += 1;
+        sim.screenShake = 6;
+        addFloatingText('¡DEFENSORES!', sim.barricadeX - 48, 195, 24, '#ef4444', true);
+        if (mission.id === 1) {
+          spawnZombie('walker', sim.barricadeX - 16);
+          spawnZombie('walker', sim.barricadeX - 32);
+        } else if (sector === 1) {
+          spawnZombie('walker', sim.barricadeX - 16);
+          spawnZombie('runner', sim.barricadeX - 30);
+        } else if (sector === 2) {
+          spawnZombie('runner', sim.barricadeX - 16);
+          spawnZombie(sim.barricadeThresholdIdx === 1 ? 'armored' : 'crit_zombie', sim.barricadeX - 30);
+        } else {
+          spawnZombie('runner', sim.barricadeX - 14);
+          spawnZombie('crit_zombie', sim.barricadeX - 28);
+          spawnZombie('armored', sim.barricadeX - 20);
+        }
+      }
+
+      // Award +20 XP once when Barricade drops to <= 50% HP!
+      if (!sim.barricadeHalfXpAwarded && sim.barricadeHp > 0 && sim.barricadeHp <= sim.maxBarricadeHp * 0.5) {
+        sim.barricadeHalfXpAwarded = true;
+        awardCommanderXp(20);
+        addFloatingText('+20 XP BRECHA', sim.barricadeX - 36, 172, 22, '#38bdf8', true);
+      }
+
+      if (sim.barricadeHp <= 0 && sim.phase === 'combat') {
+        sim.phase = 'bus_ramming';
+        soundFX.playExplosion();
+        soundFX.playBusEngineRam();
+        sim.screenShake = 10;
+        const integrityBonus =
+          sim.busHp >= sim.maxBusHp * 0.85 ? 30 : sim.busHp >= sim.maxBusHp * 0.45 ? 20 : 10;
+        awardCommanderXp(35 + integrityBonus);
+      }
+    };
+
+    // HERO: nearest live zombie in front of the hero within range (flyers only for ranged attacks)
+    const heroFindTarget = (u: InternalUnit, range: number, allowFlyers: boolean) => {
+      const sim = simRef.current;
+      let best: InternalUnit | null = null;
+      let bestD = Infinity;
+      for (const z of sim.units) {
+        if (z.team !== 'zombie' || z.hp <= 0 || z.state === 'corpse' || z.state === 'dying') continue;
+        if (!allowFlyers && z.isFlying) continue;
+        const dx = (z.x - u.x) * u.facing;
+        if (dx < -6 || dx > range || Math.abs(z.y - u.y) > 42) continue;
+        const d = dx + Math.abs(z.y - u.y) * 0.8;
+        if (d < bestD) {
+          bestD = d;
+          best = z;
+        }
+      }
+      return best;
+    };
+
+    const heroHit = (z: InternalUnit, dmg: number, knock: number, dir: number, sub = 'WACK!') => {
+      z.hp -= dmg;
+      z.whiteFlashTimer = 0.1;
+      z.vx += dir * knock;
+      spawnBloodParticles(z.x, z.y, 12, 10, z.subType === 'bloated');
+      addFloatingText(`${dmg}?`, z.x, z.y, 22, '#fde047', true, sub);
+    };
+
+    const barricadeInReach = (u: InternalUnit, range: number) => {
+      const sim = simRef.current;
+      return u.facing === 1 && sim.barricadeHp > 0 && sim.barricadeX - u.x <= range + 10;
+    };
+
+    /** One attack with the hero's current weapon. */
+    const heroAttack = (u: InternalUnit) => {
+      const sim = simRef.current;
+      const w = HERO_WEAPONS[sim.heroWeapon];
+      const base = w.damage * heroDamageMult(sim.commanderLevel);
+      if (w.magSize > 0 && sim.heroAmmo[w.id] <= 0) {
+        // Empty: dry-fire click, the player has to tap the right side to reload
+        sim.heroCd = 0.3;
+        soundFX.playHeroReload('dry');
+        if (sim.heroDryFireCd <= 0) {
+          sim.heroDryFireCd = 1.2;
+          addFloatingText('¡SIN BALAS! TOCA PARA RECARGAR', u.x, u.y, 40, '#f87171', true);
+        }
+        return;
+      }
+      u.state = 'attack';
+      u.attackProgress = 0;
+      sim.heroCd = w.cooldown;
+      soundFX.playHeroWeapon(w.id);
+      scareCrows();
+
+      if (w.magSize > 0) {
+        sim.heroAmmo[w.id] = Math.max(0, sim.heroAmmo[w.id] - 1);
+      }
+
+      if (w.id === 'sword') {
+        let hits = 0;
+        for (const z of sim.units) {
+          if (z.team !== 'zombie' || z.hp <= 0 || z.state === 'corpse' || z.state === 'dying' || z.isFlying) continue;
+          const dx = (z.x - u.x) * u.facing;
+          if (dx >= -6 && dx <= w.range && Math.abs(z.y - u.y) <= 24) {
+            heroHit(z, Math.round(base), w.knockback, u.facing, 'SLASH!');
+            hits++;
+          }
+        }
+        if (hits > 0) sim.hitStopTimer = 0.03;
+        else if (barricadeInReach(u, w.range)) damageEnemyBarricade(Math.round(base * 1.2), u.y);
+        return;
+      }
+
+      const muzzleX = u.x + u.facing * 16;
+      if (w.projectile === 'arrow' || w.projectile === 'rocket') {
+        sim.heroShots.push({
+          kind: w.projectile,
+          x: muzzleX,
+          y: u.y,
+          z: 18,
+          vx: u.facing * (w.projectileSpeed ?? 400),
+          dmg: Math.round(base),
+          range: w.range,
+          traveled: 0,
+          pierce: w.pierce ?? 1,
+          hitIds: [],
+          blast: w.blastRadius ?? 0,
+          sx: 0,
+          sy: 0,
+          tx: 0,
+          ty: 0,
+          t: 0,
+          dur: 0,
+        });
+        if (w.projectile === 'rocket') sim.screenShake = Math.max(sim.screenShake, 3);
+        return;
+      }
+
+      if (w.projectile === 'grenade') {
+        const target = heroFindTarget(u, w.range, true);
+        const tx = target ? target.x : u.x + u.facing * 170;
+        const ty = target ? target.y : u.y;
+        sim.heroShots.push({
+          kind: 'grenade',
+          x: u.x,
+          y: u.y,
+          z: 20,
+          vx: u.facing,
+          dmg: Math.round(base),
+          range: w.range,
+          traveled: 0,
+          pierce: 0,
+          hitIds: [],
+          blast: w.blastRadius ?? 50,
+          sx: u.x + u.facing * 6,
+          sy: u.y,
+          tx,
+          ty,
+          t: 0,
+          dur: 0.45 + Math.min(0.4, Math.abs(tx - u.x) / 420),
+        });
+        return;
+      }
+
+      if (w.pellets && w.pellets > 1) {
+        // Shotgun cone: everything in front takes pellet damage (closer = more pellets land)
+        spawnWeaponTracerAndShell(u.x, u.y, 18, u.x + u.facing * w.range * 0.7, u.y, u.facing, 'shotgun');
+        let hits = 0;
+        for (const z of sim.units) {
+          if (z.team !== 'zombie' || z.hp <= 0 || z.state === 'corpse' || z.state === 'dying') continue;
+          const dx = (z.x - u.x) * u.facing;
+          if (dx >= -6 && dx <= w.range && Math.abs(z.y - u.y) <= 18 + dx * 0.18) {
+            const landed = dx < w.range * 0.5 ? w.pellets : Math.ceil(w.pellets * 0.55);
+            const dmg = Math.round(base * landed * (1 - z.bulletResist * 0.6));
+            heroHit(z, dmg, w.knockback, u.facing);
+            hits++;
+          }
+        }
+        sim.screenShake = Math.max(sim.screenShake, 2.4);
+        if (hits === 0 && barricadeInReach(u, w.range)) damageEnemyBarricade(Math.round(base * w.pellets * 0.6), u.y);
+        return;
+      }
+
+      // Hitscan firearms (pistols, rifles, SMG)
+      const target = heroFindTarget(u, w.range, true);
+      const wobble = (Math.random() - 0.5) * (w.spread ?? 0) * 2;
+      const kind = w.id === 'pistol' || w.id === 'dual_pistol' ? 'rifle' : 'rapid';
+      if (target) {
+        const ty = target.y - (target.isFlying ? FLYER_HOVER_Z * 0.7 : 0);
+        spawnWeaponTracerAndShell(u.x, u.y, 18, target.x, ty + wobble, u.facing, kind);
+        const dmg = Math.max(1, Math.round(base * (1 - target.bulletResist * 0.7)));
+        heroHit(target, dmg, w.knockback, u.facing);
+      } else if (barricadeInReach(u, w.range)) {
+        spawnWeaponTracerAndShell(u.x, u.y, 18, sim.barricadeX - 8, u.y + wobble, u.facing, kind);
+        damageEnemyBarricade(Math.round(base * 0.8), u.y);
+      } else {
+        spawnWeaponTracerAndShell(u.x, u.y, 18, u.x + u.facing * w.range, u.y + wobble, u.facing, kind);
+      }
+      sim.screenShake = Math.max(sim.screenShake, w.id === 'ak47' ? 1.4 : 0.6);
+    };
 
     let animationFrameId: number;
     let lastTime = performance.now();
@@ -1394,8 +1839,18 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           sim.levelShockwaveTimer = Math.max(0, sim.levelShockwaveTimer - dt);
         }
 
-        // CAMERA: never moves on its own — only drag, mouse wheel or minimap taps scroll it
+        // CAMERA: never moves on its own — only the minimap, mouse wheel, or the player moving the hero
         if (sim.camManualTimer > 0) sim.camManualTimer = Math.max(0, sim.camManualTimer - dt);
+        if (sim.heroMoving && sim.camManualTimer <= 0) {
+          const heroU = sim.units.find((h) => h.isHero && h.hp > 0);
+          if (heroU) {
+            const sxh = heroU.x - sim.camX;
+            let target = sim.camX;
+            if (sxh < 230) target = heroU.x - 230;
+            else if (sxh > 470) target = heroU.x - 470;
+            sim.camX += (clampCam(target) - sim.camX) * Math.min(1, dt * 6);
+          }
+        }
 
         if (sim.phase === 'bus_ramming') {
           sim.busX += 340 * dt;
@@ -1440,6 +1895,15 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               sim.itemCooldowns[k] = Math.max(0, sim.itemCooldowns[k] - dt);
             }
           });
+
+          // Fallen hero comes back out of the bus after a short countdown
+          if (sim.heroRespawnTimer > 0) {
+            sim.heroRespawnTimer -= dt;
+            if (sim.heroRespawnTimer <= 0) {
+              spawnHero();
+              addFloatingText('¡DE VUELTA!', sim.busX + 130, (ROAD_Y_MIN + ROAD_Y_MAX) / 2, 26, '#facc15', true);
+            }
+          }
 
           sim.timeRemaining = Math.max(0, sim.timeRemaining - dt);
           if (sim.timeRemaining <= 0 && !sim.hordeTriggered) {
@@ -1489,7 +1953,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
             sim.waveTimer = sim.hordeTriggered
               ? 2.1
-              : mission.waveInterval * (0.9 + Math.random() * 0.2) + (isBreather ? 2.2 : 0);
+              : mission.waveInterval * (ultra ? ULTRA.waveInterval : 1) * (0.9 + Math.random() * 0.2) +
+                (isBreather ? 2.2 : 0);
 
             const pool = mission.zombiePool;
             let packSize = sector <= 2 ? 2 : 2 + (Math.random() < 0.45 ? 1 : 0);
@@ -1503,11 +1968,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
             // New enemy variety unlocks along the campaign (dogs → spitters → flyers)
             const extraPool: ZombieType[] = [];
-            if (tier >= 3) extraPool.push('zombie_dog');
-            if (tier >= 5) extraPool.push('acid_spitter');
-            if (tier >= 7) extraPool.push('flyer');
+            // ULTRA unleashes every new enemy type from the very first mission
+            if (ultra || tier >= 3) extraPool.push('zombie_dog');
+            if (ultra || tier >= 5) extraPool.push('acid_spitter');
+            if (ultra || tier >= 7) extraPool.push('flyer');
             for (let p = 0; p < finalCount; p++) {
-              const useExtra = extraPool.length > 0 && Math.random() < 0.3;
+              const useExtra =
+                extraPool.length > 0 && Math.random() < (ultra ? ULTRA.extraEnemyChance : 0.3);
               const pick = useExtra
                 ? extraPool[Math.floor(Math.random() * extraPool.length)]
                 : pool[Math.floor(Math.random() * pool.length)];
@@ -1742,6 +2209,62 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             });
           }
 
+          // HERO projectiles: piercing arrows, bazooka rockets and thrown grenades
+          for (let i = sim.heroShots.length - 1; i >= 0; i--) {
+            const p = sim.heroShots[i];
+            if (p.kind === 'grenade') {
+              p.t += dt;
+              const k = Math.min(1, p.t / p.dur);
+              p.x = p.sx + (p.tx - p.sx) * k;
+              p.y = p.sy + (p.ty - p.sy) * k;
+              p.z = 20 * (1 - k) + Math.sin(k * Math.PI) * 46;
+              if (k >= 1) {
+                sim.heroShots.splice(i, 1);
+                triggerExplosion(p.x, p.y, p.blast, 0, false, p.dmg);
+                if (sim.barricadeHp > 0 && Math.abs(sim.barricadeX - p.x) <= p.blast) {
+                  damageEnemyBarricade(Math.round(p.dmg * 0.6), p.y);
+                }
+              }
+              continue;
+            }
+            const step = p.vx * dt;
+            p.x += step;
+            p.traveled += Math.abs(step);
+            let done = false;
+            // Rockets / arrows smash into the enemy barricade
+            if (p.vx > 0 && sim.barricadeHp > 0 && p.x >= sim.barricadeX - 16) {
+              if (p.kind === 'rocket') triggerExplosion(p.x, p.y, p.blast, 0, false, p.dmg);
+              damageEnemyBarricade(Math.round(p.dmg * (p.kind === 'rocket' ? 0.7 : 0.5)), p.y);
+              done = true;
+            }
+            if (!done) {
+              for (const z of sim.units) {
+                if (z.team !== 'zombie' || z.hp <= 0 || z.state === 'corpse' || z.state === 'dying') continue;
+                if (p.hitIds.includes(z.id)) continue;
+                if (Math.abs(z.x - p.x) <= 10 && Math.abs(z.y - p.y) <= 16) {
+                  if (p.kind === 'rocket') {
+                    triggerExplosion(p.x, p.y, p.blast, 0, false, p.dmg);
+                    done = true;
+                    break;
+                  }
+                  const dmg = Math.max(1, Math.round(p.dmg * (1 - z.bulletResist * 0.5)));
+                  heroHit(z, dmg, 10, p.vx >= 0 ? 1 : -1, 'THWACK!');
+                  p.hitIds.push(z.id);
+                  p.pierce -= 1;
+                  if (p.pierce <= 0) {
+                    done = true;
+                    break;
+                  }
+                }
+              }
+            }
+            if (!done && p.traveled >= p.range) {
+              if (p.kind === 'rocket') triggerExplosion(p.x, p.y, p.blast, 0, false, p.dmg);
+              done = true;
+            }
+            if (done) sim.heroShots.splice(i, 1);
+          }
+
           // Obstacles & Medkit Healing Field Simulation
           sim.medkitTickTimer += dt;
           const emitHealPopup = sim.medkitTickTimer >= 1.0;
@@ -1797,7 +2320,10 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           const wasdDy =
             (keys.has('s') || keys.has('arrowdown') ? 1 : 0) -
             (keys.has('w') || keys.has('arrowup') ? 1 : 0);
-          const isUsingWasd = wasdDx !== 0 || wasdDy !== 0;
+          const heroAliveNow = sim.units.some(
+            (h) => h.isHero && h.hp > 0 && h.state !== 'dying' && h.state !== 'corpse'
+          );
+          const isUsingWasd = !heroAliveNow && (wasdDx !== 0 || wasdDy !== 0);
 
           if (
             !sim.units.some(
@@ -1998,6 +2524,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 }
                 continue;
               } else {
+                if (u.isHero) {
+                  sim.heroRespawnTimer = HERO_RESPAWN_SECONDS;
+                  sim.heroJoy = { active: false, pointerId: -1, ox: 0, oy: 0, dx: 0, dy: 0 };
+                  addFloatingText('¡HÉROE CAÍDO!', u.x, u.y, 30, '#ef4444', true);
+                }
                 if (u.infectedZombieType) {
                   u.state = 'corpse';
                   u.corpseTimer = 6.0;
@@ -2061,6 +2592,123 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   sim.pickups.splice(pIdx, 1);
                 }
               }
+            }
+
+            // HERO: does nothing on its own — moved by the joystick / WASD, attacks only on command
+            if (u.isHero) {
+              const joy = sim.heroJoy;
+              let mx = joy.active ? joy.dx : 0;
+              let my = joy.active ? joy.dy : 0;
+              if (!joy.active && (wasdDx !== 0 || wasdDy !== 0)) {
+                const len = Math.hypot(wasdDx, wasdDy) || 1;
+                mx = wasdDx / len;
+                my = wasdDy / len;
+              }
+              const mag = Math.hypot(mx, my);
+              if (mag > 0.12) {
+                u.x += mx * u.speed * dt;
+                u.y += my * u.speed * 0.8 * dt;
+                if (Math.abs(mx) > 0.15) u.facing = mx > 0 ? 1 : -1;
+                sim.heroMoving = true;
+              } else {
+                sim.heroMoving = false;
+                if (u.state === 'march') u.animTime -= dt; // stand still
+              }
+              if (u.state === 'attack') {
+                u.attackProgress += dt / 0.22;
+                if (u.attackProgress >= 1) {
+                  u.attackProgress = 0;
+                  u.state = 'march';
+                }
+              }
+              const hw = HERO_WEAPONS[sim.heroWeapon];
+              if (sim.heroCd > 0) sim.heroCd -= dt;
+              if (sim.heroDryFireCd > 0) sim.heroDryFireCd -= dt;
+              let heldFire = keys.has('j') || keys.has('k');
+              sim.heroFirePointers.forEach((t0) => {
+                if (now - t0 >= HOLD_TO_FIRE_MS) heldFire = true;
+              });
+              const wantsAttack = heldFire || sim.heroTapAttack;
+
+              if (sim.heroReload > 0) {
+                // Shotgun can interrupt its shell-by-shell reload to fire what it has
+                if (hw.reloadPerShell && heldFire && sim.heroAmmo[hw.id] > 0) {
+                  sim.heroReload = 0;
+                  sim.heroReloadStage = 0;
+                  u.reloadProgress = 0;
+                  u.state = 'march';
+                } else {
+                  u.state = 'reload';
+                  sim.heroReload -= dt;
+                  const rp = Math.max(0, Math.min(1, 1 - sim.heroReload / Math.max(0.01, hw.reloadTime)));
+                  u.reloadProgress = rp;
+                  // Staged reload foley + the empty magazine flying out onto the road
+                  if (hw.reloadPerShell) {
+                    if (sim.heroReloadStage === 0 && rp >= 0.75) {
+                      sim.heroReloadStage = 1;
+                      soundFX.playHeroReload('shell');
+                    }
+                  } else if (hw.id === 'bazooka') {
+                    if (sim.heroReloadStage === 0 && rp >= 0.5) {
+                      sim.heroReloadStage = 1;
+                      soundFX.playHeroReload('rocket');
+                    } else if (sim.heroReloadStage === 1 && rp >= 0.85) {
+                      sim.heroReloadStage = 2;
+                      soundFX.playHeroReload('rack');
+                    }
+                  } else {
+                    if (sim.heroReloadStage === 0 && rp >= 0.08) {
+                      sim.heroReloadStage = 1;
+                      soundFX.playHeroReload('out');
+                      const mags = hw.id === 'dual_pistol' ? 2 : 1;
+                      for (let m = 0; m < mags && sim.shells.length < 40; m++) {
+                        sim.shells.push({
+                          x: u.x + u.facing * (4 + m * 4),
+                          y: u.y + m * 2,
+                          z: 18,
+                          vx: -u.facing * (8 + Math.random() * 10),
+                          vy: (Math.random() - 0.5) * 6,
+                          vz: 30 + Math.random() * 15,
+                          bounces: 0,
+                          color: '#27272a',
+                          w: 3,
+                          h: 5,
+                        });
+                      }
+                    } else if (sim.heroReloadStage === 1 && rp >= 0.62) {
+                      sim.heroReloadStage = 2;
+                      soundFX.playHeroReload('in');
+                    } else if (sim.heroReloadStage === 2 && rp >= 0.78) {
+                      sim.heroReloadStage = 3;
+                      soundFX.playHeroReload('rack');
+                    }
+                  }
+                  if (sim.heroReload <= 0) {
+                    sim.heroReloadStage = 0;
+                    if (hw.reloadPerShell) {
+                      sim.heroAmmo[hw.id] = Math.min(hw.magSize, sim.heroAmmo[hw.id] + 1);
+                      if (sim.heroAmmo[hw.id] < hw.magSize) {
+                        sim.heroReload = hw.reloadTime; // next shell
+                      }
+                    } else {
+                      sim.heroAmmo[hw.id] = hw.magSize;
+                    }
+                    if (sim.heroReload <= 0) {
+                      sim.heroReload = 0;
+                      u.reloadProgress = 0;
+                      u.state = 'march';
+                      addFloatingText('¡LISTO!', u.x, u.y, 40, '#4ade80', true);
+                    }
+                  }
+                }
+              }
+
+              if (wantsAttack && sim.heroCd <= 0 && sim.heroReload <= 0) {
+                sim.heroTapAttack = false;
+                heroAttack(u);
+              }
+              u.heroWeapon = sim.heroWeapon;
+              continue;
             }
 
             if (u.state === 'reload') {
@@ -2390,70 +3038,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   } else {
                     soundFX.playBarricadeBash();
                   }
-                  const dmg = Math.round(u.damage * u.barricadeMultiplier);
-                  sim.barricadeHp = Math.max(0, sim.barricadeHp - dmg);
-                  sim.barricadeShake = 0.25;
-                  addFloatingText(`${dmg}`, sim.barricadeX - 18, u.y, 22, '#fde047', true, 'WACK!');
-
-                  // Sector-Scaled Barricade Breach Defenders (NO Armored wall in Sector 1!)
-                  const thresholds =
-                    mission.id === 1
-                      ? [0.5]
-                      : sector === 1 || sector === 2
-                      ? [0.65, 0.3]
-                      : [0.7, 0.45, 0.2];
-                  const nextThresh = thresholds[sim.barricadeThresholdIdx];
-                  if (
-                    nextThresh !== undefined &&
-                    sim.barricadeHp > 0 &&
-                    sim.barricadeHp / sim.maxBarricadeHp <= nextThresh
-                  ) {
-                    sim.barricadeThresholdIdx += 1;
-                    sim.screenShake = 6;
-                    addFloatingText('¡DEFENSORES!', sim.barricadeX - 48, 195, 24, '#ef4444', true);
-                    if (mission.id === 1) {
-                      spawnZombie('walker', sim.barricadeX - 16);
-                      spawnZombie('walker', sim.barricadeX - 32);
-                    } else if (sector === 1) {
-                      spawnZombie('walker', sim.barricadeX - 16);
-                      spawnZombie('runner', sim.barricadeX - 30);
-                    } else if (sector === 2) {
-                      spawnZombie('runner', sim.barricadeX - 16);
-                      spawnZombie(
-                        sim.barricadeThresholdIdx === 1 ? 'armored' : 'crit_zombie',
-                        sim.barricadeX - 30
-                      );
-                    } else {
-                      spawnZombie('runner', sim.barricadeX - 14);
-                      spawnZombie('crit_zombie', sim.barricadeX - 28);
-                      spawnZombie('armored', sim.barricadeX - 20);
-                    }
-                  }
-
-                  // Award +20 XP once when Barricade drops to <= 50% HP!
-                  if (
-                    !sim.barricadeHalfXpAwarded &&
-                    sim.barricadeHp > 0 &&
-                    sim.barricadeHp <= sim.maxBarricadeHp * 0.5
-                  ) {
-                    sim.barricadeHalfXpAwarded = true;
-                    awardCommanderXp(20);
-                    addFloatingText('+20 XP BRECHA', sim.barricadeX - 36, 172, 22, '#38bdf8', true);
-                  }
-
-                  if (sim.barricadeHp <= 0 && sim.phase === 'combat') {
-                    sim.phase = 'bus_ramming';
-                    soundFX.playExplosion();
-                    soundFX.playBusEngineRam();
-                    sim.screenShake = 10;
-                    const integrityBonus =
-                      sim.busHp >= sim.maxBusHp * 0.85
-                        ? 30
-                        : sim.busHp >= sim.maxBusHp * 0.45
-                        ? 20
-                        : 10;
-                    awardCommanderXp(35 + integrityBonus);
-                  }
+                  damageEnemyBarricade(Math.round(u.damage * u.barricadeMultiplier), u.y);
                 }
               } else if (!(u.isPlayerControlled && isUsingWasd) && !u.isStationary && !u.inTowerId) {
                 u.state = 'march';
@@ -2722,6 +3307,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             setUnitCooldowns({ ...sim.unitCooldowns });
             setItemCooldowns({ ...sim.itemCooldowns });
             setTimeRemaining(Math.ceil(sim.timeRemaining));
+            {
+              const hw = HERO_WEAPONS[sim.heroWeapon];
+              setHeroAmmoHud({ ammo: sim.heroAmmo[hw.id], mag: hw.magSize, reloading: sim.heroReload > 0 });
+              setHeroRespawnIn(sim.heroRespawnTimer > 0 ? Math.ceil(sim.heroRespawnTimer) : 0);
+            }
             setRushWarningState({
               active: sim.rushWarningTimer > 0,
               yPct: Math.round((sim.rushWarningY / LOGICAL_HEIGHT) * 100),
@@ -2906,6 +3496,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         renderTracersAndShells(ctx, sim.tracers, sim.shells);
         renderLightningArcs(ctx, sim.lightningArcs);
         renderAcidBlobs(ctx, sim.acidBlobs);
+        renderHeroShots(ctx, sim.heroShots, sim.time);
 
         // LAYER 4: Foreground Left Military Truck & Oil Drums
         renderForegroundLeftProps(ctx);
@@ -3002,10 +3593,35 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               mu.team === 'zombie' ? (mu.isFlying ? '#f472b6' : '#f87171') : mu.isStationary ? '#e2e8f0' : '#38bdf8';
             ctx.fillRect(toMm(mu.x) - 1, Math.max(mm.y, Math.min(mm.y + mm.h - 2, roadT(mu.y) - 1)), 2, 2);
           }
+          // The player's hero (bright yellow)
+          const heroDot = sim.units.find((h) => h.isHero && h.hp > 0);
+          if (heroDot) {
+            ctx.fillStyle = '#facc15';
+            ctx.fillRect(toMm(heroDot.x) - 1.5, Math.max(mm.y, Math.min(mm.y + mm.h - 3, roadT(heroDot.y) - 1.5)), 3, 3);
+          }
           // Visible camera window
           ctx.strokeStyle = '#ffffff';
           ctx.lineWidth = 1;
           ctx.strokeRect(toMm(sim.camX) + 0.5, mm.y - 1.5, (LOGICAL_WIDTH / WORLD_WIDTH) * mm.w - 1, mm.h + 3);
+          ctx.restore();
+        }
+
+        // Virtual joystick (left half) while the player holds it
+        const joy = sim.heroJoy;
+        if (joy.active) {
+          ctx.save();
+          ctx.globalAlpha = 0.85;
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
+          ctx.strokeStyle = 'rgba(250, 204, 21, 0.75)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(joy.ox, joy.oy, JOY_RADIUS, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = 'rgba(250, 204, 21, 0.85)';
+          ctx.beginPath();
+          ctx.arc(joy.ox + joy.dx * JOY_RADIUS, joy.oy + joy.dy * JOY_RADIUS, 13, 0, Math.PI * 2);
+          ctx.fill();
           ctx.restore();
         }
       }
@@ -3018,6 +3634,10 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     // Simulation mounts ONCE per mission.id; live upgrades & callbacks flow via liveBridgeRef!
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mission.id]);
+
+  const victoryCoins = Math.round(
+    (mission.coinsReward + starsEarned * 15) * (ultra ? ULTRA.coinsMultiplier : 1)
+  );
 
   // Active Tactical Squad (any number of unlocked units) + 1 Next-Unlock Teaser Card!
   const activeSquadUnits = progress.equippedDeck.filter(
@@ -3292,6 +3912,123 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           >
             ✕
           </button>
+        </div>
+      )}
+
+      {/* ULTRA MODE BADGE */}
+      {ultra && (
+        <div className="absolute top-1.5 left-1/2 -translate-x-[155%] z-20 px-2 py-0.5 rounded bg-gradient-to-b from-fuchsia-600 to-purple-900 border border-fuchsia-300 text-[9px] font-extrabold text-white shadow-lg pointer-events-none">
+          ☠️ ULTRA
+        </div>
+      )}
+
+      {/* HERO WEAPON PANEL (left side): melee / ranged / thrown */}
+      {battleResult === 'none' && (
+        <div
+          className="absolute left-1.5 top-[34%] z-20 flex flex-col gap-1 select-none"
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          {(['melee', 'ranged', 'thrown'] as HeroWeaponCategory[]).map((cat) => {
+            const isActiveCat = HERO_WEAPONS[heroWeapon].category === cat;
+            const shown = isActiveCat ? heroWeapon : lastWeaponByCat.current[cat];
+            const list = HERO_WEAPON_ORDER[cat];
+            const catLabel = cat === 'melee' ? 'Melee' : cat === 'ranged' ? 'Distancia' : 'Lanzar';
+            return (
+              <div key={cat} className="relative">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isActiveCat) {
+                      selectHeroWeapon(shown);
+                      setWeaponMenu(null);
+                    } else if (list.length > 1) {
+                      setWeaponMenu((m) => (m === cat ? null : cat));
+                    }
+                  }}
+                  title={`${catLabel}: ${HERO_WEAPONS[shown].name}${
+                    isActiveCat && list.length > 1 ? ' — toca de nuevo para cambiar de arma' : ''
+                  }`}
+                  className={`w-[46px] h-[40px] rounded-md border-2 flex flex-col items-center justify-center gap-0.5 shadow-lg cursor-pointer transition ${
+                    isActiveCat
+                      ? 'bg-amber-950/95 border-yellow-300 ring-2 ring-yellow-400/50'
+                      : 'bg-zinc-950/85 border-zinc-600 hover:border-zinc-400'
+                  }`}
+                >
+                  <HeroWeaponIcon weapon={shown} />
+                  <span className={`text-[6.5px] font-extrabold uppercase leading-none ${isActiveCat ? 'text-yellow-200' : 'text-zinc-400'}`}>
+                    {catLabel}
+                    {list.length > 1 ? ' ▸' : ''}
+                  </span>
+                </button>
+                {weaponMenu === cat && (
+                  <div className="absolute left-full top-0 ml-1 flex gap-1 p-1 rounded-md bg-zinc-950/95 border border-yellow-500/70 shadow-xl">
+                    {list.map((w) => (
+                      <button
+                        key={w}
+                        type="button"
+                        onClick={() => {
+                          selectHeroWeapon(w);
+                          setWeaponMenu(null);
+                        }}
+                        className={`w-[44px] h-[38px] rounded border flex flex-col items-center justify-center gap-0.5 cursor-pointer ${
+                          w === heroWeapon
+                            ? 'bg-amber-900/90 border-yellow-300'
+                            : 'bg-zinc-900 border-zinc-700 hover:border-yellow-400'
+                        }`}
+                        title={HERO_WEAPONS[w].name}
+                      >
+                        <HeroWeaponIcon weapon={w} />
+                        <span className="text-[6px] font-bold text-zinc-200 leading-none truncate max-w-[42px]">
+                          {HERO_WEAPONS[w].name}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* Ammo / reload status of the weapon in hand */}
+          <div className="w-[46px] rounded bg-black/80 border border-zinc-700 px-0.5 py-0.5 text-center leading-none">
+            <div className="text-[6.5px] font-bold text-zinc-300 truncate">{HERO_WEAPONS[heroWeapon].name}</div>
+            {heroAmmoHud.mag > 0 ? (
+              heroAmmoHud.reloading ? (
+                <div className="text-[7px] font-extrabold text-sky-300 animate-pulse mt-0.5">RECARGANDO…</div>
+              ) : heroAmmoHud.ammo === 0 ? (
+                <div className="text-[7px] font-extrabold text-red-400 animate-pulse mt-0.5">TOCA ▶ RECARGAR</div>
+              ) : (
+                <div className="font-tactical text-[11px] font-extrabold text-white mt-0.5">
+                  {heroAmmoHud.ammo}
+                  <span className="text-[8px] text-zinc-400">/{heroAmmoHud.mag}</span>
+                </div>
+              )
+            ) : (
+              <div className="font-tactical text-[11px] font-extrabold text-white mt-0.5">∞</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* HERO DOWN: respawn countdown */}
+      {heroRespawnIn > 0 && battleResult === 'none' && (
+        <div className="absolute top-[22%] left-1/2 -translate-x-1/2 z-30 px-3 py-1 rounded-md bg-red-950/95 border-2 border-red-400 text-[11px] font-extrabold text-red-100 shadow-xl pointer-events-none">
+          💀 Tu héroe cayó — reaparece en {heroRespawnIn}s
+        </div>
+      )}
+
+      {/* FIRST-SECONDS CONTROLS HINT */}
+      {showControlsHint && battleResult === 'none' && !paused && (
+        <div className="absolute top-[26%] inset-x-0 z-20 flex justify-between px-[16%] pointer-events-none">
+          <div className="px-2.5 py-1.5 rounded-lg bg-black/70 border border-yellow-400/70 text-[10px] font-bold text-yellow-100 text-center leading-tight">
+            🕹️ Mantén aquí
+            <br />y arrastra para moverte
+          </div>
+          <div className="px-2.5 py-1.5 rounded-lg bg-black/70 border border-yellow-400/70 text-[10px] font-bold text-yellow-100 text-center leading-tight">
+            👉 Mantén aquí para disparar
+            <br />
+            Toca una vez para recargar
+          </div>
         </div>
       )}
 
@@ -3701,13 +4438,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   Integridad del Autobús: <strong className="text-emerald-400">{Math.round((busHp / maxBusHp) * 100)}%</strong> ({barricadeHp === 0 ? 'Ruta Despejada' : ''})
                 </p>
                 <p className="text-xs text-zinc-200 mb-4">
-                  Botín: <strong className="text-yellow-400">+{mission.coinsReward + starsEarned * 15} 🪙</strong> ({zombiesKilledCount} infectados abatidos)
+                  Botín: <strong className="text-yellow-400">+{victoryCoins} 🪙</strong>
+                  {ultra && <strong className="text-fuchsia-300"> (ULTRA x{ULTRA.coinsMultiplier})</strong>} ({zombiesKilledCount} infectados abatidos)
                 </p>
                 <button
                   onClick={() =>
                     onVictory(
                       starsEarned,
-                      mission.coinsReward + starsEarned * 15,
+                      victoryCoins,
                       zombiesKilledCount
                     )
                   }
@@ -3738,6 +4476,19 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 };
 
 // Crisp Canvas-Rendered Pixel Sprite Portrait (turns into authentic dark silhouette when on cooldown/low courage!)
+/** Small canvas showing the actual hero weapon art. */
+const HeroWeaponIcon: React.FC<{ weapon: HeroWeaponType }> = React.memo(({ weapon }) => {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    if (!ref.current) return;
+    const ctx = syncCanvasHiDPI(ref.current, 34, 20, 3);
+    if (!ctx) return;
+    ctx.clearRect(0, 0, 34, 20);
+    ctx.drawImage(getHeroWeaponArt(weapon).img, 0, 0, 34, 20);
+  }, [weapon]);
+  return <canvas ref={ref} width={34} height={20} className="w-[34px] h-[20px] hd-canvas pointer-events-none" />;
+});
+
 const CanvasUnitPortrait: React.FC<{ type: SurvivorType; active: boolean }> = React.memo(
   ({ type, active }) => {
     const ref = useRef<HTMLCanvasElement | null>(null);
