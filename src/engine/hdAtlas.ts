@@ -693,6 +693,88 @@ export function getHeroWeaponArt(weapon: string): { img: HTMLCanvasElement; flas
       w.fillRect(4, 7.6, 2, 4);
       break;
     }
+    case 'katana': {
+      inkedRoundRect(w, 2, 8.8, 8, 2.4, 1, '#18181b', '#dc2626'); // wrapped grip
+      inkedRoundRect(w, 10, 7.2, 1.8, 5.6, 0.8, '#facc15', '#fef9c3'); // guard
+      w.beginPath();
+      w.moveTo(11.8, 9);
+      w.quadraticCurveTo(24, 7.4, 33.4, 6);
+      w.quadraticCurveTo(25, 10.6, 11.8, 11.2);
+      w.closePath();
+      w.fillStyle = '#f1f5f9';
+      w.fill();
+      w.strokeStyle = INK;
+      w.lineWidth = 1.1;
+      w.stroke();
+      break;
+    }
+    case 'chainsaw': {
+      inkedRoundRect(w, 2, 6, 11, 8.4, 2, '#ea580c', '#fdba74', '#7c2d12', 1.3); // engine body
+      inkedRoundRect(w, 4, 3.4, 7, 2.6, 1, '#18181b', '#52525b'); // top handle
+      inkedRoundRect(w, 12.6, 7.6, 20.4, 5, 2.4, '#94a3b8', '#e2e8f0', '#334155', 1.2); // guide bar
+      w.fillStyle = '#18181b';
+      for (let k = 0; k < 7; k++) {
+        w.fillRect(14.4 + k * 2.7, 6.8, 1.3, 1.2);
+        w.fillRect(14.4 + k * 2.7, 12.2, 1.3, 1.2);
+      }
+      break;
+    }
+    case 'sniper': {
+      inkedRoundRect(w, 0, 8.8, 9, 4.2, 1.4, '#3f3f46', '#71717a'); // stock
+      inkedRoundRect(w, 8, 8, 13, 3.4, 1.2, '#1f2937', '#6b7280', '#030712');
+      inkedRoundRect(w, 20.5, 8.8, 13, 1.8, 0.8, '#09090b'); // long barrel
+      inkedRoundRect(w, 10, 4, 10, 3, 1.4, '#111827', '#38bdf8'); // scope
+      inkedRoundRect(w, 13, 11.2, 3, 4.4, 1, '#18181b', '#3f3f46'); // magazine
+      break;
+    }
+    case 'minigun': {
+      inkedRoundRect(w, 2, 6.4, 12, 7.6, 2, '#27272a', '#71717a', '#09090b', 1.3); // motor housing
+      inkedRoundRect(w, 5, 13.4, 5, 5, 1.2, '#a16207', '#facc15'); // ammo box
+      inkedRoundRect(w, 13.5, 6.6, 19.5, 1.9, 0.8, '#3f3f46', '#a1a1aa');
+      inkedRoundRect(w, 13.5, 9.1, 19.5, 1.9, 0.8, '#3f3f46', '#a1a1aa');
+      inkedRoundRect(w, 13.5, 11.6, 19.5, 1.9, 0.8, '#3f3f46', '#a1a1aa');
+      inkedRoundRect(w, 29, 5.8, 2.6, 8.6, 1, '#18181b', '#52525b'); // barrel clamp
+      break;
+    }
+    case 'launcher': {
+      inkedRoundRect(w, 1, 8.6, 8, 4, 1.4, '#3f3f46', '#71717a'); // stock
+      inkedRoundRect(w, 20, 6.8, 12.5, 5.4, 2, '#365314', '#65a30d', '#1a2e05', 1.2); // fat barrel
+      inkedCircle(w, 14.5, 10.6, 5.6, '#27272a', '#71717a', 1.3); // revolving drum
+      inkedCircle(w, 14.5, 10.6, 1.6, '#09090b');
+      inkedRoundRect(w, 9, 13.6, 3, 4.4, 1, '#18181b');
+      break;
+    }
+    case 'molotov': {
+      inkedRoundRect(w, 10, 8, 6.4, 9.6, 2, '#92400e', '#f59e0b', '#451a03', 1.2); // bottle
+      inkedRoundRect(w, 11.8, 4.6, 2.8, 4, 0.8, '#b45309', '#fcd34d');
+      inkedRoundRect(w, 12, 2.6, 2.4, 2.6, 0.6, '#e5e7eb'); // rag
+      w.fillStyle = '#f97316';
+      w.beginPath();
+      w.ellipse(13.2, 1.6, 2.2, 1.8, 0, 0, Math.PI * 2);
+      w.fill();
+      w.fillStyle = '#fde047';
+      w.beginPath();
+      w.arc(13.2, 1.9, 1, 0, Math.PI * 2);
+      w.fill();
+      break;
+    }
+    case 'dynamite': {
+      inkedRoundRect(w, 6, 6, 14, 3.4, 1, '#b91c1c', '#f87171', '#7f1d1d', 1.1);
+      inkedRoundRect(w, 6, 9.2, 14, 3.4, 1, '#b91c1c', '#f87171', '#7f1d1d', 1.1);
+      inkedRoundRect(w, 6, 12.4, 14, 3.4, 1, '#b91c1c', '#f87171', '#7f1d1d', 1.1);
+      inkedRoundRect(w, 11.6, 5.4, 2.8, 11, 0.8, '#27272a'); // strap
+      w.strokeStyle = '#a8a29e';
+      w.lineWidth = 0.9;
+      w.beginPath();
+      w.moveTo(20, 7.4);
+      w.quadraticCurveTo(24, 3, 26.5, 5);
+      w.stroke();
+      w.fillStyle = '#fde047';
+      w.beginPath();
+      w.arc(27, 5, 1.6, 0, Math.PI * 2);
+      w.fill();
+      break;
+    }
     case 'grenade': {
       inkedCircle(w, 13, 11, 4.4, '#3f6212', '#84cc16', 1.2);
       w.strokeStyle = 'rgba(26, 46, 5, 0.6)';

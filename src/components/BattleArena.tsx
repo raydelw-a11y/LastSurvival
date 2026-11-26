@@ -185,6 +185,8 @@ interface HeroShot extends RenderHeroShot {
   pierce: number;
   hitIds: string[];
   blast: number;
+  /** Molotov: the blast leaves a burning zone. */
+  fire?: boolean;
   // Grenade arc
   sx: number;
   sy: number;
@@ -334,9 +336,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   const [weaponMenu, setWeaponMenu] = useState<HeroWeaponCategory | null>(null);
   const [showControlsHint, setShowControlsHint] = useState<boolean>(true);
   const lastWeaponByCat = useRef<Record<HeroWeaponCategory, HeroWeaponType>>({
-    melee: 'sword',
+    melee: HERO_WEAPONS[loadHeroWeapon()].category === 'melee' ? loadHeroWeapon() : 'sword',
     ranged: HERO_WEAPONS[loadHeroWeapon()].category === 'ranged' ? loadHeroWeapon() : 'pistol',
-    thrown: 'grenade',
+    thrown: HERO_WEAPONS[loadHeroWeapon()].category === 'thrown' ? loadHeroWeapon() : 'grenade',
   });
   const [battleResult, setBattleResult] = useState<'none' | 'victory' | 'defeat'>('none');
   const [starsEarned, setStarsEarned] = useState<number>(3);
@@ -1164,7 +1166,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       radius: number,
       survivorDamage: number,
       leavesFire: boolean,
-      zombieDamage?: number
+      zombieDamage?: number,
+      fireDps?: number
     ) => {
       const sim = simRef.current;
       const zDmg = zombieDamage ?? survivorDamage;
@@ -1198,6 +1201,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           radius: radius * 0.88,
           duration: 6.5,
           maxDuration: 6.5,
+          dps: fireDps,
         });
       }
 
@@ -1413,15 +1417,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       );
       if (hotkeyUnit) {
         activateUnit(hotkeyUnit);
-      } else if (key === 'z') {
-        selectHeroWeapon('sword');
-      } else if (key === 'c') {
-        const list = HERO_WEAPON_ORDER.ranged;
+      } else if (key === 'z' || key === 'c' || key === 'g') {
+        // Z / C / G: melee / ranged / thrown — press again to cycle inside the category
+        const cat: HeroWeaponCategory = key === 'z' ? 'melee' : key === 'c' ? 'ranged' : 'thrown';
+        const list = HERO_WEAPON_ORDER[cat];
         const cur = simRef.current.heroWeapon;
         const idx = list.indexOf(cur);
-        selectHeroWeapon(list[(idx + 1) % list.length]);
-      } else if (key === 'g') {
-        selectHeroWeapon('grenade');
+        selectHeroWeapon(idx < 0 ? lastWeaponByCat.current[cat] : list[(idx + 1) % list.length]);
       } else if (key === 'q') {
         selectTacticalItem('blue_barrel');
       } else if (key === 'r') {
@@ -2090,7 +2092,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         sim.heroAmmo[w.id] = Math.max(0, sim.heroAmmo[w.id] - 1);
       }
 
-      if (w.id === 'sword') {
+      if (w.category === 'melee') {
         // Turn toward the closest ground zombie within reach on either side, then cleave
         const near = heroAim(u, w.range + 30, false);
         if (near.target || sim.heroAimPoint) u.facing = near.facing;
@@ -2101,12 +2103,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           if (z.team !== 'zombie' || z.hp <= 0 || z.state === 'corpse' || z.state === 'dying' || z.isFlying) continue;
           const dx = (z.x - u.x) * u.facing;
           if (dx >= -6 && dx <= w.range && Math.abs(z.y - u.y) <= 28) {
-            heroHit(z, Math.round(base), w.knockback, u.facing, 'SLASH!');
+            heroHit(z, Math.round(base), w.knockback, u.facing, w.id === 'chainsaw' ? 'RRRR!' : 'SLASH!');
             hits++;
           }
         }
-        if (hits > 0) sim.hitStopTimer = 0.03;
-        else if (barricadeInReach(u, w.range)) damageEnemyBarricade(Math.round(base * 1.2), u.y);
+        if (hits > 0) {
+          if (w.id !== 'chainsaw') sim.hitStopTimer = 0.03;
+        } else if (barricadeInReach(u, w.range)) damageEnemyBarricade(Math.round(base * 1.2), u.y);
         return;
       }
 
@@ -2169,6 +2172,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         }
         sim.heroShots.push({
           kind: 'grenade',
+          skin: w.id === 'molotov' ? 'molotov' : w.id === 'dynamite' ? 'dynamite' : undefined,
+          fire: w.leavesFire,
           x: u.x,
           y: u.y,
           z: HERO_MUZZLE_Z,
@@ -2219,12 +2224,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
       // Hitscan firearms (pistols, rifles, SMG)
       const wobble = (Math.random() - 0.5) * (w.spread ?? 0) * 2;
-      const kind = w.id === 'pistol' || w.id === 'dual_pistol' ? 'rifle' : 'rapid';
+      const kind = w.id === 'sniper' ? 'sniper' : w.id === 'pistol' || w.id === 'dual_pistol' ? 'rifle' : 'rapid';
       if (aim.target) {
         tracer(aim.target.x, aim.tVisY + wobble, kind);
         collectPickupsOnSegment(muzzleX, u.y, aim.target.x, aim.target.y);
-        const dmg = Math.max(1, Math.round(base * (1 - aim.target.bulletResist * 0.7)));
-        heroHit(aim.target, dmg, w.knockback, u.facing);
+        const dmg = Math.max(1, Math.round(base * (w.ignoresArmor ? 1 : 1 - aim.target.bulletResist * 0.7)));
+        heroHit(aim.target, dmg, w.knockback, u.facing, w.ignoresArmor ? 'HEADSHOT!' : undefined);
       } else if (barricadeInReach(u, w.range) && Math.abs(aim.pitch) < 0.35) {
         tracer(sim.barricadeX - 8, muzzleScreenY + (sim.barricadeX - 8 - muzzleX) * Math.tan(aim.pitch) + wobble, kind);
         damageEnemyBarricade(Math.round(base * 0.8), u.y);
@@ -2239,7 +2244,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         tracer(muzzleX + dirX * len, muzzleScreenY + sinP * len + wobble * 0.4, kind);
         collectPickupsOnSegment(muzzleX, u.y, muzzleX + dirX * len, u.y + sinP * len);
       }
-      sim.screenShake = Math.max(sim.screenShake, w.id === 'ak47' ? 1.4 : 0.6);
+      sim.screenShake = Math.max(sim.screenShake, w.id === 'sniper' ? 3 : w.id === 'ak47' ? 1.4 : 0.6);
     };
 
     let animationFrameId: number;
@@ -2652,7 +2657,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   u.corpseTimer = -999;
                   addFloatingText('CALCINADO', u.x, u.y, 14, '#f97316', true);
                 } else if (u.team === 'zombie' && u.hp > 0) {
-                  u.hp -= 15 * dt;
+                  u.hp -= (fz.dps ?? 15) * dt;
                   if (Math.random() < 0.08) {
                     u.whiteFlashTimer = 0.06;
                   }
@@ -2757,7 +2762,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               p.z = 20 * (1 - k) + Math.sin(k * Math.PI) * 46;
               if (k >= 1) {
                 sim.heroShots.splice(i, 1);
-                triggerExplosion(p.x, p.y, p.blast, 0, false, p.dmg);
+                // Molotov: modest blast, but the road keeps burning (scaled with the hero's damage)
+                triggerExplosion(p.x, p.y, p.blast, 0, !!p.fire, p.dmg, p.fire ? Math.round(p.dmg * 0.6) : undefined);
+                if (p.skin === 'dynamite') sim.screenShake = 14;
                 collectPickupsOnSegment(p.x, p.y, p.x, p.y, Math.max(30, p.blast));
                 if (sim.barricadeHp > 0 && Math.abs(sim.barricadeX - p.x) <= p.blast) {
                   damageEnemyBarricade(Math.round(p.dmg * 0.6), p.y);
@@ -4627,7 +4634,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   </span>
                 </button>
                 {weaponMenu === cat && (
-                  <div className="absolute left-full top-0 ml-1 flex gap-1 p-1 rounded-md bg-zinc-950/95 border border-yellow-500/70 shadow-xl">
+                  <div className="absolute left-full top-0 ml-1 flex flex-wrap gap-1 p-1 w-max max-w-[298px] rounded-md bg-zinc-950/95 border border-yellow-500/70 shadow-xl">
                     {list.map((w) => (
                       <button
                         key={w}

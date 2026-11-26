@@ -198,6 +198,8 @@ export interface RenderFireZone {
   radius: number;
   duration: number;
   maxDuration?: number;
+  /** Burn damage per second to zombies (default 15). */
+  dps?: number;
 }
 
 const RANGED_SURVIVORS = new Set<string>([
@@ -589,6 +591,8 @@ export function renderLightningArcs(ctx: CanvasRenderingContext2D, arcs: RenderL
 /** Hero projectiles in flight: arrows, bazooka rockets and thrown grenades. */
 export interface RenderHeroShot {
   kind: 'arrow' | 'rocket' | 'grenade';
+  /** Thrown variants drawn with their own look. */
+  skin?: 'molotov' | 'dynamite';
   x: number;
   y: number;
   z: number;
@@ -641,6 +645,28 @@ export function renderHeroShots(ctx: CanvasRenderingContext2D, shots: RenderHero
       ctx.fillStyle = '#dc2626';
       ctx.beginPath();
       ctx.arc(p.x + dir * 1.5, sy, 2, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (p.skin === 'molotov') {
+      // Spinning bottle with a burning rag
+      ctx.translate(p.x, sy);
+      ctx.rotate(time * 14);
+      inkedRoundRect(ctx, -2.2, -3.6, 4.4, 7.2, 1.4, '#92400e', '#f59e0b', undefined, 1);
+      inkedRoundRect(ctx, -1, -6, 2, 2.8, 0.6, '#e5e7eb');
+      ctx.fillStyle = Math.sin(time * 40) > 0 ? '#fde047' : '#f97316';
+      ctx.beginPath();
+      ctx.arc(0, -7.4, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (p.skin === 'dynamite') {
+      // Tumbling bundle of red sticks with a sparking fuse
+      ctx.translate(p.x, sy);
+      ctx.rotate(time * 10);
+      inkedRoundRect(ctx, -5, -3.4, 10, 3.2, 1, '#b91c1c', '#f87171', undefined, 1);
+      inkedRoundRect(ctx, -5, 0.2, 10, 3.2, 1, '#b91c1c', '#f87171', undefined, 1);
+      ctx.fillStyle = '#27272a';
+      ctx.fillRect(-1, -3.6, 2, 7.2);
+      ctx.fillStyle = Math.sin(time * 40) > 0 ? '#fde047' : '#ffffff';
+      ctx.beginPath();
+      ctx.arc(6.5, -3.4, 1.6, 0, Math.PI * 2);
       ctx.fill();
     } else {
       inkedCircle(ctx, p.x, sy, 3.4, '#3f6212', '#84cc16', 1.1);
@@ -1314,7 +1340,7 @@ export function renderUnitSprite(
         unit.state === 'attack' &&
         unit.attackProgress < 0.4
       ) {
-        const big = heroWeapon === 'bazooka' || heroWeapon === 'shotgun';
+        const big = heroWeapon === 'bazooka' || heroWeapon === 'shotgun' || heroWeapon === 'launcher' || heroWeapon === 'sniper';
         ctx.fillStyle = '#fb923c';
         ctx.beginPath();
         ctx.ellipse(big ? 33 : 29, -0.5, big ? 6 : 4, big ? 3.6 : 2.4, 0, 0, Math.PI * 2);
@@ -1347,11 +1373,11 @@ export function renderUnitSprite(
         }
       } else if (!isRanged && unit.state === 'attack' && unit.attackProgress > 0.2 && unit.attackProgress < 0.85) {
         // Crisp Illustrated Melee Slash Arc! (the hero's grenade throw has no slash)
-        if (heroWeapon !== 'grenade') {
-          ctx.strokeStyle = heroWeapon === 'sword' ? '#fde68a' : unit.subType === 'juggernaut' ? '#38bdf8' : '#fef08a';
-          ctx.lineWidth = heroWeapon === 'sword' ? 3.4 : unit.subType === 'juggernaut' ? 3.2 : 2.2;
+        if (!heroCfg || heroCfg.category !== 'thrown') {
+          ctx.strokeStyle = heroWeapon === 'katana' ? '#e0f2fe' : heroWeapon === 'chainsaw' ? '#fca5a5' : heroWeapon === 'sword' ? '#fde68a' : unit.subType === 'juggernaut' ? '#38bdf8' : '#fef08a';
+          ctx.lineWidth = heroCfg?.category === 'melee' ? 3.4 : unit.subType === 'juggernaut' ? 3.2 : 2.2;
           ctx.beginPath();
-          ctx.arc(14, 2, heroWeapon === 'sword' ? 21 : 15, -0.95, 0.85);
+          ctx.arc(14, 2, heroWeapon === 'katana' ? 25 : heroCfg?.category === 'melee' ? 21 : 15, -0.95, 0.85);
           ctx.stroke();
         }
       }

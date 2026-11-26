@@ -626,6 +626,37 @@ class SoundSystem {
         this.burst(ctx, out, t + 0.05, { type: 'bandpass', freq: 3000, freqEnd: 1600, q: 0.8, vol: 0.3, attack: 0.04, decay: 0.55 });
         break;
       }
+      case 'sniper': {
+        // .50 cal: huge crack, long rolling tail
+        if (!this.allow('hero_sniper', 0.2, ctx)) return;
+        this.burst(ctx, out, t, { type: 'highpass', freq: 3000 * j, vol: 0.7, decay: 0.008 });
+        this.burst(ctx, out, t, { type: 'lowpass', freq: 2600 * j, freqEnd: 380, vol: 1, decay: 0.3, send: 0.6, saturate: true });
+        this.tone(ctx, out, t, { type: 'sine', f0: 120 * j, f1: 38, vol: 0.7, decay: 0.2 });
+        break;
+      }
+      case 'minigun': {
+        // Buzzsaw of very fast, light shots over a motor whine
+        if (!this.allow('hero_minigun', 0.035, ctx)) return;
+        this.burst(ctx, out, t, { type: 'bandpass', freq: 1500 * j, q: 0.9, vol: 0.5, decay: 0.04, send: 0.15, saturate: true });
+        this.tone(ctx, out, t, { type: 'sawtooth', f0: 210 * j, f1: 150, vol: 0.12, decay: 0.045 });
+        break;
+      }
+      case 'launcher': {
+        // Hollow "thoomp"
+        if (!this.allow('hero_launcher', 0.15, ctx)) return;
+        this.tone(ctx, out, t, { type: 'sine', f0: 260, f1: 70, vol: 0.8, decay: 0.16 });
+        this.burst(ctx, out, t, { type: 'lowpass', freq: 900, freqEnd: 250, vol: 0.5, decay: 0.12, send: 0.3 });
+        break;
+      }
+      case 'chainsaw': {
+        // Two-stroke engine growl
+        if (!this.allow('hero_chainsaw', 0.07, ctx)) return;
+        this.tone(ctx, out, t, { type: 'sawtooth', f0: 95 * j, f1: 80, vol: 0.3, decay: 0.09 });
+        this.burst(ctx, out, t, { type: 'bandpass', freq: 1200 * j, q: 1.2, vol: 0.22, decay: 0.07, saturate: true });
+        break;
+      }
+      case 'molotov':
+      case 'dynamite':
       case 'grenade': {
         // Pin clink + throw whoosh
         if (!this.allow('hero_grenade', 0.2, ctx)) return;

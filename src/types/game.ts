@@ -327,6 +327,8 @@ export function getFortressCoins(
 // ---- HERO: the player's unique, fully manual unit and its arsenal -----------------
 export type HeroWeaponType =
   | 'sword'
+  | 'katana'
+  | 'chainsaw'
   | 'bow'
   | 'pistol'
   | 'dual_pistol'
@@ -335,7 +337,12 @@ export type HeroWeaponType =
   | 'uzi'
   | 'shotgun'
   | 'bazooka'
-  | 'grenade';
+  | 'sniper'
+  | 'minigun'
+  | 'launcher'
+  | 'grenade'
+  | 'molotov'
+  | 'dynamite';
 export type HeroWeaponCategory = 'melee' | 'ranged' | 'thrown';
 
 export interface HeroWeaponConfig {
@@ -358,6 +365,10 @@ export interface HeroWeaponConfig {
   projectileSpeed?: number;
   pierce?: number; // arrows: how many zombies one arrow can pass through
   blastRadius?: number;
+  /** Hitscan round that punches through zombie armor (sniper). */
+  ignoresArmor?: boolean;
+  /** Thrown: the blast leaves a burning zone on the road (molotov). */
+  leavesFire?: boolean;
 }
 
 /** Bullets, arrows and rockets keep flying until they hit an enemy (or leave the field). */
@@ -365,6 +376,8 @@ export const HERO_UNLIMITED_RANGE = 2400;
 
 export const HERO_WEAPONS: Record<HeroWeaponType, HeroWeaponConfig> = {
   sword: { id: 'sword', name: 'Espada', category: 'melee', icon: '🗡️', damage: 38, cooldown: 0.42, range: 36, magSize: 0, reloadTime: 0, knockback: 34 },
+  katana: { id: 'katana', name: 'Katana', category: 'melee', icon: '⚔️', damage: 30, cooldown: 0.26, range: 44, magSize: 0, reloadTime: 0, knockback: 20 },
+  chainsaw: { id: 'chainsaw', name: 'Motosierra', category: 'melee', icon: '🪚', damage: 12, cooldown: 0.08, range: 34, magSize: 0, reloadTime: 0, knockback: 1 },
   bow: { id: 'bow', name: 'Arco y Flecha', category: 'ranged', icon: '🏹', damage: 34, cooldown: 0.75, range: HERO_UNLIMITED_RANGE, magSize: 0, reloadTime: 0, knockback: 10, projectile: 'arrow', projectileSpeed: 520, pierce: 2 },
   pistol: { id: 'pistol', name: 'Pistola', category: 'ranged', icon: '🔫', damage: 18, cooldown: 0.3, range: HERO_UNLIMITED_RANGE, magSize: 17, reloadTime: 1.25, spread: 2, knockback: 8 },
   dual_pistol: { id: 'dual_pistol', name: 'Doble Pistola', category: 'ranged', icon: '🔫🔫', damage: 14, cooldown: 0.16, range: HERO_UNLIMITED_RANGE, magSize: 40, reloadTime: 1.9, spread: 4, knockback: 6 },
@@ -372,14 +385,19 @@ export const HERO_WEAPONS: Record<HeroWeaponType, HeroWeaponConfig> = {
   ak47: { id: 'ak47', name: 'AK-47', category: 'ranged', icon: 'AK', damage: 24, cooldown: 0.14, range: HERO_UNLIMITED_RANGE, magSize: 45, reloadTime: 2.4, spread: 6, knockback: 9 },
   uzi: { id: 'uzi', name: 'Uzi', category: 'ranged', icon: 'UZI', damage: 10, cooldown: 0.065, range: HERO_UNLIMITED_RANGE, magSize: 60, reloadTime: 1.8, spread: 8, knockback: 4 },
   shotgun: { id: 'shotgun', name: 'Escopeta', category: 'ranged', icon: '💥', damage: 12, cooldown: 0.8, range: 300, magSize: 10, reloadTime: 0.42, reloadPerShell: true, pellets: 6, knockback: 26 },
-  bazooka: { id: 'bazooka', name: 'Bazuca', category: 'ranged', icon: '🚀', damage: 95, cooldown: 1.5, range: HERO_UNLIMITED_RANGE, magSize: 1, reloadTime: 2.6, knockback: 40, projectile: 'rocket', projectileSpeed: 380, blastRadius: 52 },
-  grenade: { id: 'grenade', name: 'Granada', category: 'thrown', icon: '💣', damage: 85, cooldown: 1.1, range: 210, magSize: 0, reloadTime: 0, knockback: 40, projectile: 'grenade', blastRadius: 56 },
+  bazooka: { id: 'bazooka', name: 'Bazuca', category: 'ranged', icon: '🚀', damage: 280, cooldown: 1.2, range: HERO_UNLIMITED_RANGE, magSize: 1, reloadTime: 2.2, knockback: 40, projectile: 'rocket', projectileSpeed: 400, blastRadius: 84 },
+  sniper: { id: 'sniper', name: 'Francotirador', category: 'ranged', icon: '🎯', damage: 150, cooldown: 0.95, range: HERO_UNLIMITED_RANGE, magSize: 5, reloadTime: 2.4, spread: 0, knockback: 30, ignoresArmor: true },
+  minigun: { id: 'minigun', name: 'Minigun', category: 'ranged', icon: 'MG', damage: 9, cooldown: 0.045, range: HERO_UNLIMITED_RANGE, magSize: 150, reloadTime: 3.6, spread: 9, knockback: 5 },
+  launcher: { id: 'launcher', name: 'Lanzagranadas', category: 'ranged', icon: '🧨', damage: 150, cooldown: 0.75, range: HERO_UNLIMITED_RANGE, magSize: 6, reloadTime: 2.8, knockback: 30, projectile: 'rocket', projectileSpeed: 420, blastRadius: 62 },
+  grenade: { id: 'grenade', name: 'Granada', category: 'thrown', icon: '💣', damage: 200, cooldown: 1.0, range: 220, magSize: 0, reloadTime: 0, knockback: 40, projectile: 'grenade', blastRadius: 80 },
+  molotov: { id: 'molotov', name: 'Molotov', category: 'thrown', icon: '🔥', damage: 70, cooldown: 1.0, range: 220, magSize: 0, reloadTime: 0, knockback: 20, projectile: 'grenade', blastRadius: 62, leavesFire: true },
+  dynamite: { id: 'dynamite', name: 'Dinamita', category: 'thrown', icon: '🧨', damage: 340, cooldown: 2.2, range: 190, magSize: 0, reloadTime: 0, knockback: 60, projectile: 'grenade', blastRadius: 104 },
 };
 
 export const HERO_WEAPON_ORDER: Record<HeroWeaponCategory, HeroWeaponType[]> = {
-  melee: ['sword'],
-  ranged: ['bow', 'pistol', 'dual_pistol', 'm16', 'ak47', 'uzi', 'shotgun', 'bazooka'],
-  thrown: ['grenade'],
+  melee: ['sword', 'katana', 'chainsaw'],
+  ranged: ['bow', 'pistol', 'dual_pistol', 'm16', 'ak47', 'uzi', 'shotgun', 'sniper', 'minigun', 'launcher', 'bazooka'],
+  thrown: ['grenade', 'molotov', 'dynamite'],
 };
 
 /** Hero damage grows with the commander level (+6% per level). */
