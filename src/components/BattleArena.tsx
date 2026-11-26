@@ -20,6 +20,7 @@ import {
   ZombieType,
   ULTRA,
   getMissionEnemyCount,
+  getMissionHordeCount,
   HERO_WEAPONS,
   HERO_WEAPON_ORDER,
   HeroWeaponCategory,
@@ -268,7 +269,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   // ULTRA mode reinforces the enemy barricade too
   const missionBarricadeHp = Math.round(mission.barricadeHp * (ultra ? ULTRA.barricadeHp : 1));
   const [barricadeHp, setBarricadeHp] = useState<number>(0);
-  const [enemiesLeft, setEnemiesLeft] = useState<number>(getMissionEnemyCount(mission, ultra));
+  const [enemiesLeft, setEnemiesLeft] = useState<number>(
+    getMissionEnemyCount(mission, ultra) + getMissionHordeCount(mission, ultra)
+  );
   const [unitCooldowns, setUnitCooldowns] =
     useState<Record<SurvivorType, number>>(INITIAL_UNIT_COOLDOWNS);
   const [itemCooldowns, setItemCooldowns] = useState<Record<TacticalItemType, number>>({
@@ -332,6 +335,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     maxBarricadeHp: 1,
     // Zombies this mission still has to send (victory = budget spent + every zombie dead)
     enemiesToSpawn: getMissionEnemyCount(mission, ultra),
+    // FINAL HORDE: a huge last wave that closes every mission
+    hordeToSpawn: getMissionHordeCount(mission, ultra),
+    hordeBurstTimer: 0,
     barricadeX: WORLD_WIDTH - 106,
     barricadeShake: 0,
     barricadeThresholdIdx: 0,
@@ -738,7 +744,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         customY ?? ROAD_Y_MIN + 8 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 16);
       const isEmerging = (cfg.emergesFromGround && customX !== undefined) || fromCorpse;
       // Gentle campaign-tier scaling (+3.2% HP per tier past Tier 1) across all 50 missions
-      const tier = mission.campaignTier || mission.id;
+      const tier = (mission.campaignTier || mission.id) + (ultra ? ULTRA.tierBonus : 0);
       const missionScale = 1 + Math.max(0, tier - 1) * 0.032;
       const scaledMaxHp = Math.round(cfg.baseHp * missionScale * (ultra ? ULTRA.zombieHp : 1));
       const initialHp = Math.max(12, Math.round(scaledMaxHp * hpScale));
@@ -1597,7 +1603,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     window.setTimeout(() => setShowControlsHint(false), 7000);
 
     // Fair Campaign-Tier Scaled Opening Guard across Main, North & South routes!
-    const tier = mission.campaignTier || mission.id;
+    const tier = (mission.campaignTier || mission.id) + (ultra ? ULTRA.tierBonus : 0);
     simRef.current.units = [];
     if (tier === 1) {
       // Staggered 105px apart so player's first Redneck fights 1v1 cleanly!
@@ -2057,17 +2063,37 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           }
 
           sim.timeRemaining = Math.max(0, sim.timeRemaining - dt);
-          if (sim.timeRemaining <= 0 && !sim.hordeTriggered) {
+          let aliveNow = 0;
+          for (const zz of sim.units) if (zz.team === 'zombie' && zz.hp > 0) aliveNow++;
+          if (
+            !sim.hordeTriggered &&
+            (sim.timeRemaining <= 0 || (sim.enemiesToSpawn <= 0 && aliveNow <= 2))
+          ) {
             sim.hordeTriggered = true;
             setHordeTriggered(true);
             soundFX.playSiren();
-            sim.screenShake = 9;
-            addFloatingText('¡HORDA FINAL!', sim.camX + 360, 165, 28, '#ef4444', true);
-            for (let i = 0; i < 7; i++) {
-              spawnB(
-                i % 3 === 0 ? 'armored' : i % 2 === 0 ? 'runner' : 'crit_zombie',
-                sim.barricadeX - 54 + i * 12
-              );
+            sim.screenShake = 10;
+            sim.hordeBurstTimer = 1.6;
+            addFloatingText('☠️ ¡HORDA FINAL! ☠️', sim.camX + 360, 160, 30, '#ef4444', true);
+          }
+
+          // FINAL HORDE: bursts of zombies from the right until the whole horde is out
+          if (sim.hordeTriggered && sim.hordeToSpawn > 0) {
+            sim.hordeBurstTimer -= dt;
+            if (sim.hordeBurstTimer <= 0 && aliveNow < maxActiveZombies + 14) {
+              sim.hordeBurstTimer = 0.9;
+              const hordePool: ZombieType[] = [...mission.zombiePool, 'runner', 'armored', 'crit_zombie'];
+              if (ultra || tier >= 3) hordePool.push('zombie_dog');
+              if (ultra || tier >= 5) hordePool.push('acid_spitter');
+              if (ultra || tier >= 7) hordePool.push('flyer');
+              const burst = Math.min(sim.hordeToSpawn, 3 + Math.floor(Math.random() * 2) + (ultra ? 1 : 0));
+              for (let i = 0; i < burst; i++) {
+                sim.hordeToSpawn -= 1;
+                spawnZombie(
+                  hordePool[Math.floor(Math.random() * hordePool.length)],
+                  sim.barricadeX - 10 - i * 16 - Math.random() * 20
+                );
+              }
             }
           }
 
@@ -2086,7 +2112,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           }
 
           // VICTORY: the mission's whole enemy force has been sent and eliminated
-          if (sim.enemiesToSpawn <= 0 && aliveZombies === 0 && sim.phase === 'combat') {
+          if (
+            sim.enemiesToSpawn <= 0 &&
+            sim.hordeTriggered &&
+            sim.hordeToSpawn <= 0 &&
+            aliveZombies === 0 &&
+            sim.phase === 'combat'
+          ) {
             sim.phase = 'victory';
             soundFX.playCouragePickup();
             const integrityBonus =
@@ -3501,7 +3533,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             {
               let alive = 0;
               for (const zz of sim.units) if (zz.team === 'zombie' && zz.hp > 0) alive++;
-              setEnemiesLeft(sim.enemiesToSpawn + alive);
+              setEnemiesLeft(sim.enemiesToSpawn + sim.hordeToSpawn + alive);
             }
             {
               const hw = HERO_WEAPONS[sim.heroWeapon];

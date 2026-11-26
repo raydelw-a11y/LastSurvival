@@ -17,6 +17,7 @@ import {
   SurvivorType,
   sortUnitsByRoleAndDamage,
   getMissionEnemyCount,
+  getMissionHordeCount,
   HERO_OUTFITS,
   HERO_OUTFIT_ORDER,
   HeroOutfitConfig,
@@ -1227,7 +1228,10 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
 
         <div className="flex items-center justify-between text-[10px] bg-black/50 px-2.5 py-1.5 rounded border border-zinc-800 mb-2">
           <span>
-            🧟 <strong className="text-red-400">{getMissionEnemyCount(selectedMission)} enemigos</strong>
+            🧟 <strong className="text-red-400">
+              {getMissionEnemyCount(selectedMission) + getMissionHordeCount(selectedMission)}
+            </strong>{' '}
+            <span className="text-zinc-400">(con horda final)</span>
           </span>
           <span>
             Botín: <strong className="text-yellow-400">+{selectedMission.coinsReward} 🪙</strong>

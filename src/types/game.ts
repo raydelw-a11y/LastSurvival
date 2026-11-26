@@ -243,21 +243,31 @@ export const HERO_OUTFIT_ORDER: HeroOutfitType[] = ['commander', 'scout', 'tacti
 
 // ---- ULTRA mode: every mission can be replayed with much stronger enemies ----------
 export const ULTRA = {
-  zombieHp: 2.3,
-  zombieDamage: 1.8,
-  zombieSpeed: 1.15,
+  zombieHp: 3.2,
+  zombieDamage: 2.4,
+  zombieSpeed: 1.25,
   barricadeHp: 1.7,
-  waveInterval: 0.72,
-  extraEnemyChance: 0.55,
-  maxZombiesBonus: 6,
+  waveInterval: 0.6,
+  extraEnemyChance: 0.65,
+  maxZombiesBonus: 10,
   coinsMultiplier: 2.5,
+  /** ULTRA plays as if the mission were this many campaign tiers further on. */
+  tierBonus: 6,
+  enemyCount: 2.2,
+  hordeCount: 2,
 } as const;
 
 /** How many zombies a mission sends in total (victory = all of them eliminated). */
 export function getMissionEnemyCount(mission: { campaignTier?: number; id: number }, ultra = false): number {
   const tier = mission.campaignTier || mission.id;
   const base = mission.id === 1 ? 10 : 12 + tier * 2.2;
-  return Math.round(base * (ultra ? 1.6 : 1));
+  return Math.round(base * (ultra ? ULTRA.enemyCount : 1));
+}
+
+/** Size of the FINAL HORDE that closes every mission. */
+export function getMissionHordeCount(mission: { campaignTier?: number; id: number }, ultra = false): number {
+  const tier = mission.campaignTier || mission.id;
+  return Math.round((8 + tier * 1.9) * (ultra ? ULTRA.hordeCount : 1));
 }
 
 // ---- HERO: the player's unique, fully manual unit and its arsenal -----------------
