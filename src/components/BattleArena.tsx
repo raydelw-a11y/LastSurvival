@@ -1566,7 +1566,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     if (heroAlive()) {
       setShowControlsHint(false);
       setWeaponMenu(null);
-      if (coords.sx < LOGICAL_WIDTH * 0.5) {
+      // Joystick only on the far-left 40% and only if no finger is already moving the hero:
+      // while retreating, a second touch anywhere (even behind / diagonal) always shoots
+      if (!sim.heroJoy.active && coords.sx < LOGICAL_WIDTH * 0.4) {
         sim.heroJoy = { active: true, pointerId: e.pointerId, ox: coords.sx, oy: coords.y, dx: 0, dy: 0 };
       } else {
         sim.heroFirePointers.set(e.pointerId, performance.now());
