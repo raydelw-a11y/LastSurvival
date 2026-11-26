@@ -1924,6 +1924,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               }
             }
 
+            // Static structures (turret, Tesla, watchtower) are anchored: hits never push them
+            if (u.team === 'survivor' && (u.isStationary || u.inTowerId)) {
+              u.vx = 0;
+              u.vy = 0;
+            }
             if (Math.abs(u.vx) > 0.5 || Math.abs(u.vy) > 0.5) {
               u.x += u.vx * dt;
               u.y += u.vy * dt;

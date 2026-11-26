@@ -7,7 +7,7 @@ export const LOGICAL_HEIGHT = 336;
 export const WORLD_WIDTH = 1080;
 // Battle road is 1.5x deeper than the original 180..278 band, extended upward
 export const ROAD_Y_MAX = 278;
-export const ROAD_Y_MIN = ROAD_Y_MAX - Math.round((278 - 180) * 1.5); // 131
+export const ROAD_Y_MIN = 98; // ~1.85x the original 180..278 band, extended upward
 /** How far the horizon scenery (guardrail, trees, buildings) moved up to make room. */
 const HORIZON_SHIFT = 180 - ROAD_Y_MIN; // 49
 
