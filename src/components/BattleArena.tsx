@@ -3954,7 +3954,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               if (paused) resumeBattle();
               else pauseBattle();
             }}
-            className="mt-0.5 text-white hover:text-amber-300 font-pixel text-xs drop-shadow-[0_1px_1px_rgba(0,0,0,0.95)] px-1 cursor-pointer"
+            className="w-9 h-9 flex items-center justify-center rounded-md bg-black/70 hover:bg-zinc-800 active:scale-95 border-2 border-zinc-300/80 text-white hover:text-amber-300 font-pixel text-base leading-none shadow-lg cursor-pointer"
             title="Pausar / Reanudar Combate [Esc]"
           >
             {paused ? '▶' : '||'}
