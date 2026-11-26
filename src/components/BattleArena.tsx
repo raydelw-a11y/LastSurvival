@@ -744,8 +744,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       }
 
       if (cfg.isBarrier) {
-        // Sandbag wall: three piles stacked in depth that ground zombies must break through
-        const segHp = Math.max(30, Math.round(hp / 3));
+        // Sandbag wall: four piles stacked in depth that ground zombies must break through
+        const segHp = Math.max(30, Math.round(hp / BARRICADE_SEGMENT_OFFSETS.length));
         for (const off of BARRICADE_SEGMENT_OFFSETS) {
           sim.obstacles.push({
             id: `sand_${Date.now()}_${Math.random()}`,
@@ -1394,30 +1394,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           sim.levelShockwaveTimer = Math.max(0, sim.levelShockwaveTimer - dt);
         }
 
-        // CAMERA: follows the action across the 1.5x battlefield (drag / wheel / minimap override it)
-        if (sim.camManualTimer > 0) {
-          sim.camManualTimer = Math.max(0, sim.camManualTimer - dt);
-        } else {
-          let camTarget: number;
-          if (sim.phase === 'bus_ramming') {
-            camTarget = sim.busX - 160;
-          } else {
-            let front = sim.busX + 200;
-            let nearestThreat = Infinity;
-            for (const cu of sim.units) {
-              if (cu.hp <= 0 || cu.state === 'corpse' || cu.state === 'dying') continue;
-              if (cu.team === 'survivor' && !cu.isStationary && !cu.inTowerId) {
-                front = Math.max(front, cu.x);
-              } else if (cu.team === 'zombie') {
-                nearestThreat = Math.min(nearestThreat, cu.x);
-              }
-            }
-            camTarget = front - LOGICAL_WIDTH * 0.6;
-            // Never lose sight of the zombie closest to the bus
-            if (nearestThreat < Infinity) camTarget = Math.min(camTarget, nearestThreat - 150);
-          }
-          sim.camX += (clampCam(camTarget) - sim.camX) * Math.min(1, dt * 2.2);
-        }
+        // CAMERA: never moves on its own — only drag, mouse wheel or minimap taps scroll it
+        if (sim.camManualTimer > 0) sim.camManualTimer = Math.max(0, sim.camManualTimer - dt);
 
         if (sim.phase === 'bus_ramming') {
           sim.busX += 340 * dt;
@@ -2780,7 +2758,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           ctx.strokeStyle = `rgba(253, 224, 71, ${Math.max(0, 1 - prog) * 0.85})`;
           ctx.lineWidth = 4.5 * (1 - prog * 0.6);
           ctx.beginPath();
-          ctx.ellipse(sim.busX + 115, 228, rx, ry, 0, 0, Math.PI * 2);
+          ctx.ellipse(sim.busX + 115, (ROAD_Y_MIN + ROAD_Y_MAX) / 2, rx, ry, 0, 0, Math.PI * 2);
           ctx.stroke();
           ctx.restore();
         }

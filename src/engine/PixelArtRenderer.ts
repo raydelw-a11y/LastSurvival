@@ -204,7 +204,7 @@ export const TESLA_TIP_Z = 37;
 /** Height of the Watchtower platform: the shooter inside stands at this z. */
 export const TOWER_PLATFORM_Z = 27;
 /** Depth offsets of the three sandbag piles that make up one barricade. */
-export const BARRICADE_SEGMENT_OFFSETS = [-27, 0, 27];
+export const BARRICADE_SEGMENT_OFFSETS = [-48, -16, 16, 48];
 /** Visual hover height of flying zombies above their ground shadow. */
 export const FLYER_HOVER_Z = 30;
 
@@ -638,7 +638,7 @@ export function renderPlacementGhost(
     ctx.strokeStyle = 'rgba(250, 204, 21, 0.85)';
     ctx.setLineDash([5, 4]);
     ctx.lineWidth = 1.4;
-    ctx.strokeRect(x - 20, y + o[0] - 18, 40, o[2] - o[0] + 26);
+    ctx.strokeRect(x - 20, y + o[0] - 18, 40, o[o.length - 1] - o[0] + 26);
     ctx.restore();
     return;
   }
@@ -1415,8 +1415,8 @@ export function renderDynamicLightmap(
 
   if (biome === 'graveyard') {
     const flk = 0.22 + Math.sin(time * 9) * 0.04;
-    drawLightHalo(lctx, 100, 59, 36, `rgba(254, 240, 138, ${flk})`);
-    drawLightHalo(lctx, 222, 59, 36, `rgba(254, 240, 138, ${flk})`);
+    drawLightHalo(lctx, 100, 35, 36, `rgba(254, 240, 138, ${flk})`);
+    drawLightHalo(lctx, 222, 35, 36, `rgba(254, 240, 138, ${flk})`);
   } else if (biome === 'junkyard_city') {
     drawLightHalo(lctx, 151, 17, 28, 'rgba(249, 115, 22, 0.24)');
     drawLightHalo(lctx, 256, 17, 28, 'rgba(249, 115, 22, 0.24)');

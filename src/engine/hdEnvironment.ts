@@ -5,8 +5,11 @@ export const LOGICAL_WIDTH = 720; // Camera viewport width (what fits on screen)
 export const LOGICAL_HEIGHT = 336;
 /** The battlefield is 1.5x longer than the screen; a camera scrolls across it. */
 export const WORLD_WIDTH = 1080;
-export const ROAD_Y_MIN = 180;
+// Battle road is 1.5x deeper than the original 180..278 band, extended upward
 export const ROAD_Y_MAX = 278;
+export const ROAD_Y_MIN = ROAD_Y_MAX - Math.round((278 - 180) * 1.5); // 131
+/** How far the horizon scenery (guardrail, trees, buildings) moved up to make room. */
+const HORIZON_SHIFT = 180 - ROAD_Y_MIN; // 49
 
 const BIOME_BAKE_SCALE = 2.5; // 2700x840 crisp offscreen cache (full 1080px world)
 const bakedBiomeCache = new Map<string, HTMLCanvasElement>();
@@ -162,7 +165,7 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
   ctx.lineCap = 'round';
 
   // 1. Atmospheric Sky Gradient
-  const skyGrad = ctx.createLinearGradient(0, 0, 0, 152);
+  const skyGrad = ctx.createLinearGradient(0, 0, 0, 152 - HORIZON_SHIFT);
   if (biome === 'forest_highway') {
     skyGrad.addColorStop(0, '#1e3a4c');
     skyGrad.addColorStop(0.55, '#49747a');
@@ -181,11 +184,11 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
     skyGrad.addColorStop(1, '#9e6b49');
   }
   ctx.fillStyle = skyGrad;
-  ctx.fillRect(0, 0, WORLD_WIDTH, 155);
+  ctx.fillRect(0, 0, WORLD_WIDTH, ROAD_Y_MIN);
 
   // Sun / Moon disc with soft atmospheric halo
   const sunX = biome === 'graveyard' ? 560 : 510;
-  const sunY = biome === 'farm_crossing' ? 76 : 48;
+  const sunY = biome === 'farm_crossing' ? 50 : 36;
   const halo = ctx.createRadialGradient(sunX, sunY, 6, sunX, sunY, 75);
   halo.addColorStop(0, biome === 'graveyard' ? 'rgba(224,242,254,0.65)' : 'rgba(254,240,138,0.55)');
   halo.addColorStop(1, 'rgba(255,255,255,0)');
@@ -197,6 +200,10 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
   ctx.beginPath();
   ctx.arc(sunX, sunY, 15, 0, Math.PI * 2);
   ctx.fill();
+
+  // Horizon scenery (ridges, landmarks, shoulder, guardrail) sits higher so the road can be deeper
+  ctx.save();
+  ctx.translate(0, -HORIZON_SHIFT);
 
   // 2. Distant Parallax Ridges / Skyline
   ctx.fillStyle =
@@ -306,7 +313,6 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
     biome === 'graveyard' ? '#1e2631' : biome === 'forest_highway' ? '#3d4a35' : '#4a3b2f';
   ctx.fillStyle = dirtCol;
   ctx.fillRect(0, 148, WORLD_WIDTH, 34);
-  ctx.fillRect(0, ROAD_Y_MAX - 2, WORLD_WIDTH, LOGICAL_HEIGHT - ROAD_Y_MAX + 4);
 
   // Highway W-beam Steel Guardrail along top edge of road
   for (let gx = 8; gx < WORLD_WIDTH; gx += 36) {
@@ -319,7 +325,13 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
   drawWreckedSedanHD(ctx, 476, 149, '#7f1d1d', '#991b1b');
   drawWreckedSedanHD(ctx, 812, 150, '#3f6212', '#4d7c0f');
 
-  // 5. Rich Multi-Layered Asphalt Roadway (180..278)
+  ctx.restore();
+
+  // Lower shoulder below the road (not shifted)
+  ctx.fillStyle = dirtCol;
+  ctx.fillRect(0, ROAD_Y_MAX - 2, WORLD_WIDTH, LOGICAL_HEIGHT - ROAD_Y_MAX + 4);
+
+  // 5. Rich Multi-Layered Asphalt Roadway (ROAD_Y_MIN..ROAD_Y_MAX)
   const roadGrad = ctx.createLinearGradient(0, ROAD_Y_MIN, 0, ROAD_Y_MAX);
   roadGrad.addColorStop(0, '#2c3038');
   roadGrad.addColorStop(0.5, '#363b44');
@@ -385,7 +397,7 @@ export function renderBiomeBackground(
 
   if (biome === 'farm_crossing') {
     const hubX = 440;
-    const hubY = 56;
+    const hubY = 56 - HORIZON_SHIFT;
     ctx.save();
     ctx.strokeStyle = '#f1f5f9';
     ctx.lineWidth = 2.2;
@@ -408,7 +420,7 @@ export function renderBiomeBackground(
     ctx.fillStyle = mistGrad;
     for (let i = -1; i <= 4; i++) {
       ctx.beginPath();
-      ctx.ellipse(i * 250 + shift * 0.45, 164, 110, 10, 0, 0, Math.PI * 2);
+      ctx.ellipse(i * 250 + shift * 0.45, 164 - HORIZON_SHIFT, 110, 10, 0, 0, Math.PI * 2);
       ctx.ellipse(i * 270 - shift * 0.35, 272, 125, 11, 0, 0, Math.PI * 2);
       ctx.fill();
     }
@@ -418,11 +430,11 @@ export function renderBiomeBackground(
       const flk = Math.sin(time * 16 + idx * 2.1) * 2.4;
       ctx.fillStyle = 'rgba(249, 115, 22, 0.85)';
       ctx.beginPath();
-      ctx.ellipse(sx, 33 - flk * 0.5, 4.2, 6.5 + flk, 0, 0, Math.PI * 2);
+      ctx.ellipse(sx, 33 - HORIZON_SHIFT + 14 - flk * 0.5, 4.2, 6.5 + flk, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = '#fef08a';
       ctx.beginPath();
-      ctx.ellipse(sx, 34 - flk * 0.3, 2, 3.5, 0, 0, Math.PI * 2);
+      ctx.ellipse(sx, 34 - HORIZON_SHIFT + 14 - flk * 0.3, 2, 3.5, 0, 0, Math.PI * 2);
       ctx.fill();
     });
   }
@@ -646,6 +658,21 @@ export function renderBarricade(
 
   drawSoftShadow(ctx, bx - 6, (ROAD_Y_MIN + ROAD_Y_MAX) * 0.5 + 8, 48, 56, 0.48);
 
+  // Upper section covering the deeper road: jersey barrier, drum & razor wire
+  inkedRoundRect(ctx, bx - 22, ROAD_Y_MIN + 6, 36, 22, 3, '#a8a29e', '#d6d3d1', '#57534e');
+  ctx.fillStyle = '#dc2626';
+  for (const sx of [bx - 17, bx - 5, bx + 7]) {
+    ctx.fillRect(sx, ROAD_Y_MIN + 10, 5, 4);
+  }
+  renderOilDrumHD(ctx, bx + 8, ROAD_Y_MIN + 4, '#7f1d1d', '#dc2626', '#f87171', ratio < 0.4 ? 2 : ratio < 0.7 ? 1 : 0, true);
+  ctx.strokeStyle = '#cbd5e1';
+  ctx.lineWidth = 1.4;
+  for (let wx = bx - 18; wx <= bx + 14; wx += 7.5) {
+    ctx.beginPath();
+    ctx.arc(wx, ROAD_Y_MIN + 32, 6, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
   // Angled Steel I-Beam Spikes
   const beamH = ratio > 0.65 ? 42 : ratio > 0.3 ? 30 : 18;
   inkedRoundRect(ctx, bx - 6, 184 - beamH, 22, beamH, 2.5, '#3f3f46', '#71717a', '#18181b');
@@ -705,7 +732,7 @@ export function renderBarricade(
   // Barricade Structural Integrity Bar
   const barW = 60;
   const barX = bx - 34;
-  const barY = 132;
+  const barY = ROAD_Y_MIN - 28;
   inkedRoundRect(ctx, barX, barY, barW, 6.5, 2.5, '#09090b');
   if (ratio > 0) {
     inkedRoundRect(ctx, barX + 1, barY + 1, Math.max(3, (barW - 2) * ratio), 4.5, 1.8, '#f59e0b', '#fef08a');
