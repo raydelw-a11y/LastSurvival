@@ -982,7 +982,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       {/* ===================================================================== */}
       {/* TOP-LEFT FLOATING DEAD AHEAD BARS: Fuel, Stars & Commander Level      */}
       {/* ===================================================================== */}
-      <div className="absolute top-2 left-3 z-20 flex items-center gap-2.5 flex-wrap">
+      <div className="absolute top-2 left-3 safe-l z-20 flex items-center gap-2.5 flex-wrap">
         <div className="relative flex items-center">
           <div className="z-10 -mr-2 w-7 h-7 rounded bg-red-600 border-2 border-[#181410] flex items-center justify-center text-xs shadow">
             ⛽
@@ -1045,7 +1045,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       {/* ===================================================================== */}
       {/* RIGHT-EDGE VERTICAL NORTH / CENTER / SOUTH QUICK COMPASS (MOBILE+PC)  */}
       {/* ===================================================================== */}
-      <div className="absolute right-3 top-1/2 -translate-y-1/2 z-20 flex flex-col gap-1 bg-zinc-950/90 border border-zinc-700 p-1 rounded-lg shadow-xl">
+      <div className="absolute right-3 safe-r top-1/2 -translate-y-1/2 z-20 flex flex-col gap-1 bg-zinc-950/90 border border-zinc-700 p-1 rounded-lg shadow-xl">
         <button
           onClick={() => panVerticalBand('north')}
           className="px-1.5 py-1 rounded bg-zinc-800 hover:bg-sky-500 hover:text-zinc-950 text-[9px] font-extrabold text-sky-200 transition cursor-pointer"
@@ -1097,7 +1097,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       {/* ===================================================================== */}
       {/* TOP-RIGHT FLOATING COINS & SAFE RESET BAR                             */}
       {/* ===================================================================== */}
-      <div className="absolute top-2 right-3 z-20 flex items-center gap-2">
+      <div className="absolute top-2 right-3 safe-r z-20 flex items-center gap-2">
         <MuteButton />
         <button
           type="button"
@@ -1163,7 +1163,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       {/* ===================================================================== */}
       {/* BOTTOM-LEFT FLOATING BUTTONS: Escuadrón, Taller Bus & Zombiepedia     */}
       {/* ===================================================================== */}
-      <div className="absolute bottom-3 left-3 z-20 flex items-center gap-2">
+      <div className="absolute bottom-3 left-3 safe-l z-20 flex items-center gap-2">
         <button
           onClick={() => setModalTab('deck')}
           className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#3b3829]/95 hover:bg-[#4f4b37] border-2 border-yellow-400 text-xs font-extrabold text-white shadow-lg cursor-pointer"
@@ -1203,7 +1203,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       {/* ===================================================================== */}
       {/* BOTTOM-RIGHT FLOATING COMPACT MISSION LAUNCH CARD                     */}
       {/* ===================================================================== */}
-      <div className="absolute bottom-3 right-3 z-20 w-64 sm:w-72 bg-[#26241b]/95 border-2 border-[#8e8a6b] rounded-xl p-3 shadow-2xl">
+      <div className="absolute bottom-3 right-3 safe-r z-20 w-64 sm:w-72 bg-[#26241b]/95 border-2 border-[#8e8a6b] rounded-xl p-3 shadow-2xl">
         <div className="flex items-center justify-between mb-1">
           <span className="text-[10px] font-bold uppercase text-yellow-400">
             {selectedMission.sector}

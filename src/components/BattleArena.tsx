@@ -3947,7 +3947,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       {/* ===================================================================== */}
       {/* TOP-LEFT FLOATING HUD: Pause "||", Courage Flasks, Rage Drop & Level  */}
       {/* ===================================================================== */}
-      <div className="absolute top-1.5 left-3 z-20 flex items-start gap-1.5">
+      <div className="absolute top-1.5 left-3 safe-l z-20 flex items-start gap-1.5">
         <div className="flex flex-col items-center gap-1">
           <button
             onClick={() => {
@@ -4077,7 +4077,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       {/* ===================================================================== */}
       {/* TOP-RIGHT FLOATING COINS BAR & CAMPAIGN MAP BUTTON                    */}
       {/* ===================================================================== */}
-      <div className="absolute top-2 right-3 z-20 flex items-center gap-2">
+      <div className="absolute top-2 right-3 safe-r z-20 flex items-center gap-2">
         <button
           onClick={onRetreat}
           className="px-2 py-0.5 rounded-xs bg-[#323626]/90 hover:bg-[#414732] border border-[#8e9472] text-[10px] font-extrabold text-amber-200 shadow cursor-pointer"
@@ -4106,7 +4106,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       {/* ===================================================================== */}
       {/* RIGHT-SIDE HORDE TIMER ("02:30") + TELEGRAPHED RUSH LANE BADGE        */}
       {/* ===================================================================== */}
-      <div className="absolute top-[24%] right-3.5 z-20 flex flex-col items-center pointer-events-none">
+      <div className="absolute top-[24%] right-3.5 safe-r z-20 flex flex-col items-center pointer-events-none">
         <span
           className="font-tactical font-bold text-xs text-white mb-0.5"
           style={{ textShadow: '1px 1px 0 #000, -1px -1px 0 #000' }}
@@ -4126,7 +4126,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       {/* TELEGRAPHED RUSH WARNING AT EXACT Y LANE */}
       {rushWarningState.active && (
         <div
-          className="absolute right-2 z-30 flex items-center gap-1 px-2 py-0.5 rounded bg-red-700/95 border-2 border-yellow-300 shadow-lg animate-pulse pointer-events-none"
+          className="absolute right-2 safe-r z-30 flex items-center gap-1 px-2 py-0.5 rounded bg-red-700/95 border-2 border-yellow-300 shadow-lg animate-pulse pointer-events-none"
           style={{ top: `${Math.max(48, Math.min(82, rushWarningState.yPct))}%` }}
         >
           <span className="text-xs">⚠️</span>
@@ -4181,7 +4181,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
       {/* ENEMIES REMAINING (victory when it reaches 0) */}
       {battleResult === 'none' && (
-        <div className="absolute top-[86px] right-2 z-20 px-2 py-0.5 rounded bg-black/80 border border-red-500/70 text-[10px] font-extrabold text-red-200 shadow pointer-events-none">
+        <div className="absolute top-[86px] right-2 safe-r z-20 px-2 py-0.5 rounded bg-black/80 border border-red-500/70 text-[10px] font-extrabold text-red-200 shadow pointer-events-none">
           🧟 Enemigos: <span className="text-white">{enemiesLeft}</span>
         </div>
       )}
@@ -4196,7 +4196,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       {/* HERO WEAPON PANEL (left side): melee / ranged / thrown */}
       {battleResult === 'none' && (
         <div
-          className="absolute left-1.5 top-[34%] z-20 flex flex-col gap-1 select-none"
+          className="absolute left-1.5 safe-l top-[34%] z-20 flex flex-col gap-1 select-none"
           onPointerDown={(e) => e.stopPropagation()}
         >
           {(['melee', 'ranged', 'thrown'] as HeroWeaponCategory[]).map((cat) => {
@@ -4283,19 +4283,24 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               <div className="font-tactical text-[11px] font-extrabold text-white mt-0.5">∞</div>
             )}
           </button>
-          {heroAmmoHud.mag > 1 && (
-            <button
-              type="button"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => requestHeroReload()}
-              disabled={heroAmmoHud.reloading || heroAmmoHud.ammo >= heroAmmoHud.mag}
-              title="Recargar ahora aunque queden balas [R]"
-              className="w-[46px] rounded bg-sky-700/90 hover:bg-sky-600 disabled:bg-zinc-800/80 disabled:text-zinc-500 border border-sky-300/70 disabled:border-zinc-700 py-1 text-[8px] font-extrabold text-white leading-none cursor-pointer disabled:cursor-default"
-            >
-              ⟳ RECARGAR
-            </button>
-          )}
         </div>
+      )}
+
+      {/* RELOAD BUTTON (right side, inset from the edge so the thumb reaches it past the notch) */}
+      {battleResult === 'none' && heroAmmoHud.mag > 1 && (
+        <button
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => requestHeroReload()}
+          disabled={heroAmmoHud.reloading || heroAmmoHud.ammo >= heroAmmoHud.mag}
+          title="Recargar ahora aunque queden balas [R]"
+          className="absolute bottom-20 right-8 safe-r z-30 w-14 h-14 rounded-full bg-sky-700/90 hover:bg-sky-600 active:scale-95 disabled:bg-zinc-800/75 disabled:text-zinc-500 border-2 border-sky-300/80 disabled:border-zinc-600 shadow-lg flex flex-col items-center justify-center gap-0.5 text-white leading-none cursor-pointer disabled:cursor-default select-none touch-none"
+        >
+          <span className="text-lg font-extrabold leading-none">⟳</span>
+          <span className="text-[7px] font-extrabold">
+            {heroAmmoHud.reloading ? 'CARGANDO' : `${heroAmmoHud.ammo}/${heroAmmoHud.mag}`}
+          </span>
+        </button>
       )}
 
       {/* HERO DOWN: respawn countdown */}
@@ -4342,7 +4347,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       {/* OPTIONAL TOUCH WASD D-PAD (bottom-left)                               */}
       {/* ===================================================================== */}
       {showDpad && (
-        <div className="absolute bottom-16 left-3 z-30 grid grid-cols-3 gap-1 w-24 h-24 opacity-85 select-none touch-none">
+        <div className="absolute bottom-16 left-3 safe-l z-30 grid grid-cols-3 gap-1 w-24 h-24 opacity-85 select-none touch-none">
           <div />
           <button
             type="button"
@@ -4396,7 +4401,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       {/* ===================================================================== */}
       {/* BOTTOM TACTICAL DECK: Compact Slots w/ Small Names + 2-Tap Items      */}
       {/* ===================================================================== */}
-      <div className="absolute bottom-1 inset-x-1 z-20 overflow-x-auto overscroll-x-contain">
+      <div className="absolute bottom-1 inset-x-1 safe-l safe-r z-20 overflow-x-auto overscroll-x-contain">
         <div className="flex items-end gap-[3px] w-max mx-auto px-1 py-0.5">
         {/* SURVIVOR SQUAD: one full-width row — melee group, then ranged group (by damage) */}
         <div className="flex items-end gap-[3px]">

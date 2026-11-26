@@ -22,7 +22,7 @@ import { ContinuePrompt } from './components/ContinuePrompt';
 import { useCloudSync } from './sync/useCloudSync';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '10:37 AM - 11/26/2026';
+const FALLBACK_TIMESTAMP = '11:27 AM - 11/26/2026';
 export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 const CURRENT_BUILD_ID = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : '';
@@ -755,7 +755,7 @@ export function App() {
         onClick={() => checkRemoteUpdate('manual')}
         className={`fixed z-[9999] text-[10px] sm:text-[11px] text-yellow-300 font-mono font-semibold bg-black/85 hover:bg-zinc-900 px-2.5 py-0.5 rounded border border-yellow-500/60 shadow-lg cursor-pointer ${
           // In battle the full-width unit bar owns the bottom edge: sit in the top-right sky instead
-          activeBattleMission ? 'top-9 right-2' : 'bottom-2 right-3'
+          activeBattleMission ? 'top-9 right-2 safe-r' : 'bottom-2 right-3 safe-r'
         }`}
         title="Toca para comprobar actualizaciones ahora"
       >

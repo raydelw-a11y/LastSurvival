@@ -12,6 +12,18 @@
   }
 }
 
+/* iPhone landscape: keep edge-anchored UI clear of the notch / Dynamic Island and rounded corners */
+:root {
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+}
+.safe-l {
+  margin-left: var(--safe-l);
+}
+.safe-r {
+  margin-right: var(--safe-r);
+}
+
 .pixel-canvas,
 .hd-canvas {
   image-rendering: auto;

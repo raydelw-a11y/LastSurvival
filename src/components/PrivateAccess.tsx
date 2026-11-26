@@ -181,7 +181,7 @@ export const PrivateAccess: React.FC<PrivateAccessProps> = ({
       <button
         type="button"
         onClick={onCheckUpdate}
-        className="fixed bottom-2 right-3 z-[9999] text-[10px] sm:text-[11px] text-yellow-300 font-mono font-semibold bg-black/85 hover:bg-zinc-900 px-2.5 py-0.5 rounded border border-yellow-500/60 shadow-lg cursor-pointer"
+        className="fixed bottom-2 right-3 safe-r z-[9999] text-[10px] sm:text-[11px] text-yellow-300 font-mono font-semibold bg-black/85 hover:bg-zinc-900 px-2.5 py-0.5 rounded border border-yellow-500/60 shadow-lg cursor-pointer"
         title="Toca para comprobar actualizaciones ahora"
       >
         {isUpdating ? '⚡ Actualizando nueva versión...' : `Actualizado: ${buildTimestamp}`}
