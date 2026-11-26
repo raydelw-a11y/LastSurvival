@@ -22,7 +22,7 @@ import { ContinuePrompt } from './components/ContinuePrompt';
 import { useCloudSync } from './sync/useCloudSync';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '10:38 PM - 11/25/2026';
+const FALLBACK_TIMESTAMP = '10:43 PM - 11/25/2026';
 export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 const CURRENT_BUILD_ID = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : '';
@@ -71,6 +71,20 @@ const INITIAL_PROGRESS: PlayerProgress = {
   unlockedMissions: [1],
   discoveredCaches: [],
 };
+
+/** Where the map bus parks: next mission after a win, the same mission after a loss. */
+function nextMissionAfterLastPlayed(p: PlayerProgress): number | null {
+  const last = p.lastPlayedMission;
+  if (!last) {
+    const anyStars = Object.values(p.missionStars).some((s) => s > 0);
+    if (!anyStars) return null;
+    const firstOpen = p.unlockedMissions.find((m) => !(p.missionStars[m] > 0));
+    return firstOpen ?? p.unlockedMissions[p.unlockedMissions.length - 1] ?? 1;
+  }
+  // lastPlayedMission is the mission launched (stays there after a loss / retreat)
+  // and moves to the next mission after a win (normal or ULTRA)
+  return p.unlockedMissions.includes(last) ? last : p.unlockedMissions[p.unlockedMissions.length - 1] || 1;
+}
 
 function sanitizeProgress(rawObj: Partial<PlayerProgress>): PlayerProgress {
   const lvl = Math.max(1, Math.min(MAX_COMMANDER_LEVEL, Math.floor(rawObj.busLevel ?? 1)));
@@ -189,6 +203,8 @@ export function App() {
   });
 
   const [selectedMissionId, setSelectedMissionId] = useState<number>(() => {
+    const resume = nextMissionAfterLastPlayed(progress);
+    if (resume) return resume;
     for (let id = 1; id <= MISSION_NODES.length; id++) {
       if (progress.unlockedMissions.includes(id) && !(progress.missionStars[id] > 0)) {
         return id;
@@ -373,18 +389,19 @@ export function App() {
 
   // Where "Continuar" resumes: last mission played on ANY synced device (falls back to the frontier for old saves)
   const continueMission = useMemo<MissionNode | null>(() => {
-    let id = progress.lastPlayedMission;
-    if (!id) {
-      const anyStars = Object.values(progress.missionStars).some((s) => s > 0);
-      if (!anyStars) return null;
-      id = progress.unlockedMissions.find((m) => !(progress.missionStars[m] > 0));
-      id = id ?? progress.unlockedMissions[progress.unlockedMissions.length - 1];
-    }
-    if (!progress.unlockedMissions.includes(id)) {
-      id = progress.unlockedMissions[progress.unlockedMissions.length - 1] || 1;
-    }
-    return MISSION_NODES.find((m) => m.id === id) ?? null;
+    const id = nextMissionAfterLastPlayed(progress);
+    return id ? MISSION_NODES.find((m) => m.id === id) ?? null : null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [progress.lastPlayedMission, progress.missionStars, progress.unlockedMissions]);
+
+  // Back on the map after any battle (win, loss, retreat, ULTRA) or a cloud sync:
+  // park the bus on the mission after the last one played
+  useEffect(() => {
+    if (activeBattleMission) return;
+    const id = nextMissionAfterLastPlayed(progress);
+    if (id) setSelectedMissionId(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeBattleMission, progress.lastPlayedMission, progress.lastPlayedAt, progress.missionStars]);
 
   const showContinuePrompt =
     unlockedApp && !activeBattleMission && !continueDismissed && !showCloudPanel && !!continueMission;
@@ -441,6 +458,8 @@ export function App() {
               ...(prev.ultraStars || {}),
               [mId]: Math.max((prev.ultraStars || {})[mId] || 0, stars),
             },
+            lastPlayedMission: Math.min(MISSION_NODES.length, nextId),
+            lastPlayedAt: Date.now(),
           }));
           return null;
         }

@@ -145,8 +145,14 @@ const TOWER_RANGE_BONUS = 1.35;
 const JOY_RADIUS = 34;
 const HERO_WEAPON_KEY = 'ls_hero_weapon_v1';
 const HERO_RESPAWN_SECONDS = 10;
-/** Holding the right half longer than this fires; a shorter tap reloads. */
+/** Holding the right half longer than this keeps firing (a tap fires one shot). */
 const HOLD_TO_FIRE_MS = 170;
+/** Hero gun muzzle (world px from the hero's feet), matching the 1.45x hero rig. */
+const HERO_MUZZLE_X = 36;
+const HERO_MUZZLE_Z = 27;
+/** spawnWeaponTracerAndShell adds 13px forward and aims 15px above targetY. */
+const HERO_TRACER_X = HERO_MUZZLE_X - 13;
+const HERO_LEVEL_AIM = HERO_MUZZLE_Z - 15;
 
 interface HeroShot extends RenderHeroShot {
   dmg: number;
@@ -1458,10 +1464,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     const pressedAt = sim.heroFirePointers.get(e.pointerId);
     if (pressedAt !== undefined) {
       sim.heroFirePointers.delete(e.pointerId);
-      // A quick single tap on the right half reloads firearms (holding fires instead)
-      if (performance.now() - pressedAt < HOLD_TO_FIRE_MS && HERO_WEAPONS[sim.heroWeapon].magSize > 0) {
-        requestHeroReload();
-      }
+
     }
   };
 
@@ -1541,8 +1544,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         sim.heroJoy = { active: true, pointerId: e.pointerId, ox: coords.sx, oy: coords.y, dx: 0, dy: 0 };
       } else {
         sim.heroFirePointers.set(e.pointerId, performance.now());
-        // Sword / bow / grenade have no magazine: a tap attacks right away
-        if (HERO_WEAPONS[sim.heroWeapon].magSize === 0) sim.heroTapAttack = true;
+        const hw = HERO_WEAPONS[sim.heroWeapon];
+        if (hw.magSize > 0 && sim.heroAmmo[hw.id] <= 0 && sim.heroReload <= 0) {
+          requestHeroReload(); // empty magazine: the tap reloads
+        } else {
+          sim.heroTapAttack = true; // every tap fires one shot; holding keeps firing
+        }
       }
       capture();
       return;
@@ -1742,13 +1749,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         return;
       }
 
-      const muzzleX = u.x + u.facing * 16;
+      // The hero is 1.45x bigger: shots leave from the real gun muzzle, level with it
+      const muzzleX = u.x + u.facing * HERO_MUZZLE_X;
       if (w.projectile === 'arrow' || w.projectile === 'rocket') {
         sim.heroShots.push({
           kind: w.projectile,
           x: muzzleX,
           y: u.y,
-          z: 18,
+          z: HERO_MUZZLE_Z,
           vx: u.facing * (w.projectileSpeed ?? 400),
           dmg: Math.round(base),
           range: w.range,
@@ -1775,7 +1783,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           kind: 'grenade',
           x: u.x,
           y: u.y,
-          z: 20,
+          z: HERO_MUZZLE_Z,
           vx: u.facing,
           dmg: Math.round(base),
           range: w.range,
@@ -1795,7 +1803,15 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
       if (w.pellets && w.pellets > 1) {
         // Shotgun cone: everything in front takes pellet damage (closer = more pellets land)
-        spawnWeaponTracerAndShell(u.x, u.y, 18, u.x + u.facing * w.range * 0.7, u.y, u.facing, 'shotgun');
+        spawnWeaponTracerAndShell(
+          u.x + u.facing * HERO_TRACER_X,
+          u.y,
+          HERO_MUZZLE_Z,
+          u.x + u.facing * w.range * 0.7,
+          u.y - HERO_LEVEL_AIM,
+          u.facing,
+          'shotgun'
+        );
         let hits = 0;
         for (const z of sim.units) {
           if (z.team !== 'zombie' || z.hp <= 0 || z.state === 'corpse' || z.state === 'dying') continue;
@@ -1818,14 +1834,31 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       const kind = w.id === 'pistol' || w.id === 'dual_pistol' ? 'rifle' : 'rapid';
       if (target) {
         const ty = target.y - (target.isFlying ? FLYER_HOVER_Z * 0.7 : 0);
-        spawnWeaponTracerAndShell(u.x, u.y, 18, target.x, ty + wobble, u.facing, kind);
+        spawnWeaponTracerAndShell(u.x + u.facing * HERO_TRACER_X, u.y, HERO_MUZZLE_Z, target.x, ty + wobble, u.facing, kind);
         const dmg = Math.max(1, Math.round(base * (1 - target.bulletResist * 0.7)));
         heroHit(target, dmg, w.knockback, u.facing);
       } else if (barricadeInReach(u, w.range)) {
-        spawnWeaponTracerAndShell(u.x, u.y, 18, sim.barricadeX - 8, u.y + wobble, u.facing, kind);
+        spawnWeaponTracerAndShell(
+          u.x + u.facing * HERO_TRACER_X,
+          u.y,
+          HERO_MUZZLE_Z,
+          sim.barricadeX - 8,
+          u.y - HERO_LEVEL_AIM + wobble,
+          u.facing,
+          kind
+        );
         damageEnemyBarricade(Math.round(base * 0.8), u.y);
       } else {
-        spawnWeaponTracerAndShell(u.x, u.y, 18, u.x + u.facing * w.range, u.y + wobble, u.facing, kind);
+        // No target: fly straight ahead at muzzle height
+        spawnWeaponTracerAndShell(
+          u.x + u.facing * HERO_TRACER_X,
+          u.y,
+          HERO_MUZZLE_Z,
+          u.x + u.facing * w.range,
+          u.y - HERO_LEVEL_AIM + wobble * 0.4,
+          u.facing,
+          kind
+        );
       }
       sim.screenShake = Math.max(sim.screenShake, w.id === 'ak47' ? 1.4 : 0.6);
     };
@@ -4012,13 +4045,18 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           })}
 
           {/* Ammo / reload status of the weapon in hand */}
-          <div className="w-[46px] rounded bg-black/80 border border-zinc-700 px-0.5 py-0.5 text-center leading-none">
+          <button
+            type="button"
+            onClick={() => requestHeroReload()}
+            title="Toca para recargar [R]"
+            className="w-[46px] rounded bg-black/80 border border-zinc-700 hover:border-sky-400 px-0.5 py-0.5 text-center leading-none cursor-pointer"
+          >
             <div className="text-[6.5px] font-bold text-zinc-300 truncate">{HERO_WEAPONS[heroWeapon].name}</div>
             {heroAmmoHud.mag > 0 ? (
               heroAmmoHud.reloading ? (
                 <div className="text-[7px] font-extrabold text-sky-300 animate-pulse mt-0.5">RECARGANDO…</div>
               ) : heroAmmoHud.ammo === 0 ? (
-                <div className="text-[7px] font-extrabold text-red-400 animate-pulse mt-0.5">TOCA ▶ RECARGAR</div>
+                <div className="text-[7px] font-extrabold text-red-400 animate-pulse mt-0.5">TOCA PARA RECARGAR</div>
               ) : (
                 <div className="font-tactical text-[11px] font-extrabold text-white mt-0.5">
                   {heroAmmoHud.ammo}
@@ -4028,7 +4066,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             ) : (
               <div className="font-tactical text-[11px] font-extrabold text-white mt-0.5">∞</div>
             )}
-          </div>
+          </button>
         </div>
       )}
 

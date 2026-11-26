@@ -292,12 +292,12 @@ export interface HeroWeaponConfig {
 export const HERO_WEAPONS: Record<HeroWeaponType, HeroWeaponConfig> = {
   sword: { id: 'sword', name: 'Espada', category: 'melee', icon: '🗡️', damage: 38, cooldown: 0.42, range: 36, magSize: 0, reloadTime: 0, knockback: 34 },
   bow: { id: 'bow', name: 'Arco y Flecha', category: 'ranged', icon: '🏹', damage: 34, cooldown: 0.75, range: 330, magSize: 0, reloadTime: 0, knockback: 10, projectile: 'arrow', projectileSpeed: 520, pierce: 2 },
-  pistol: { id: 'pistol', name: 'Pistola', category: 'ranged', icon: '🔫', damage: 18, cooldown: 0.3, range: 250, magSize: 12, reloadTime: 1.25, spread: 2, knockback: 8 },
-  dual_pistol: { id: 'dual_pistol', name: 'Doble Pistola', category: 'ranged', icon: '🔫🔫', damage: 14, cooldown: 0.16, range: 240, magSize: 24, reloadTime: 1.9, spread: 4, knockback: 6 },
-  m16: { id: 'm16', name: 'M16', category: 'ranged', icon: 'M16', damage: 17, cooldown: 0.11, range: 300, magSize: 30, reloadTime: 2.2, spread: 3, knockback: 6 },
-  ak47: { id: 'ak47', name: 'AK-47', category: 'ranged', icon: 'AK', damage: 24, cooldown: 0.14, range: 280, magSize: 30, reloadTime: 2.4, spread: 6, knockback: 9 },
-  uzi: { id: 'uzi', name: 'Uzi', category: 'ranged', icon: 'UZI', damage: 10, cooldown: 0.065, range: 200, magSize: 32, reloadTime: 1.8, spread: 8, knockback: 4 },
-  shotgun: { id: 'shotgun', name: 'Escopeta', category: 'ranged', icon: '💥', damage: 12, cooldown: 0.8, range: 150, magSize: 6, reloadTime: 0.42, reloadPerShell: true, pellets: 6, knockback: 26 },
+  pistol: { id: 'pistol', name: 'Pistola', category: 'ranged', icon: '🔫', damage: 18, cooldown: 0.3, range: 250, magSize: 17, reloadTime: 1.25, spread: 2, knockback: 8 },
+  dual_pistol: { id: 'dual_pistol', name: 'Doble Pistola', category: 'ranged', icon: '🔫🔫', damage: 14, cooldown: 0.16, range: 240, magSize: 40, reloadTime: 1.9, spread: 4, knockback: 6 },
+  m16: { id: 'm16', name: 'M16', category: 'ranged', icon: 'M16', damage: 17, cooldown: 0.11, range: 300, magSize: 45, reloadTime: 2.2, spread: 3, knockback: 6 },
+  ak47: { id: 'ak47', name: 'AK-47', category: 'ranged', icon: 'AK', damage: 24, cooldown: 0.14, range: 280, magSize: 45, reloadTime: 2.4, spread: 6, knockback: 9 },
+  uzi: { id: 'uzi', name: 'Uzi', category: 'ranged', icon: 'UZI', damage: 10, cooldown: 0.065, range: 200, magSize: 60, reloadTime: 1.8, spread: 8, knockback: 4 },
+  shotgun: { id: 'shotgun', name: 'Escopeta', category: 'ranged', icon: '💥', damage: 12, cooldown: 0.8, range: 150, magSize: 10, reloadTime: 0.42, reloadPerShell: true, pellets: 6, knockback: 26 },
   bazooka: { id: 'bazooka', name: 'Bazuca', category: 'ranged', icon: '🚀', damage: 95, cooldown: 1.5, range: 360, magSize: 1, reloadTime: 2.6, knockback: 40, projectile: 'rocket', projectileSpeed: 380, blastRadius: 52 },
   grenade: { id: 'grenade', name: 'Granada', category: 'thrown', icon: '💣', damage: 85, cooldown: 1.1, range: 210, magSize: 0, reloadTime: 0, knockback: 40, projectile: 'grenade', blastRadius: 56 },
 };
