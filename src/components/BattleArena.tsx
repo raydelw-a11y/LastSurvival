@@ -377,6 +377,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     heroReloadStage: 0,
     // Keeps the hero facing / aiming at the last target briefly after each shot
     heroAimTimer: 0,
+    // Where the fire finger is touching (world x, screen y): the hero shoots toward it
+    heroAimPoint: null as null | { x: number; y: number },
     heroDryFireCd: 0,
     heroWeapon: loadHeroWeapon() as HeroWeaponType,
     heroAmmo: Object.fromEntries(
@@ -1454,6 +1456,10 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       joy.dy = dy;
       return;
     }
+    if (sim.heroFirePointers.has(e.pointerId)) {
+      sim.heroAimPoint = { x: coords.x, y: coords.y }; // dragging the fire finger re-aims
+      return;
+    }
     sim.mouseLogical = { x: coords.x, y: coords.y, insideRoad: coords.insideRoad };
     if (sim.heroFirePointers.size === 0) tryCollectPickupsAt(coords.x, coords.y);
   };
@@ -1467,6 +1473,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     const pressedAt = sim.heroFirePointers.get(e.pointerId);
     if (pressedAt !== undefined) {
       sim.heroFirePointers.delete(e.pointerId);
+      // Keep the aim point until a pending tap-shot has been fired
+      if (sim.heroFirePointers.size === 0 && !sim.heroTapAttack) sim.heroAimPoint = null;
 
     }
   };
@@ -1547,6 +1555,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         sim.heroJoy = { active: true, pointerId: e.pointerId, ox: coords.sx, oy: coords.y, dx: 0, dy: 0 };
       } else {
         sim.heroFirePointers.set(e.pointerId, performance.now());
+        sim.heroAimPoint = { x: coords.x, y: coords.y };
         const hw = HERO_WEAPONS[sim.heroWeapon];
         if (hw.magSize > 0 && sim.heroAmmo[hw.id] <= 0 && sim.heroReload <= 0) {
           requestHeroReload(); // empty magazine: the tap reloads
@@ -1681,6 +1690,35 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     // walking back to the bus never turns the gun around unless an enemy is on that side.
     const heroAim = (u: InternalUnit, range: number, allowFlyers: boolean) => {
       const sim = simRef.current;
+      const gunYManual = u.y - HERO_MUZZLE_Z;
+      const ap = sim.heroAimPoint;
+      if (ap) {
+        // MANUAL AIM: shoot toward the touched point in any direction, enemies or not.
+        // The first zombie lying along that line (within range) takes the hit.
+        const adx = ap.x - u.x;
+        const facing: 1 | -1 = adx >= 0 ? 1 : -1;
+        const pitch = Math.max(-1.35, Math.min(1.35, Math.atan2(ap.y - gunYManual, Math.max(8, Math.abs(adx)))));
+        const dirX = facing * Math.cos(pitch);
+        const dirY = Math.sin(pitch);
+        let hit: InternalUnit | null = null;
+        let hitT = Infinity;
+        let hitVisY = 0;
+        for (const z of sim.units) {
+          if (z.team !== 'zombie' || z.hp <= 0 || z.state === 'corpse' || z.state === 'dying') continue;
+          if (!allowFlyers && z.isFlying) continue;
+          const zVisY = z.y - 15 - (z.isFlying ? FLYER_HOVER_Z * 0.7 : 0);
+          const vx = z.x - u.x;
+          const vy = zVisY - gunYManual;
+          const t = vx * dirX + vy * dirY; // distance along the shot
+          const perp = Math.abs(vx * dirY - vy * dirX); // distance off the line
+          if (t >= -4 && t <= range && perp <= 16 && t < hitT) {
+            hitT = t;
+            hit = z;
+            hitVisY = zVisY;
+          }
+        }
+        return { target: hit, facing, pitch, tVisY: hitVisY };
+      }
       let target: InternalUnit | null = null;
       let bestD = Infinity;
       for (const z of sim.units) {
@@ -1753,7 +1791,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       if (w.id === 'sword') {
         // Turn toward the closest ground zombie within reach on either side, then cleave
         const near = heroAim(u, w.range + 30, false);
-        if (near.target) u.facing = near.facing;
+        if (near.target || sim.heroAimPoint) u.facing = near.facing;
         u.heroAim = 0;
         sim.heroAimTimer = 0.35;
         let hits = 0;
@@ -1812,8 +1850,21 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       }
 
       if (w.projectile === 'grenade') {
-        const tx = aim.target ? aim.target.x : u.x + u.facing * 170 * cosP;
-        const ty = aim.target ? aim.target.y : Math.max(ROAD_Y_MIN, Math.min(ROAD_Y_MAX, u.y + sinP * 150));
+        const ap = sim.heroAimPoint;
+        let tx: number;
+        let ty: number;
+        if (ap) {
+          // Thrown to the touched spot (capped to the throwing range)
+          const ddx = ap.x - u.x;
+          const ddy = ap.y - u.y;
+          const dist = Math.hypot(ddx, ddy) || 1;
+          const k = Math.min(1, w.range / dist);
+          tx = u.x + ddx * k;
+          ty = Math.max(ROAD_Y_MIN, Math.min(ROAD_Y_MAX, u.y + ddy * k));
+        } else {
+          tx = aim.target ? aim.target.x : u.x + u.facing * 170 * cosP;
+          ty = aim.target ? aim.target.y : Math.max(ROAD_Y_MIN, Math.min(ROAD_Y_MAX, u.y + sinP * 150));
+        }
         sim.heroShots.push({
           kind: 'grenade',
           x: u.x,
@@ -2785,6 +2836,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               if (wantsAttack && sim.heroCd <= 0 && sim.heroReload <= 0) {
                 sim.heroTapAttack = false;
                 heroAttack(u);
+                if (sim.heroFirePointers.size === 0) sim.heroAimPoint = null;
               }
               u.heroWeapon = sim.heroWeapon;
               continue;
@@ -4109,9 +4161,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             <br />y arrastra para moverte
           </div>
           <div className="px-2.5 py-1.5 rounded-lg bg-black/70 border border-yellow-400/70 text-[10px] font-bold text-yellow-100 text-center leading-tight">
-            👉 Mantén aquí para disparar
+            👉 Toca o mantén donde quieras disparar
             <br />
-            Toca una vez para recargar
+            Sin balas: toca para recargar
           </div>
         </div>
       )}
