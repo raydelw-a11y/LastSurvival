@@ -4685,7 +4685,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       {battleResult === 'none' && heroAmmoHud.mag > 1 && (
         <button
           type="button"
-          onPointerDown={(e) => e.stopPropagation()}
+          // Reload on touch-down, not on click: iOS never sends the click while another
+          // finger is holding the joystick, so the hero could not reload on the move
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            requestHeroReload();
+          }}
           onClick={() => requestHeroReload()}
           disabled={heroAmmoHud.reloading || heroAmmoHud.ammo >= heroAmmoHud.mag}
           title="Recargar ahora aunque queden balas [R]"
