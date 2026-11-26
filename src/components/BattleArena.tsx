@@ -1421,6 +1421,36 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     return { x, y, insideRoad, sx, scale };
   };
 
+  const collectPickupIndex = (i: number) => {
+    const sim = simRef.current;
+    const p = sim.pickups[i];
+    if (!p) return;
+    soundFX.playCouragePickup();
+    if (p.kind === 'courage') {
+      sim.courage = Math.min(100, sim.courage + p.amount);
+      setCourage(Math.floor(sim.courage));
+      addFloatingText(`+${p.amount}`, p.x, p.y, 16, '#38bdf8', true);
+    } else {
+      sim.rage = Math.min(100, sim.rage + p.amount);
+      setRage(Math.floor(sim.rage));
+      addFloatingText(`+${p.amount} IRA`, p.x, p.y, 16, '#f87171', true);
+    }
+    sim.pickups.splice(i, 1);
+  };
+
+  // Hero bullets grab energy orbs they fly through (ground-lane segment test)
+  const collectPickupsOnSegment = (x0: number, y0: number, x1: number, y1: number, radius = 22) => {
+    const sim = simRef.current;
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const len2 = dx * dx + dy * dy || 1;
+    for (let i = sim.pickups.length - 1; i >= 0; i--) {
+      const p = sim.pickups[i];
+      const t = Math.max(0, Math.min(1, ((p.x - x0) * dx + (p.y - y0) * dy) / len2));
+      if (Math.hypot(p.x - (x0 + dx * t), p.y - (y0 + dy * t)) <= radius) collectPickupIndex(i);
+    }
+  };
+
   const tryCollectPickupsAt = (lx: number, ly: number) => {
     const sim = simRef.current;
     for (let i = sim.pickups.length - 1; i >= 0; i--) {
@@ -1925,6 +1955,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       if (w.pellets && w.pellets > 1) {
         // Shotgun cone along the aim direction: closer = more pellets land
         tracer(muzzleX + u.facing * w.range * 0.7 * cosP, muzzleScreenY + w.range * 0.7 * sinP, 'shotgun');
+        collectPickupsOnSegment(muzzleX, u.y, muzzleX + u.facing * w.range * 0.7 * cosP, u.y + w.range * 0.7 * sinP, 30);
         const aimAng = Math.atan2(sinP, u.facing * cosP);
         let hits = 0;
         for (const z of sim.units) {
@@ -1953,6 +1984,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       const kind = w.id === 'pistol' || w.id === 'dual_pistol' ? 'rifle' : 'rapid';
       if (aim.target) {
         tracer(aim.target.x, aim.tVisY + wobble, kind);
+        collectPickupsOnSegment(muzzleX, u.y, aim.target.x, aim.target.y);
         const dmg = Math.max(1, Math.round(base * (1 - aim.target.bulletResist * 0.7)));
         heroHit(aim.target, dmg, w.knockback, u.facing);
       } else if (barricadeInReach(u, w.range) && Math.abs(aim.pitch) < 0.35) {
@@ -1967,6 +1999,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         if (sinP > 0.001) len = Math.min(len, (LOGICAL_HEIGHT - muzzleScreenY) / sinP);
         if (sinP < -0.001) len = Math.min(len, -muzzleScreenY / sinP);
         tracer(muzzleX + dirX * len, muzzleScreenY + sinP * len + wobble * 0.4, kind);
+        collectPickupsOnSegment(muzzleX, u.y, muzzleX + dirX * len, u.y + sinP * len);
       }
       sim.screenShake = Math.max(sim.screenShake, w.id === 'ak47' ? 1.4 : 0.6);
     };
@@ -2422,6 +2455,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               if (k >= 1) {
                 sim.heroShots.splice(i, 1);
                 triggerExplosion(p.x, p.y, p.blast, 0, false, p.dmg);
+                collectPickupsOnSegment(p.x, p.y, p.x, p.y, Math.max(30, p.blast));
                 if (sim.barricadeHp > 0 && Math.abs(sim.barricadeX - p.x) <= p.blast) {
                   damageEnemyBarricade(Math.round(p.dmg * 0.6), p.y);
                 }
@@ -2433,6 +2467,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             p.x += stepX;
             p.y += stepY;
             p.traveled += Math.hypot(stepX, stepY);
+            collectPickupsOnSegment(p.x - stepX, p.y - stepY, p.x, p.y);
             // Flies until it hits a zombie or leaves the battlefield
             if (p.y < ROAD_Y_MIN - 30 || p.y > ROAD_Y_MAX + 30 || p.x < -20 || p.x > WORLD_WIDTH + 20) {
               p.traveled = p.range;
@@ -4248,6 +4283,18 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               <div className="font-tactical text-[11px] font-extrabold text-white mt-0.5">∞</div>
             )}
           </button>
+          {heroAmmoHud.mag > 1 && (
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => requestHeroReload()}
+              disabled={heroAmmoHud.reloading || heroAmmoHud.ammo >= heroAmmoHud.mag}
+              title="Recargar ahora aunque queden balas [R]"
+              className="w-[46px] rounded bg-sky-700/90 hover:bg-sky-600 disabled:bg-zinc-800/80 disabled:text-zinc-500 border border-sky-300/70 disabled:border-zinc-700 py-1 text-[8px] font-extrabold text-white leading-none cursor-pointer disabled:cursor-default"
+            >
+              ⟳ RECARGAR
+            </button>
+          )}
         </div>
       )}
 
