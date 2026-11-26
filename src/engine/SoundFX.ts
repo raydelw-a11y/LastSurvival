@@ -575,6 +575,55 @@ class SoundSystem {
     }
   }
 
+  /** Zombie spitter hocking an acid glob (wet gurgle + throaty spit). */
+  public playAcidSpit() {
+    const ctx = this.getContext();
+    const dest = this.getDest();
+    if (!ctx || !dest || !this.allow('acid_spit', 0.12, ctx)) return;
+    const out = this.getWeaponOut(dest);
+    const t = ctx.currentTime + 0.002;
+    this.burst(ctx, out, t, { type: 'bandpass', freq: 520, freqEnd: 1400, q: 3, vol: 0.45, attack: 0.02, decay: 0.16 });
+    this.tone(ctx, out, t, { type: 'sawtooth', f0: 140, f1: 260, vol: 0.12, attack: 0.02, decay: 0.14 });
+    this.burst(ctx, out, t + 0.15, { type: 'highpass', freq: 2200, vol: 0.3, decay: 0.03 });
+  }
+
+  /** Acid glob splashing on the asphalt and sizzling. */
+  public playAcidSplash() {
+    const ctx = this.getContext();
+    const dest = this.getDest();
+    if (!ctx || !dest || !this.allow('acid_splash', 0.1, ctx)) return;
+    const out = this.getWeaponOut(dest);
+    const t = ctx.currentTime + 0.002;
+    this.burst(ctx, out, t, { type: 'lowpass', freq: 900, vol: 0.5, decay: 0.08 });
+    this.burst(ctx, out, t + 0.03, { type: 'highpass', freq: 4200, vol: 0.18, attack: 0.05, decay: 0.55, send: 0.2 });
+  }
+
+  /** Growl of a zombie dog pack arriving. */
+  public playZombieDogPack() {
+    const ctx = this.getContext();
+    const dest = this.getDest();
+    if (!ctx || !dest || !this.allow('dog_pack', 1.2, ctx)) return;
+    const out = this.getWeaponOut(dest);
+    const t = ctx.currentTime + 0.002;
+    for (let i = 0; i < 3; i++) {
+      const at = t + i * 0.16;
+      this.tone(ctx, out, at, { type: 'sawtooth', f0: 210 + i * 40, f1: 120, vol: 0.16, attack: 0.01, decay: 0.13 });
+      this.burst(ctx, out, at, { type: 'bandpass', freq: 700 + i * 120, q: 2.5, vol: 0.28, attack: 0.008, decay: 0.12 });
+    }
+  }
+
+  /** Shriek of a winged zombie swooping in. */
+  public playFlyerScreech() {
+    const ctx = this.getContext();
+    const dest = this.getDest();
+    if (!ctx || !dest || !this.allow('flyer', 1.0, ctx)) return;
+    const out = this.getWeaponOut(dest);
+    const t = ctx.currentTime + 0.002;
+    this.tone(ctx, out, t, { type: 'sawtooth', f0: 1500, f1: 820, vol: 0.09, attack: 0.03, decay: 0.32 });
+    this.tone(ctx, out, t, { type: 'square', f0: 1720, f1: 940, vol: 0.04, attack: 0.03, decay: 0.3 });
+    this.burst(ctx, out, t, { type: 'bandpass', freq: 2600, q: 3, vol: 0.14, attack: 0.04, decay: 0.28, send: 0.3 });
+  }
+
   public playShotgun() {
     this.playUnitWeapon('farmer');
   }

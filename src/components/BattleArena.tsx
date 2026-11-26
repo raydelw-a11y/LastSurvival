@@ -50,6 +50,13 @@ import {
   renderUnitSprite,
   syncCanvasHiDPI,
   TESLA_TIP_Z,
+  TOWER_PLATFORM_Z,
+  BARRICADE_SEGMENT_OFFSETS,
+  FLYER_HOVER_Z,
+  RenderAcidPool,
+  renderAcidPools,
+  renderAcidBlobs,
+  WORLD_WIDTH,
 } from '../engine/PixelArtRenderer';
 import { MuteButton } from './MuteButton';
 import { soundFX } from '../engine/SoundFX';
@@ -90,6 +97,16 @@ interface InternalUnit extends RenderUnit {
   chainRange: number;
   chainFalloff: number;
   stunTime: number;
+  /** Acid Spitter zombie: lobs acid instead of biting. */
+  spitsAcid?: boolean;
+  /** Watchtower: id of the shooter assigned to it (walking there or already inside). */
+  occupantId?: string | null;
+  /** Shooter: id of the watchtower it is standing in. */
+  inTowerId?: string;
+  /** Shooter: id of the watchtower it is walking to. */
+  towerTargetId?: string;
+  /** Shooter: attack range before the watchtower bonus. */
+  baseAttackRange?: number;
   barricadeMultiplier: number;
   infectedZombieType?: ZombieType;
   critChance: number;
@@ -102,6 +119,29 @@ interface InternalUnit extends RenderUnit {
 }
 
 const TACTICAL_ORDER: TacticalItemType[] = ['blue_barrel', 'red_barrel', 'medkit'];
+
+/** Extra length of the battlefield beyond one screen (world is 1.5x the viewport). */
+const FIELD_EXTRA = WORLD_WIDTH - LOGICAL_WIDTH;
+const MAX_CAM_X = WORLD_WIDTH - LOGICAL_WIDTH;
+const clampCam = (x: number) => Math.max(0, Math.min(MAX_CAM_X, x));
+/** Minimap strip (screen space, logical px) that shows the whole battlefield. */
+const MINIMAP = { x: LOGICAL_WIDTH / 2 - 95, y: 50, w: 190, h: 10 };
+/** Shooter in a watchtower gets this much extra range. */
+const TOWER_RANGE_BONUS = 1.35;
+
+interface AcidBlob {
+  x: number;
+  y: number;
+  z: number;
+  sx: number;
+  sy: number;
+  tx: number;
+  ty: number;
+  t: number;
+  dur: number;
+  dmg: number;
+  hitsBus: boolean;
+}
 
 /** Where a placeable unit (Turret / Tesla Coil) may be installed: on the road, ahead of the bus. */
 function clampPlacement(busX: number, barricadeX: number, x: number, y: number) {
@@ -125,6 +165,8 @@ const INITIAL_UNIT_COOLDOWNS: Record<SurvivorType, number> = {
   drone: 0,
   juggernaut: 0,
   tesla: 0,
+  barricade: 0,
+  watchtower: 0,
 };
 
 export const BattleArena: React.FC<BattleArenaProps> = ({
@@ -214,7 +256,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     doorOpenTimer: 0,
     barricadeHp: mission.barricadeHp,
     maxBarricadeHp: mission.barricadeHp,
-    barricadeX: 614,
+    barricadeX: WORLD_WIDTH - 106,
     barricadeShake: 0,
     barricadeThresholdIdx: 0,
     rushPackTimer: initialSector === 1 ? 36 : initialSector === 2 ? 32 : initialSector === 3 ? 28 : 24,
@@ -250,6 +292,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     draggingItem: null as TacticalItemType | null,
     placingUnit: null as SurvivorType | null,
     lightningArcs: [] as RenderLightningArc[],
+    acidBlobs: [] as AcidBlob[],
+    acidPools: [] as (RenderAcidPool & { dps: number })[],
+    // Scrolling camera over the 1.5x battlefield
+    camX: 0,
+    camManualTimer: 0,
+    pan: null as null | { pointerId: number; startClientX: number; startCam: number; moved: boolean },
     waveTimer: initialSector === 1 ? 5.2 : initialSector === 2 ? 4.5 : 3.8,
     skeletonTimer: mission.skeletonAmbush ? 14.0 : 9999,
     timeRemaining: 150,
@@ -348,13 +396,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   const initDecalCanvas = useCallback(() => {
     if (!decalCanvasRef.current) {
       decalCanvasRef.current = document.createElement('canvas');
-      decalCanvasRef.current.width = LOGICAL_WIDTH * 2;
+      decalCanvasRef.current.width = WORLD_WIDTH * 2;
       decalCanvasRef.current.height = LOGICAL_HEIGHT * 2;
     }
     const dctx = decalCanvasRef.current.getContext('2d');
     if (!dctx) return;
     dctx.setTransform(2, 0, 0, 2, 0, 0);
-    dctx.clearRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+    dctx.clearRect(0, 0, WORLD_WIDTH, LOGICAL_HEIGHT);
   }, []);
 
   const addFloatingText = useCallback(
@@ -434,7 +482,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           unlockedCfg
             ? `¡NV.${sim.commanderLevel}: ${unlockedCfg.name.toUpperCase()}!`
             : `¡MAESTRÍA NV.${sim.commanderLevel} (+10% GLOBAL)!`,
-          360,
+          sim.camX + 360,
           164,
           30,
           '#fde047',
@@ -499,7 +547,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         sim.tracers.push({
           x1: mx + facing * 5,
           y1: my,
-          x2: Math.min(LOGICAL_WIDTH - 10, targetX + facing * 18),
+          x2: Math.min(WORLD_WIDTH - 10, targetX + facing * 18),
           y2: targetY - 16,
           color: 'rgba(56, 189, 248, 0.85)',
           coreColor: '#ffffff',
@@ -628,7 +676,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         armorPiercing: 0,
         firstHitCritMult: 1,
         isStationary: false,
-        isFlying: false,
+        isFlying: !!cfg.isFlying,
+        spitsAcid: !!cfg.spitsAcid,
         isFlame: false,
         chainTargets: 0,
         chainRange: 0,
@@ -651,6 +700,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         facing: -1,
       };
       simRef.current.units.push(zUnit);
+      if (cfg.isFlying) soundFX.playFlyerScreech();
     },
     [mission.id]
   );
@@ -691,6 +741,27 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         const spot = clampPlacement(sim.busX, sim.barricadeX, customX, spawnY);
         spawnX = spot.x;
         spawnY = spot.y;
+      }
+
+      if (cfg.isBarrier) {
+        // Sandbag wall: three piles stacked in depth that ground zombies must break through
+        const segHp = Math.max(30, Math.round(hp / 3));
+        for (const off of BARRICADE_SEGMENT_OFFSETS) {
+          sim.obstacles.push({
+            id: `sand_${Date.now()}_${Math.random()}`,
+            type: 'sandbags',
+            x: spawnX,
+            y: Math.max(ROAD_Y_MIN + 6, Math.min(ROAD_Y_MAX - 4, spawnY + off)),
+            z: 0,
+            hp: segHp,
+            maxHp: segHp,
+            whiteFlashTimer: 0,
+          });
+        }
+        soundFX.playBarricadeBash();
+        sim.screenShake = Math.max(sim.screenShake, 3);
+        addFloatingText('¡BARRICADA!', spawnX, spawnY - 30, 26, '#d6c49a', true);
+        return;
       }
 
       if (cfg.repairsBusOnSpawn && !freeInitial) {
@@ -738,6 +809,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         isStationary: !!cfg.isStationary,
         isFlying: !!cfg.isFlying,
         isFlame: !!cfg.isFlame,
+        occupantId: cfg.isTower ? null : undefined,
+        occupied: cfg.isTower ? false : undefined,
         chainTargets: cfg.chainTargets ?? 0,
         chainRange: cfg.chainRange ?? 0,
         chainFalloff: cfg.chainFalloff ?? 1,
@@ -766,7 +839,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           u.state !== 'dying' &&
           u.id === sim.selectedUnitId
       );
-      if (!hasAliveControlled) {
+      if (!hasAliveControlled && !cfg.isStationary) {
         sim.units.forEach((u) => (u.isPlayerControlled = false));
         newUnit.isPlayerControlled = true;
         sim.selectedUnitId = newUnit.id;
@@ -776,7 +849,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
       if (cfg.placeable && !freeInitial) {
         // Install effect: dust ring + sparks where the structure lands
-        addFloatingText('¡INSTALADA!', spawnX, spawnY, 26, type === 'tesla' ? '#67e8f9' : '#fde047', true);
+        addFloatingText(
+          cfg.isTower ? '¡TORRE LISTA!' : '¡INSTALADA!',
+          spawnX,
+          spawnY,
+          26,
+          type === 'tesla' ? '#67e8f9' : '#fde047',
+          true
+        );
         for (let i = 0; i < 14; i++) {
           const ang = Math.random() * Math.PI * 2;
           sim.particles.push({
@@ -919,7 +999,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             u.corpseTimer = -999;
             spawnBloodParticles(u.x, u.y, 4, 16);
             addFloatingText('APLASTADO', u.x, u.y, 15, '#38bdf8', true);
-          } else if (u.team === 'zombie') {
+          } else if (u.team === 'zombie' && !u.isFlying) {
             u.hp -= cfg.impactDamage;
             u.whiteFlashTimer = 0.12;
             u.vx += 24;
@@ -962,7 +1042,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       }
     });
     soundFX.playCouragePickup();
-    addFloatingText('¡FURIA ACTIVADA!', 280, 195, 25, '#fde047', true);
+    addFloatingText('¡FURIA ACTIVADA!', sim.camX + 280, 195, 25, '#fde047', true);
   }, [addFloatingText, furyBuffCount]);
 
   const cycleSelectedSurvivor = useCallback(() => {
@@ -1097,7 +1177,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
   const getLogicalCoords = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
-    if (!canvas) return { x: 360, y: 228, insideRoad: false };
+    if (!canvas) return { x: 360, y: 228, insideRoad: false, sx: 360, scale: 1 };
     const rect = canvas.getBoundingClientRect();
     const scale = Math.max(rect.width / LOGICAL_WIDTH, rect.height / LOGICAL_HEIGHT);
     const renderedW = LOGICAL_WIDTH * scale;
@@ -1105,10 +1185,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     const offsetX = (rect.width - renderedW) / 2;
     const offsetY = (rect.height - renderedH) / 2;
 
-    const x = (clientX - rect.left - offsetX) / scale;
+    const sx = (clientX - rect.left - offsetX) / scale;
     const y = (clientY - rect.top - offsetY) / scale;
-    const insideRoad = x >= 120 && x <= 620 && y >= ROAD_Y_MIN - 15 && y <= ROAD_Y_MAX + 15;
-    return { x, y, insideRoad };
+    // Screen → world: the camera scrolls across the 1.5x battlefield
+    const x = sx + simRef.current.camX;
+    const insideRoad =
+      x >= 120 && x <= WORLD_WIDTH - 100 && y >= ROAD_Y_MIN - 15 && y <= ROAD_Y_MAX + 15;
+    return { x, y, insideRoad, sx, scale };
   };
 
   const tryCollectPickupsAt = (lx: number, ly: number) => {
@@ -1132,16 +1215,62 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   };
 
   const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const sim = simRef.current;
+    const pan = sim.pan;
+    if (pan && pan.pointerId === e.pointerId) {
+      const { scale } = getLogicalCoords(e.clientX, e.clientY);
+      const dx = e.clientX - pan.startClientX;
+      if (Math.abs(dx) > 10) pan.moved = true;
+      if (pan.moved) {
+        sim.camX = clampCam(pan.startCam - dx / (scale || 1));
+        sim.camManualTimer = 3.5;
+      }
+    }
     const coords = getLogicalCoords(e.clientX, e.clientY);
-    simRef.current.mouseLogical = coords;
-    tryCollectPickupsAt(coords.x, coords.y);
+    sim.mouseLogical = { x: coords.x, y: coords.y, insideRoad: coords.insideRoad };
+    if (!pan?.moved) tryCollectPickupsAt(coords.x, coords.y);
+  };
+
+  const handleCanvasPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const sim = simRef.current;
+    if (sim.pan && sim.pan.pointerId === e.pointerId) sim.pan = null;
+  };
+
+  const handleCanvasWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    const sim = simRef.current;
+    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    sim.camX = clampCam(sim.camX + delta * 0.6);
+    sim.camManualTimer = 3.5;
   };
 
   const handleCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const coords = getLogicalCoords(e.clientX, e.clientY);
-    simRef.current.mouseLogical = coords;
-
     const sim = simRef.current;
+    sim.mouseLogical = { x: coords.x, y: coords.y, insideRoad: coords.insideRoad };
+
+    // Minimap tap: jump the camera to that part of the battlefield
+    if (
+      coords.sx >= MINIMAP.x - 4 &&
+      coords.sx <= MINIMAP.x + MINIMAP.w + 4 &&
+      coords.y >= MINIMAP.y - 6 &&
+      coords.y <= MINIMAP.y + MINIMAP.h + 6
+    ) {
+      const frac = (coords.sx - MINIMAP.x) / MINIMAP.w;
+      sim.camX = clampCam(frac * WORLD_WIDTH - LOGICAL_WIDTH / 2);
+      sim.camManualTimer = 4;
+      return;
+    }
+
+    // Any press can become a drag that pans the camera (taps still act normally below)
+    if (!sim.placingUnit && !sim.draggingItem) {
+      sim.pan = { pointerId: e.pointerId, startClientX: e.clientX, startCam: sim.camX, moved: false };
+      try {
+        (e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId);
+      } catch {
+        // Ignore
+      }
+    }
+
     // Install the armed Turret / Tesla Coil exactly where the player tapped on the road
     if (sim.placingUnit) {
       if (coords.y >= 72) {
@@ -1199,39 +1328,39 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     simRef.current.units = [];
     if (tier === 1) {
       // Staggered 105px apart so player's first Redneck fights 1v1 cleanly!
-      spawnZombie('walker', 485, 212);
-      spawnZombie('walker', 590, 248);
+      spawnZombie('walker', 485 + FIELD_EXTRA, 212);
+      spawnZombie('walker', 590 + FIELD_EXTRA, 248);
     } else if (tier === 2) {
-      spawnZombie('walker', 490, 210);
-      spawnZombie('walker', 555, 250);
-      spawnZombie('runner', 595, 228);
+      spawnZombie('walker', 490 + FIELD_EXTRA, 210);
+      spawnZombie('walker', 555 + FIELD_EXTRA, 250);
+      spawnZombie('runner', 595 + FIELD_EXTRA, 228);
     } else if (tier === 3) {
-      spawnZombie('walker', 490, 208);
-      spawnZombie('walker', 545, 250);
-      spawnZombie('runner', 585, 224);
-      spawnZombie(mission.skeletonAmbush ? 'skeleton' : 'walker', 520, 236);
+      spawnZombie('walker', 490 + FIELD_EXTRA, 208);
+      spawnZombie('walker', 545 + FIELD_EXTRA, 250);
+      spawnZombie('runner', 585 + FIELD_EXTRA, 224);
+      spawnZombie(mission.skeletonAmbush ? 'skeleton' : 'walker', 520 + FIELD_EXTRA, 236);
     } else if (tier === 4) {
-      spawnZombie('walker', 495, 212);
-      spawnZombie('walker', 545, 252);
-      spawnZombie('runner', 575, 222);
-      spawnZombie(mission.zombiePool.includes('armored') ? 'armored' : 'runner', 598, 240);
+      spawnZombie('walker', 495 + FIELD_EXTRA, 212);
+      spawnZombie('walker', 545 + FIELD_EXTRA, 252);
+      spawnZombie('runner', 575 + FIELD_EXTRA, 222);
+      spawnZombie(mission.zombiePool.includes('armored') ? 'armored' : 'runner', 598 + FIELD_EXTRA, 240);
     } else if (tier <= 6) {
-      spawnZombie('walker', 495, 208);
-      spawnZombie('runner', 540, 248);
-      spawnZombie('crit_zombie', 575, 220);
-      spawnZombie('armored', 598, 242);
+      spawnZombie('walker', 495 + FIELD_EXTRA, 208);
+      spawnZombie('runner', 540 + FIELD_EXTRA, 248);
+      spawnZombie('crit_zombie', 575 + FIELD_EXTRA, 220);
+      spawnZombie('armored', 598 + FIELD_EXTRA, 242);
     } else if (tier <= 9) {
-      spawnZombie('walker', 490, 208);
-      spawnZombie('runner', 532, 248);
-      spawnZombie('crit_zombie', 562, 218);
-      spawnZombie('armored', 585, 252);
-      spawnZombie('bloated', 602, 232);
+      spawnZombie('walker', 490 + FIELD_EXTRA, 208);
+      spawnZombie('runner', 532 + FIELD_EXTRA, 248);
+      spawnZombie('crit_zombie', 562 + FIELD_EXTRA, 218);
+      spawnZombie('armored', 585 + FIELD_EXTRA, 252);
+      spawnZombie('bloated', 602 + FIELD_EXTRA, 232);
     } else {
-      spawnZombie('runner', 495, 210);
-      spawnZombie('runner', 532, 250);
-      spawnZombie('crit_zombie', 564, 220);
-      spawnZombie('armored', 586, 252);
-      spawnZombie('bloated', 602, 232);
+      spawnZombie('runner', 495 + FIELD_EXTRA, 210);
+      spawnZombie('runner', 532 + FIELD_EXTRA, 250);
+      spawnZombie('crit_zombie', 564 + FIELD_EXTRA, 220);
+      spawnZombie('armored', 586 + FIELD_EXTRA, 252);
+      spawnZombie('bloated', 602 + FIELD_EXTRA, 232);
     }
 
     const sector = tier <= 3 ? 1 : tier <= 6 ? 2 : tier <= 9 ? 3 : 4;
@@ -1265,6 +1394,31 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           sim.levelShockwaveTimer = Math.max(0, sim.levelShockwaveTimer - dt);
         }
 
+        // CAMERA: follows the action across the 1.5x battlefield (drag / wheel / minimap override it)
+        if (sim.camManualTimer > 0) {
+          sim.camManualTimer = Math.max(0, sim.camManualTimer - dt);
+        } else {
+          let camTarget: number;
+          if (sim.phase === 'bus_ramming') {
+            camTarget = sim.busX - 160;
+          } else {
+            let front = sim.busX + 200;
+            let nearestThreat = Infinity;
+            for (const cu of sim.units) {
+              if (cu.hp <= 0 || cu.state === 'corpse' || cu.state === 'dying') continue;
+              if (cu.team === 'survivor' && !cu.isStationary && !cu.inTowerId) {
+                front = Math.max(front, cu.x);
+              } else if (cu.team === 'zombie') {
+                nearestThreat = Math.min(nearestThreat, cu.x);
+              }
+            }
+            camTarget = front - LOGICAL_WIDTH * 0.6;
+            // Never lose sight of the zombie closest to the bus
+            if (nearestThreat < Infinity) camTarget = Math.min(camTarget, nearestThreat - 150);
+          }
+          sim.camX += (clampCam(camTarget) - sim.camX) * Math.min(1, dt * 2.2);
+        }
+
         if (sim.phase === 'bus_ramming') {
           sim.busX += 340 * dt;
           sim.screenShake = 4;
@@ -1279,7 +1433,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           });
           sim.units = sim.units.filter((u) => u.hp > 0 || u.team === 'survivor');
 
-          if (sim.busX > LOGICAL_WIDTH + 40) {
+          if (sim.busX > WORLD_WIDTH + 40) {
             sim.phase = 'victory';
             // Rewarding 3-star threshold (>= 85% Bus HP — synergizes with Mechanic repairs!)
             const stars =
@@ -1315,11 +1469,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             setHordeTriggered(true);
             soundFX.playSiren();
             sim.screenShake = 9;
-            addFloatingText('¡HORDA FINAL!', 360, 165, 28, '#ef4444', true);
+            addFloatingText('¡HORDA FINAL!', sim.camX + 360, 165, 28, '#ef4444', true);
             for (let i = 0; i < 7; i++) {
               spawnZombie(
                 i % 3 === 0 ? 'armored' : i % 2 === 0 ? 'runner' : 'crit_zombie',
-                560 + i * 12
+                sim.barricadeX - 54 + i * 12
               );
             }
           }
@@ -1369,9 +1523,25 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               : Math.max(1, maxActiveZombies + 2 - aliveZombies);
             const finalCount = Math.min(packSize, roomLeft);
 
+            // New enemy variety unlocks along the campaign (dogs → spitters → flyers)
+            const extraPool: ZombieType[] = [];
+            if (tier >= 3) extraPool.push('zombie_dog');
+            if (tier >= 5) extraPool.push('acid_spitter');
+            if (tier >= 7) extraPool.push('flyer');
             for (let p = 0; p < finalCount; p++) {
-              const pick = pool[Math.floor(Math.random() * pool.length)];
-              spawnZombie(pick, sim.barricadeX - 20 - p * 20 - Math.random() * 18);
+              const useExtra = extraPool.length > 0 && Math.random() < 0.3;
+              const pick = useExtra
+                ? extraPool[Math.floor(Math.random() * extraPool.length)]
+                : pool[Math.floor(Math.random() * pool.length)];
+              const px = sim.barricadeX - 20 - p * 20 - Math.random() * 18;
+              spawnZombie(pick, px);
+              const pack = ZOMBIE_CONFIGS[pick].packSize ?? 0;
+              if (pack > 0 && aliveZombies + finalCount < maxActiveZombies + 4) {
+                for (let k = 1; k <= pack; k++) {
+                  spawnZombie(pick, px - k * 14, undefined);
+                }
+                soundFX.playZombieDogPack();
+              }
             }
           }
 
@@ -1379,7 +1549,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           if (sim.rushWarningTimer > 0) {
             sim.rushWarningTimer -= dt;
             if (sim.rushWarningTimer <= 0) {
-              addFloatingText('¡CORREDORES!', 545, sim.rushWarningY - 12, 20, '#ef4444', true);
+              addFloatingText('¡CORREDORES!', sim.barricadeX - 70, sim.rushWarningY - 12, 20, '#ef4444', true);
               spawnZombie('runner', sim.barricadeX - 14, sim.rushWarningY - 6);
               if (sector === 1) {
                 spawnZombie('runner', sim.barricadeX - 34, sim.rushWarningY + 8);
@@ -1403,7 +1573,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           sim.skeletonTimer -= dt;
           if (sim.skeletonTimer <= 0 && aliveZombies < maxActiveZombies) {
             sim.skeletonTimer = 13 + Math.random() * 5;
-            const ambushX = 250 + Math.random() * 220;
+            const ambushX = 250 + Math.random() * (sim.barricadeX - 400);
             const ambushY = ROAD_Y_MIN + 14 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 28);
             spawnZombie('skeleton', ambushX, ambushY);
             if (sector >= 3 && Math.random() < 0.5) {
@@ -1514,6 +1684,86 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             }
           }
 
+          // Acid globs in flight → splash damage + corrosive puddle
+          for (let i = sim.acidBlobs.length - 1; i >= 0; i--) {
+            const b = sim.acidBlobs[i];
+            b.t += dt;
+            const k = Math.min(1, b.t / b.dur);
+            b.x = b.sx + (b.tx - b.sx) * k;
+            b.y = b.sy + (b.ty - b.sy) * k;
+            b.z = 22 * (1 - k) + Math.sin(k * Math.PI) * 38;
+            if (k < 1) continue;
+            sim.acidBlobs.splice(i, 1);
+            soundFX.playAcidSplash();
+            for (let sp = 0; sp < 10; sp++) {
+              const ang = Math.random() * Math.PI * 2;
+              sim.particles.push({
+                x: b.tx,
+                y: b.ty,
+                z: 2,
+                vx: Math.cos(ang) * (25 + Math.random() * 35),
+                vy: Math.sin(ang) * 10,
+                vz: 25 + Math.random() * 45,
+                color: sp % 2 === 0 ? '#84cc16' : '#d9f99d',
+                size: 2,
+                life: 0.35 + Math.random() * 0.2,
+                maxLife: 0.55,
+              });
+            }
+            if (b.hitsBus) {
+              sim.busHp = Math.max(0, sim.busHp - b.dmg);
+              sim.busDamagedEver = true;
+              sim.rage = Math.min(100, sim.rage + b.dmg * 0.3);
+              addFloatingText(`${b.dmg}`, b.tx, b.ty, 22, '#a3e635', true, 'ÁCIDO!');
+              if (sim.busHp <= 0 && sim.phase === 'combat') {
+                sim.phase = 'defeat';
+                soundFX.playExplosion();
+                setBattleResult('defeat');
+              }
+            } else {
+              sim.units.forEach((t) => {
+                if (
+                  t.team === 'survivor' &&
+                  !t.isFlying &&
+                  !t.inTowerId &&
+                  t.hp > 0 &&
+                  t.state !== 'corpse' &&
+                  t.state !== 'dying' &&
+                  Math.hypot(t.x - b.tx, (t.y - b.ty) * 1.4) <= 20
+                ) {
+                  t.hp -= b.dmg;
+                  t.whiteFlashTimer = 0.12;
+                  sim.rage = Math.min(100, sim.rage + b.dmg * 0.18);
+                  addFloatingText(`${b.dmg}`, t.x, t.y, 22, '#a3e635', true, 'ÁCIDO!');
+                }
+              });
+            }
+            sim.acidPools.push({ x: b.tx, y: b.ty, radius: 22, duration: 4.2, maxDuration: 4.2, dps: 6 });
+          }
+
+          for (let i = sim.acidPools.length - 1; i >= 0; i--) {
+            const ap = sim.acidPools[i];
+            ap.duration -= dt;
+            if (ap.duration <= 0) {
+              sim.acidPools.splice(i, 1);
+              continue;
+            }
+            sim.units.forEach((t) => {
+              if (
+                t.team === 'survivor' &&
+                !t.isFlying &&
+                !t.inTowerId &&
+                t.hp > 0 &&
+                t.state !== 'corpse' &&
+                t.state !== 'dying' &&
+                Math.hypot(t.x - ap.x, (t.y - ap.y) * 1.4) <= ap.radius
+              ) {
+                t.hp -= ap.dps * dt;
+                if (Math.random() < 0.05) t.whiteFlashTimer = 0.06;
+              }
+            });
+          }
+
           // Obstacles & Medkit Healing Field Simulation
           sim.medkitTickTimer += dt;
           const emitHealPopup = sim.medkitTickTimer >= 1.0;
@@ -1593,6 +1843,50 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             }
           }
 
+          // WATCHTOWERS: an empty tower calls the nearest walking ranged unit to climb in
+          const isAliveUnit = (x?: InternalUnit | null) =>
+            !!x && x.hp > 0 && x.state !== 'corpse' && x.state !== 'dying';
+          for (const tower of sim.units) {
+            if (tower.team !== 'survivor' || tower.subType !== 'watchtower' || !isAliveUnit(tower)) continue;
+            const occ = tower.occupantId ? sim.units.find((o) => o.id === tower.occupantId) : null;
+            if (
+              occ &&
+              isAliveUnit(occ) &&
+              (occ.inTowerId === tower.id || occ.towerTargetId === tower.id)
+            ) {
+              tower.occupied = occ.inTowerId === tower.id;
+              continue;
+            }
+            tower.occupantId = null;
+            tower.occupied = false;
+            let best: InternalUnit | null = null;
+            let bestD = Infinity;
+            for (const c of sim.units) {
+              if (
+                c.team !== 'survivor' ||
+                !c.isRanged ||
+                c.isStationary ||
+                c.isFlying ||
+                c.inTowerId ||
+                c.towerTargetId ||
+                !isAliveUnit(c) ||
+                (c.isPlayerControlled && isUsingWasd)
+              ) {
+                continue;
+              }
+              const d = Math.hypot(c.x - tower.x, c.y - tower.y);
+              if (d < bestD) {
+                bestD = d;
+                best = c;
+              }
+            }
+            if (best) {
+              best.towerTargetId = tower.id;
+              tower.occupantId = best.id;
+              addFloatingText('¡A LA TORRE!', best.x, best.y, 24, '#fde047');
+            }
+          }
+
           for (let i = sim.units.length - 1; i >= 0; i--) {
             const u = sim.units[i];
             if (!Number.isFinite(u.x)) u.x = sim.busX + 120;
@@ -1601,6 +1895,24 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             if (!Number.isFinite(u.vx)) u.vx = 0;
             if (!Number.isFinite(u.vy)) u.vy = 0;
             if (!Number.isFinite(u.vz)) u.vz = 0;
+
+            if (u.inTowerId) {
+              const tower = sim.units.find((t) => t.id === u.inTowerId);
+              if (!tower || tower.hp <= 0 || tower.state === 'dying' || tower.state === 'corpse') {
+                // Tower destroyed: the shooter jumps down and keeps fighting on foot
+                u.inTowerId = undefined;
+                u.attackRange = u.baseAttackRange ?? u.attackRange;
+                u.vz = 20;
+                addFloatingText('¡TORRE CAÍDA!', u.x, u.y, 30, '#ef4444', true);
+              } else {
+                u.x = tower.x;
+                u.y = tower.y + 0.5;
+                u.z = TOWER_PLATFORM_Z;
+                u.vx = 0;
+                u.vy = 0;
+                u.vz = 0;
+              }
+            }
 
             u.animTime += dt;
             if (u.whiteFlashTimer > 0) u.whiteFlashTimer = Math.max(0, u.whiteFlashTimer - dt);
@@ -1625,7 +1937,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               u.ghostHp = targetGhost;
             }
 
-            if (u.z > 0 || u.vz !== 0) {
+            if (!u.inTowerId && (u.z > 0 || u.vz !== 0)) {
               u.z += u.vz * dt;
               u.vz -= 220 * dt;
               if (u.z <= 0) {
@@ -1723,6 +2035,38 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               continue;
             }
 
+            if (u.team === 'survivor' && SURVIVOR_CONFIGS[u.subType as SurvivorType]?.isSupport) {
+              continue; // Watchtower: only holds a shooter (handled above)
+            }
+
+            if (u.team === 'survivor' && u.towerTargetId && !u.inTowerId) {
+              const tower = sim.units.find((t) => t.id === u.towerTargetId);
+              if (!tower || tower.hp <= 0 || tower.state === 'dying' || (u.isPlayerControlled && isUsingWasd)) {
+                if (tower && tower.occupantId === u.id) tower.occupantId = null;
+                u.towerTargetId = undefined;
+              } else {
+                const dx = tower.x - u.x;
+                const dy = tower.y - u.y;
+                const dist = Math.hypot(dx, dy);
+                if (dist <= 5) {
+                  u.towerTargetId = undefined;
+                  u.inTowerId = tower.id;
+                  u.baseAttackRange = u.attackRange;
+                  u.attackRange = Math.round(u.attackRange * TOWER_RANGE_BONUS);
+                  tower.occupied = true;
+                  u.state = 'march';
+                  addFloatingText('¡EN POSICIÓN!', tower.x, tower.y - 20, 30, '#4ade80', true);
+                } else {
+                  const step = Math.min(dist, u.speed * 1.3 * dt);
+                  u.x += (dx / dist) * step;
+                  u.y += (dy / dist) * step;
+                  u.facing = dx >= 0 ? 1 : -1;
+                  u.state = 'march';
+                }
+                continue;
+              }
+            }
+
             if (u.team === 'survivor') {
               for (let pIdx = sim.pickups.length - 1; pIdx >= 0; pIdx--) {
                 const pk = sim.pickups[pIdx];
@@ -1744,7 +2088,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 u.state = 'march';
                 u.reloadProgress = 0;
               }
-              if (u.isPlayerControlled && isUsingWasd && !u.isStationary) {
+              if (u.isPlayerControlled && isUsingWasd && !u.isStationary && !u.inTowerId) {
                 const len = Math.hypot(wasdDx, wasdDy) || 1;
                 u.x += (wasdDx / len) * u.speed * 0.9 * dt;
                 u.y += (wasdDy / len) * u.speed * 0.75 * dt;
@@ -1774,7 +2118,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               }
             }
 
-            if (u.team === 'survivor' && u.isPlayerControlled && isUsingWasd && !u.isStationary) {
+            if (
+              u.team === 'survivor' &&
+              u.isPlayerControlled &&
+              isUsingWasd &&
+              !u.isStationary &&
+              !u.inTowerId
+            ) {
               const len = Math.hypot(wasdDx, wasdDy) || 1;
               u.x += (wasdDx / len) * u.speed * 1.25 * dt;
               u.y += (wasdDy / len) * u.speed * 0.95 * dt;
@@ -1790,7 +2140,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   other.team === 'zombie' &&
                   other.state !== 'corpse' &&
                   other.state !== 'dying' &&
-                  other.hp > 0
+                  other.hp > 0 &&
+                  (u.isRanged || !other.isFlying) // Flyers: only ranged attacks can reach them
                 ) {
                   // Sniper prioritizes high-HP / armored threats in range!
                   const priorityBias =
@@ -1811,7 +2162,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               if (
                 closestZ &&
                 Math.abs(closestZ.x - u.x) <= u.attackRange &&
-                Math.abs(closestZ.y - u.y) <= (u.isRanged ? (u.chainTargets > 0 ? 64 : 38) : 18)
+                Math.abs(closestZ.y - u.y) <=
+                  (u.isRanged ? (u.chainTargets > 0 ? 64 : u.inTowerId ? 60 : 38) : 18)
               ) {
                 u.facing = closestZ.x >= u.x ? 1 : -1;
                 if (u.attackTimer <= 0) {
@@ -1880,7 +2232,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                         z.whiteFlashTimer = 0.16;
                         z.vx += (z.x >= u.x ? 1 : -1) * u.knockback;
                         z.attackTimer = Math.max(z.attackTimer, u.stunTime);
-                        arcPoints.push({ x: z.x, y: z.y - 14 });
+                        arcPoints.push({ x: z.x, y: z.y - 14 - (z.isFlying ? FLYER_HOVER_Z : 0) });
                         for (let sp = 0; sp < 5; sp++) {
                           const ang = Math.random() * Math.PI * 2;
                           sim.particles.push({
@@ -1919,9 +2271,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                       spawnWeaponTracerAndShell(
                         u.x + (u.subType === 'gunslinger' && u.ammo % 2 !== 0 ? 3 : 0),
                         u.y,
-                        muzzleZ,
+                        muzzleZ + u.z,
                         closestZ.x,
-                        closestZ.y,
+                        closestZ.y - (closestZ.isFlying ? FLYER_HOVER_Z * 0.7 : 0),
                         u.facing,
                         wKind
                       );
@@ -2025,7 +2377,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                     );
                   }
                 }
-              } else if (!u.isStationary && distToBarricade <= (u.isRanged ? 92 : 28)) {
+              } else if (!u.isStationary && !u.inTowerId && distToBarricade <= (u.isRanged ? 92 : 28)) {
                 u.facing = 1;
                 if (u.attackTimer <= 0) {
                   u.state = 'attack';
@@ -2120,7 +2472,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                     awardCommanderXp(35 + integrityBonus);
                   }
                 }
-              } else if (!(u.isPlayerControlled && isUsingWasd) && !u.isStationary) {
+              } else if (!(u.isPlayerControlled && isUsingWasd) && !u.isStationary && !u.inTowerId) {
                 u.state = 'march';
                 if (closestZ && Math.abs(closestZ.x - u.x) < 210) {
                   const dx = closestZ.x - u.x;
@@ -2141,12 +2493,15 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             } else {
               // Zombie AI
               u.facing = -1;
-              const blockingBarrel = sim.obstacles.find(
-                (o) =>
-                  o.type !== 'medkit' &&
-                  Math.abs(o.x - u.x) <= 20 &&
-                  Math.abs(o.y - u.y) <= 18
-              );
+              // Ground zombies must break barrels / sandbag walls; flyers soar over them
+              const blockingBarrel = u.isFlying
+                ? undefined
+                : sim.obstacles.find(
+                    (o) =>
+                      o.type !== 'medkit' &&
+                      Math.abs(o.x - u.x) <= (o.type === 'sandbags' ? 22 : 20) &&
+                      Math.abs(o.y - u.y) <= (o.type === 'sandbags' ? 16 : 18)
+                  );
               if (blockingBarrel) {
                 if (u.attackTimer <= 0) {
                   u.state = 'attack';
@@ -2164,7 +2519,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               for (const other of sim.units) {
                 if (
                   other.team === 'survivor' &&
-                  !other.isFlying &&
+                  (!other.isFlying || u.isFlying) && // only flyers can reach the drone
+                  !other.inTowerId && // shooters in a watchtower are out of reach (hit the tower)
                   other.state !== 'corpse' &&
                   other.state !== 'dying' &&
                   other.hp > 0
@@ -2177,8 +2533,46 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 }
               }
 
+              // ACID SPITTER: stops at range and lobs acid at the nearest survivor (or the bus)
+              if (u.spitsAcid) {
+                const targetInRange =
+                  closestS &&
+                  Math.abs(closestS.x - u.x) <= u.attackRange &&
+                  Math.abs(closestS.y - u.y) <= 70;
+                const busInRange = u.x <= sim.busX + 148 + u.attackRange * 0.8;
+                if (targetInRange || busInRange) {
+                  u.facing = -1;
+                  if (u.attackTimer <= 0) {
+                    u.state = 'attack';
+                    u.attackProgress = 0;
+                    u.attackTimer = u.attackCooldown;
+                    const tx = targetInRange && closestS ? closestS.x : sim.busX + 120 + Math.random() * 20;
+                    const ty =
+                      targetInRange && closestS
+                        ? closestS.y
+                        : ROAD_Y_MIN + 20 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 40);
+                    sim.acidBlobs.push({
+                      x: u.x - 8,
+                      y: u.y,
+                      z: 22,
+                      sx: u.x - 8,
+                      sy: u.y,
+                      tx,
+                      ty,
+                      t: 0,
+                      dur: 0.5 + Math.abs(tx - u.x) / 260,
+                      dmg: u.damage,
+                      hitsBus: !targetInRange,
+                    });
+                    soundFX.playAcidSpit();
+                  }
+                  continue;
+                }
+              }
+
               if (
                 closestS &&
+                !u.spitsAcid &&
                 Math.abs(closestS.x - u.x) <= u.attackRange + 4 &&
                 Math.abs(closestS.y - u.y) <= 18
               ) {
@@ -2366,13 +2760,15 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           const sy = (Math.random() - 0.5) * sim.screenShake;
           ctx.translate(sx, sy);
         }
+        // Camera: everything below is drawn in world coordinates
+        ctx.translate(-Math.round(sim.camX * 2) / 2, 0);
 
         // LAYER 0: 2.5x HiDPI Cached Biome Background + Live Biome Details
         renderBiomeBackground(ctx, mission.biome, sim.time, mission.id);
 
         // LAYER 1: 2x HiDPI Persistent Decal Buffer (Blood puddles, blast craters & spent shells)
         if (decalCanvasRef.current) {
-          ctx.drawImage(decalCanvasRef.current, 0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+          ctx.drawImage(decalCanvasRef.current, 0, 0, WORLD_WIDTH, LOGICAL_HEIGHT);
         }
 
         // Golden Commander Level-Up Shockwave Ring expanding across the road!
@@ -2393,6 +2789,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         for (let i = 0; i < sim.fireZones.length; i++) {
           renderFireZone(ctx, sim.fireZones[i], sim.time);
         }
+        renderAcidPools(ctx, sim.acidPools, sim.time);
 
         // 2-Tap Tactical Target Zone on the Road (Color-coded Crosshair + Drop Guide!)
         if (sim.draggingItem) {
@@ -2525,6 +2922,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         // LAYER 3: Supersonic Sniper Trails, Shotgun Pellets & Ejected Brass Shells
         renderTracersAndShells(ctx, sim.tracers, sim.shells);
         renderLightningArcs(ctx, sim.lightningArcs);
+        renderAcidBlobs(ctx, sim.acidBlobs);
 
         // LAYER 4: Foreground Left Military Truck & Oil Drums
         renderForegroundLeftProps(ctx);
@@ -2540,7 +2938,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           sim.fireZones,
           sim.obstacles,
           sim.tracers,
-          sim.lightningArcs
+          sim.lightningArcs,
+          sim.acidPools
         );
 
         // LAYER 6: Flying Crows, Blood Particles & Crisp Comic Popups ("17? / WACK!")
@@ -2587,6 +2986,45 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         });
 
         ctx.restore();
+
+        // SCREEN-SPACE MINIMAP: the whole 1.5x battlefield + the visible window (tap to jump)
+        {
+          const mm = MINIMAP;
+          const toMm = (wx: number) => mm.x + (Math.max(0, Math.min(WORLD_WIDTH, wx)) / WORLD_WIDTH) * mm.w;
+          const roadT = (wy: number) => mm.y + ((wy - ROAD_Y_MIN) / (ROAD_Y_MAX - ROAD_Y_MIN)) * mm.h;
+          ctx.save();
+          ctx.globalAlpha = 0.92;
+          ctx.fillStyle = 'rgba(12, 12, 10, 0.78)';
+          ctx.beginPath();
+          ctx.roundRect(mm.x - 3, mm.y - 3, mm.w + 6, mm.h + 6, 3);
+          ctx.fill();
+          ctx.fillStyle = 'rgba(71, 85, 105, 0.7)';
+          ctx.fillRect(mm.x, mm.y, mm.w, mm.h);
+          // Bus (left) and enemy barricade (right)
+          ctx.fillStyle = '#facc15';
+          ctx.fillRect(toMm(sim.busX + 40), mm.y + 1, 7, mm.h - 2);
+          if (sim.barricadeHp > 0) {
+            ctx.fillStyle = '#ef4444';
+            ctx.fillRect(toMm(sim.barricadeX) - 1, mm.y - 1, 3, mm.h + 2);
+          }
+          for (const o of sim.obstacles) {
+            if (o.type === 'sandbags') {
+              ctx.fillStyle = '#d6c49a';
+              ctx.fillRect(toMm(o.x) - 1, roadT(o.y) - 1, 2, 2);
+            }
+          }
+          for (const mu of sim.units) {
+            if (mu.hp <= 0 || mu.state === 'corpse' || mu.state === 'dying') continue;
+            ctx.fillStyle =
+              mu.team === 'zombie' ? (mu.isFlying ? '#f472b6' : '#f87171') : mu.isStationary ? '#e2e8f0' : '#38bdf8';
+            ctx.fillRect(toMm(mu.x) - 1, Math.max(mm.y, Math.min(mm.y + mm.h - 2, roadT(mu.y) - 1)), 2, 2);
+          }
+          // Visible camera window
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(toMm(sim.camX) + 0.5, mm.y - 1.5, (LOGICAL_WIDTH / WORLD_WIDTH) * mm.w - 1, mm.h + 3);
+          ctx.restore();
+        }
       }
 
       animationFrameId = requestAnimationFrame(step);
@@ -2607,8 +3045,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     activeSquadUnits.length > 0 ? activeSquadUnits : ['redneck'],
     progress.unitLevels
   );
-  const meleeSquad = effectiveSquad.filter((t) => !SURVIVOR_CONFIGS[t].isRanged);
-  const rangedSquad = effectiveSquad.filter((t) => SURVIVOR_CONFIGS[t].isRanged);
+  const meleeSquad = effectiveSquad.filter(
+    (t) => !SURVIVOR_CONFIGS[t].isRanged && !SURVIVOR_CONFIGS[t].isSupport
+  );
+  const rangedSquad = effectiveSquad.filter(
+    (t) => SURVIVOR_CONFIGS[t].isRanged && !SURVIVOR_CONFIGS[t].isSupport
+  );
+  const supportSquad = effectiveSquad.filter((t) => SURVIVOR_CONFIGS[t].isSupport);
   const nextLockedCfg = getNextLockedUnit(commanderLevel);
   const xpNeeded = getXpForNextLevel(commanderLevel);
   const xpPercent =
@@ -2625,6 +3068,10 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         height={LOGICAL_HEIGHT}
         onPointerMove={handleCanvasPointerMove}
         onPointerDown={handleCanvasPointerDown}
+        onPointerUp={handleCanvasPointerUp}
+        onPointerCancel={handleCanvasPointerUp}
+        onWheel={handleCanvasWheel}
+        style={{ touchAction: 'none' }}
         className={`absolute inset-0 w-full h-full object-cover hd-canvas ${
           draggingItem || placingUnit ? 'cursor-crosshair' : 'cursor-pointer'
         }`}
@@ -2942,15 +3389,17 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       {/* BOTTOM TACTICAL DECK: Compact Slots w/ Small Names + 2-Tap Items      */}
       {/* ===================================================================== */}
       <div className="absolute bottom-1 inset-x-1 z-20 overflow-x-auto overscroll-x-contain">
-        <div className="flex items-end gap-1 w-max mx-auto px-1 py-0.5">
+        <div className="flex items-end gap-[3px] w-max mx-auto px-1 py-0.5">
         {/* SURVIVOR SQUAD: one full-width row — melee group, then ranged group (by damage) */}
-        <div className="flex items-end gap-1">
-          {[meleeSquad, rangedSquad].map((group, groupIdx) => (
-            <React.Fragment key={groupIdx === 0 ? 'melee' : 'ranged'}>
-              {groupIdx === 1 && meleeSquad.length > 0 && rangedSquad.length > 0 && (
+        <div className="flex items-end gap-[3px]">
+          {[meleeSquad, rangedSquad, supportSquad].map((group, groupIdx) => (
+            <React.Fragment key={['melee', 'ranged', 'support'][groupIdx]}>
+              {groupIdx > 0 &&
+                group.length > 0 &&
+                [meleeSquad, rangedSquad].slice(0, groupIdx).some((g) => g.length > 0) && (
                 <div
                   className="h-9 w-[1px] bg-[#6e7353]/45 self-center shrink-0"
-                  title="Cuerpo a cuerpo | A distancia"
+                  title="Cuerpo a cuerpo | A distancia | Estructuras"
                 />
               )}
               {group.map((sType) => {
@@ -2968,7 +3417,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                     type="button"
                     onClick={() => activateUnit(sType)}
                     disabled={!canAfford && !isPlacing}
-                    className={`shrink-0 relative w-[42px] h-[56px] sm:w-[46px] sm:h-[60px] rounded transition select-none flex flex-col justify-between p-0.5 ${
+                    className={`shrink-0 relative w-[40px] h-[56px] rounded transition select-none flex flex-col justify-between p-0.5 ${
                       isPlacing
                         ? 'bg-sky-950/95 border-2 border-cyan-300 ring-2 ring-cyan-400/60 -translate-y-1 shadow-xl cursor-pointer'
                         : canAfford
@@ -3056,7 +3505,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   true
                 )
               }
-              className="shrink-0 relative w-[38px] h-[56px] sm:w-[42px] sm:h-[60px] rounded bg-zinc-950/82 border border-amber-700/65 flex flex-col justify-between p-0.5 opacity-85 hover:opacity-100 cursor-pointer transition"
+              className="shrink-0 relative w-[36px] h-[56px] rounded bg-zinc-950/82 border border-amber-700/65 flex flex-col justify-between p-0.5 opacity-85 hover:opacity-100 cursor-pointer transition"
               title={`🔒 Próximo desbloqueo en Nivel ${nextLockedCfg.unlockLevel}: ${nextLockedCfg.name} (${nextLockedCfg.roleTitle})`}
             >
               <div className="w-full flex justify-center z-20">
@@ -3086,7 +3535,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         <div className="h-10 w-[1px] bg-[#6e7353]/55 self-center mx-0.5 shrink-0" />
 
         {/* RAGE TACTICAL DOCK (2-Tap Manual Throwables: 1st tap = Select, 2nd tap on road = Drop) */}
-        <div className="flex items-end gap-1">
+        <div className="flex items-end gap-[3px]">
           {TACTICAL_ORDER.map((itemType) => {
             const cfg = TACTICAL_ITEM_CONFIGS[itemType];
             const cd = itemCooldowns[itemType];
@@ -3100,7 +3549,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 type="button"
                 onClick={() => selectTacticalItem(itemType)}
                 disabled={!canAfford}
-                className={`shrink-0 relative w-[40px] h-[54px] sm:w-[44px] sm:h-[58px] rounded transition select-none flex flex-col justify-between p-0.5 ${
+                className={`shrink-0 relative w-[38px] h-[54px] rounded transition select-none flex flex-col justify-between p-0.5 ${
                   isSelected
                     ? 'bg-amber-950/95 border-2 border-yellow-300 ring-2 ring-yellow-400/60 -translate-y-1 shadow-xl cursor-pointer'
                     : canAfford

@@ -1,12 +1,14 @@
 import { BiomeType } from '../types/game';
 import { INK, inkedCircle, inkedRoundRect } from './hdAtlas';
 
-export const LOGICAL_WIDTH = 720;
+export const LOGICAL_WIDTH = 720; // Camera viewport width (what fits on screen)
 export const LOGICAL_HEIGHT = 336;
+/** The battlefield is 1.5x longer than the screen; a camera scrolls across it. */
+export const WORLD_WIDTH = 1080;
 export const ROAD_Y_MIN = 180;
 export const ROAD_Y_MAX = 278;
 
-const BIOME_BAKE_SCALE = 2.5; // 1800x840 crisp offscreen cache
+const BIOME_BAKE_SCALE = 2.5; // 2700x840 crisp offscreen cache (full 1080px world)
 const bakedBiomeCache = new Map<string, HTMLCanvasElement>();
 
 export function syncCanvasHiDPI(
@@ -152,7 +154,7 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
   if (existing) return existing;
 
   const canvas = document.createElement('canvas');
-  canvas.width = Math.round(LOGICAL_WIDTH * BIOME_BAKE_SCALE);
+  canvas.width = Math.round(WORLD_WIDTH * BIOME_BAKE_SCALE);
   canvas.height = Math.round(LOGICAL_HEIGHT * BIOME_BAKE_SCALE);
   const ctx = canvas.getContext('2d')!;
   ctx.scale(BIOME_BAKE_SCALE, BIOME_BAKE_SCALE);
@@ -179,7 +181,7 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
     skyGrad.addColorStop(1, '#9e6b49');
   }
   ctx.fillStyle = skyGrad;
-  ctx.fillRect(0, 0, LOGICAL_WIDTH, 155);
+  ctx.fillRect(0, 0, WORLD_WIDTH, 155);
 
   // Sun / Moon disc with soft atmospheric halo
   const sunX = biome === 'graveyard' ? 560 : 510;
@@ -207,11 +209,11 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
       : '#2d262c';
   ctx.beginPath();
   ctx.moveTo(0, 152);
-  for (let x = 0; x <= LOGICAL_WIDTH; x += 45) {
+  for (let x = 0; x <= WORLD_WIDTH; x += 45) {
     const h = 34 + (hash32(x, 1, seed) % 34);
     ctx.lineTo(x, 146 - h);
   }
-  ctx.lineTo(LOGICAL_WIDTH, 152);
+  ctx.lineTo(WORLD_WIDTH, 152);
   ctx.closePath();
   ctx.fill();
 
@@ -223,7 +225,10 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
     for (let bx = 260; bx < 520; bx += 26) {
       ctx.strokeRect(bx, 98, 26, 26);
     }
-    for (let i = 0; i < 19; i++) {
+    for (let bx = 780; bx < 960; bx += 26) {
+      ctx.strokeRect(bx, 104, 26, 20);
+    }
+    for (let i = 0; i < 29; i++) {
       const tx = 18 + i * 38 + ((hash32(i, 3, seed) % 14) - 7);
       const sc = 0.72 + (hash32(i, 4, seed) % 35) / 100;
       drawPineTreeHD(ctx, tx, 154, sc, '#244735', '#173023');
@@ -235,6 +240,11 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
     ctx.strokeStyle = '#f8fafc';
     ctx.lineWidth = 1.6;
     ctx.strokeRect(292, 122, 26, 28);
+    // Eastern fields: second grain silo + hay bales
+    inkedRoundRect(ctx, 820, 100, 22, 52, 8, '#cbd5e1', '#f8fafc', '#64748b');
+    for (const hx of [760, 880, 905]) {
+      inkedRoundRect(ctx, hx, 138, 18, 13, 5, '#ca8a04', '#facc15', '#854d0e', 1.2);
+    }
     // Windmill tower centered at 440, hub at (440,56)
     ctx.strokeStyle = '#3f2e26';
     ctx.lineWidth = 2.2;
@@ -243,22 +253,22 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
     ctx.lineTo(440, 56);
     ctx.lineTo(450, 150);
     ctx.stroke();
-    for (let fx = 10; fx < LOGICAL_WIDTH; fx += 24) {
+    for (let fx = 10; fx < WORLD_WIDTH; fx += 24) {
       inkedRoundRect(ctx, fx, 142, 4, 12, 1, '#573b26');
     }
     ctx.fillStyle = '#573b26';
-    ctx.fillRect(0, 146, LOGICAL_WIDTH, 2.2);
+    ctx.fillRect(0, 146, WORLD_WIDTH, 2.2);
   } else if (biome === 'graveyard') {
     // Gothic stone chapel, wrought-iron fence, streetlamps & tombstones
     inkedRoundRect(ctx, 286, 84, 68, 66, 3, '#1e293b', '#334155', '#0f172a');
-    for (let gx = 16; gx < LOGICAL_WIDTH; gx += 14) {
+    for (let gx = 16; gx < WORLD_WIDTH; gx += 14) {
       ctx.fillStyle = '#0f172a';
       ctx.fillRect(gx, 132, 2.2, 22);
     }
-    for (let tx = 45; tx < 680; tx += 52) {
+    for (let tx = 45; tx < WORLD_WIDTH - 40; tx += 52) {
       inkedRoundRect(ctx, tx, 136, 13, 17, 4, '#475569', '#94a3b8', '#1e293b', 1.1);
     }
-    for (const lx of [200, 444]) {
+    for (const lx of [200, 444, 700, 930]) {
       inkedRoundRect(ctx, lx - 2, 112, 4, 40, 1, '#0f172a');
       inkedCircle(ctx, lx, 112, 4.5, '#fef08a', '#ffffff');
     }
@@ -271,6 +281,11 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
       [365, 68, 62],
       [555, 58, 56],
       [626, 74, 52],
+      [705, 64, 60],
+      [790, 52, 50],
+      [868, 76, 58],
+      [955, 60, 56],
+      [1030, 70, 48],
     ];
     for (const [bx, topY, bw] of bldgs) {
       inkedRoundRect(ctx, bx, topY, bw, 152 - topY, 2, '#27272a', '#3f3f46', '#18181b');
@@ -281,7 +296,7 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
         }
       }
     }
-    for (const sx of [303, 331, 513]) {
+    for (const sx of [303, 331, 513, 840]) {
       inkedRoundRect(ctx, sx - 4, 38, 8, 114, 1.5, '#3f3f46', '#71717a', '#18181b');
     }
   }
@@ -290,18 +305,19 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
   const dirtCol =
     biome === 'graveyard' ? '#1e2631' : biome === 'forest_highway' ? '#3d4a35' : '#4a3b2f';
   ctx.fillStyle = dirtCol;
-  ctx.fillRect(0, 148, LOGICAL_WIDTH, 34);
-  ctx.fillRect(0, ROAD_Y_MAX - 2, LOGICAL_WIDTH, LOGICAL_HEIGHT - ROAD_Y_MAX + 4);
+  ctx.fillRect(0, 148, WORLD_WIDTH, 34);
+  ctx.fillRect(0, ROAD_Y_MAX - 2, WORLD_WIDTH, LOGICAL_HEIGHT - ROAD_Y_MAX + 4);
 
   // Highway W-beam Steel Guardrail along top edge of road
-  for (let gx = 8; gx < LOGICAL_WIDTH; gx += 36) {
+  for (let gx = 8; gx < WORLD_WIDTH; gx += 36) {
     inkedRoundRect(ctx, gx, 166, 4.5, 13, 1, '#334155');
   }
-  inkedRoundRect(ctx, -4, 168, LOGICAL_WIDTH + 8, 6.5, 1.5, '#94a3b8', '#e2e8f0', '#475569', 1.2);
+  inkedRoundRect(ctx, -4, 168, WORLD_WIDTH + 8, 6.5, 1.5, '#94a3b8', '#e2e8f0', '#475569', 1.2);
 
   // Background abandoned vehicles behind guardrail
   drawWreckedSedanHD(ctx, 168, 150, '#3b5d7a', '#64748b');
   drawWreckedSedanHD(ctx, 476, 149, '#7f1d1d', '#991b1b');
+  drawWreckedSedanHD(ctx, 812, 150, '#3f6212', '#4d7c0f');
 
   // 5. Rich Multi-Layered Asphalt Roadway (180..278)
   const roadGrad = ctx.createLinearGradient(0, ROAD_Y_MIN, 0, ROAD_Y_MAX);
@@ -309,22 +325,22 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
   roadGrad.addColorStop(0.5, '#363b44');
   roadGrad.addColorStop(1, '#262a31');
   ctx.fillStyle = roadGrad;
-  ctx.fillRect(0, ROAD_Y_MIN, LOGICAL_WIDTH, ROAD_Y_MAX - ROAD_Y_MIN);
+  ctx.fillRect(0, ROAD_Y_MIN, WORLD_WIDTH, ROAD_Y_MAX - ROAD_Y_MIN);
 
   // Subtle shoulder curb lines
   ctx.fillStyle = 'rgba(226, 232, 240, 0.25)';
-  ctx.fillRect(0, ROAD_Y_MIN + 2, LOGICAL_WIDTH, 2);
-  ctx.fillRect(0, ROAD_Y_MAX - 4, LOGICAL_WIDTH, 2);
+  ctx.fillRect(0, ROAD_Y_MIN + 2, WORLD_WIDTH, 2);
+  ctx.fillRect(0, ROAD_Y_MAX - 4, WORLD_WIDTH, 2);
 
   // Weathered center yellow dashed highway divider
   const midY = (ROAD_Y_MIN + ROAD_Y_MAX) * 0.5;
-  for (let lx = 14; lx < LOGICAL_WIDTH; lx += 44) {
+  for (let lx = 14; lx < WORLD_WIDTH; lx += 44) {
     inkedRoundRect(ctx, lx, midY - 2, 24, 4, 1, '#eab308', '#fef08a', '#a16207', 0.8);
   }
 
   // Deterministic asphalt aggregate, oil stains, skid marks & branching cracks
-  for (let i = 0; i < 48; i++) {
-    const ox = hash32(i, 11, seed) % LOGICAL_WIDTH;
+  for (let i = 0; i < 72; i++) {
+    const ox = hash32(i, 11, seed) % WORLD_WIDTH;
     const oy = ROAD_Y_MIN + 8 + (hash32(i, 12, seed) % (ROAD_Y_MAX - ROAD_Y_MIN - 16));
     ctx.fillStyle = i % 3 === 0 ? 'rgba(15, 17, 21, 0.34)' : 'rgba(148, 163, 184, 0.12)';
     ctx.beginPath();
@@ -333,8 +349,8 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
   }
   ctx.strokeStyle = 'rgba(15, 17, 22, 0.55)';
   ctx.lineWidth = 1.1;
-  for (let c = 0; c < 18; c++) {
-    let cx = (c * 41 + (hash32(c, 21, seed) % 25)) % LOGICAL_WIDTH;
+  for (let c = 0; c < 27; c++) {
+    let cx = (c * 41 + (hash32(c, 21, seed) % 25)) % WORLD_WIDTH;
     let cy = ROAD_Y_MIN + 6 + (hash32(c, 22, seed) % (ROAD_Y_MAX - ROAD_Y_MIN - 14));
     ctx.beginPath();
     ctx.moveTo(cx, cy);
@@ -365,7 +381,7 @@ export function renderBiomeBackground(
   seed = 1
 ) {
   const baked = getBakedBiomeCanvas(biome, seed);
-  ctx.drawImage(baked, 0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+  ctx.drawImage(baked, 0, 0, WORLD_WIDTH, LOGICAL_HEIGHT);
 
   if (biome === 'farm_crossing') {
     const hubX = 440;
@@ -384,13 +400,13 @@ export function renderBiomeBackground(
     ctx.restore();
   } else if (biome === 'graveyard') {
     ctx.save();
-    const shift = (time * 14) % LOGICAL_WIDTH;
+    const shift = (time * 14) % WORLD_WIDTH;
     const mistGrad = ctx.createLinearGradient(0, 150, 0, 282);
     mistGrad.addColorStop(0, 'rgba(148, 163, 184, 0.14)');
     mistGrad.addColorStop(0.5, 'rgba(148, 163, 184, 0.04)');
     mistGrad.addColorStop(1, 'rgba(148, 163, 184, 0.16)');
     ctx.fillStyle = mistGrad;
-    for (let i = -1; i <= 2; i++) {
+    for (let i = -1; i <= 4; i++) {
       ctx.beginPath();
       ctx.ellipse(i * 250 + shift * 0.45, 164, 110, 10, 0, 0, Math.PI * 2);
       ctx.ellipse(i * 270 - shift * 0.35, 272, 125, 11, 0, 0, Math.PI * 2);
@@ -398,7 +414,7 @@ export function renderBiomeBackground(
     }
     ctx.restore();
   } else if (biome === 'junkyard_city') {
-    [303, 331, 513].forEach((sx, idx) => {
+    [303, 331, 513, 840].forEach((sx, idx) => {
       const flk = Math.sin(time * 16 + idx * 2.1) * 2.4;
       ctx.fillStyle = 'rgba(249, 115, 22, 0.85)';
       ctx.beginPath();
@@ -414,8 +430,8 @@ export function renderBiomeBackground(
   // Smooth drifting atmospheric dust motes
   ctx.fillStyle =
     biome === 'graveyard' ? 'rgba(186, 230, 253, 0.34)' : 'rgba(254, 240, 138, 0.30)';
-  for (let m = 0; m < 12; m++) {
-    const mx = (m * 67 + time * (9 + (m % 4) * 2.5)) % LOGICAL_WIDTH;
+  for (let m = 0; m < 18; m++) {
+    const mx = (m * 67 + time * (9 + (m % 4) * 2.5)) % WORLD_WIDTH;
     const my = 84 + ((m * 37) % 180) + Math.sin(time * 2 + m) * 4.5;
     ctx.beginPath();
     ctx.arc(mx, my, 1.15, 0, Math.PI * 2);

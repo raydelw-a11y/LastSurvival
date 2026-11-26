@@ -11,10 +11,21 @@ export type SurvivorType =
   | 'turret'
   | 'drone'
   | 'juggernaut'
-  | 'tesla';
+  | 'tesla'
+  | 'barricade'
+  | 'watchtower';
 
 export type TacticalItemType = 'blue_barrel' | 'red_barrel' | 'medkit';
-export type ZombieType = 'walker' | 'runner' | 'crit_zombie' | 'armored' | 'skeleton' | 'bloated';
+export type ZombieType =
+  | 'walker'
+  | 'runner'
+  | 'crit_zombie'
+  | 'armored'
+  | 'skeleton'
+  | 'bloated'
+  | 'zombie_dog'
+  | 'flyer'
+  | 'acid_spitter';
 export type BiomeType = 'forest_highway' | 'farm_crossing' | 'graveyard' | 'junkyard_city';
 
 export interface SurvivorConfig {
@@ -49,8 +60,14 @@ export interface SurvivorConfig {
   chainRange?: number; // Tesla Coil: max jump distance between chained zombies
   chainFalloff?: number; // Tesla Coil: damage multiplier applied on every extra jump
   stunTime?: number; // Tesla Coil: seconds each shocked zombie loses before its next attack
-  /** Player picks where to install it on the road (Turret, Tesla Coil). */
+  /** Player picks where to install it on the road (Turret, Tesla Coil, Barricade, Watchtower). */
   placeable?: boolean;
+  /** Non-attacking support structure (Barricade, Watchtower): listed in its own group. */
+  isSupport?: boolean;
+  /** Barricade: becomes a sandbag wall that blocks ground zombies instead of a unit. */
+  isBarrier?: boolean;
+  /** Watchtower: the nearest walking ranged unit climbs in and fires from it. */
+  isTower?: boolean;
   infectedZombieType?: ZombieType;
   description: string;
   quotes: string[];
@@ -87,6 +104,12 @@ export interface ZombieConfig {
   bulletResist?: number;
   explodesOnDeath?: boolean;
   emergesFromGround?: boolean;
+  /** Hovers in the air: flies over barricades/barrels and only ranged attacks can hit it. */
+  isFlying?: boolean;
+  /** Lobs acid from range; the splash leaves a burning puddle on the road. */
+  spitsAcid?: boolean;
+  /** Spawns together with this many extra copies (zombie dog packs). */
+  packSize?: number;
   description: string;
 }
 
@@ -171,6 +194,8 @@ export const SURVIVOR_ORDER: SurvivorType[] = [
   'drone',
   'juggernaut',
   'tesla',
+  'barricade',
+  'watchtower',
 ];
 
 /** The active squad has no size cap: any number of unlocked units can be equipped. */
@@ -190,6 +215,8 @@ export const SHORT_UNIT_NAMES: Record<SurvivorType, string> = {
   drone: 'Dron',
   juggernaut: 'Juggernaut',
   tesla: 'Tesla',
+  barricade: 'Barricada',
+  watchtower: 'Torre',
 };
 
 export const SHORT_TACTICAL_NAMES: Record<TacticalItemType, string> = {
@@ -225,6 +252,9 @@ export const ZOMBIE_XP_REWARD: Record<ZombieType, number> = {
   crit_zombie: 15,
   armored: 20,
   bloated: 24,
+  zombie_dog: 10,
+  flyer: 16,
+  acid_spitter: 18,
 };
 
 export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
@@ -540,6 +570,55 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     quotes: ['[ALTO VOLTAJE]', '[ARCO ELÉCTRICO CARGADO]'],
     hotkey: 'T',
   },
+  barricade: {
+    id: 'barricade',
+    name: 'Barricada de Sacos',
+    roleTitle: 'Muro de Contención',
+    unlockLevel: 1,
+    cost: 15,
+    prepTime: 10.0,
+    baseHp: 330,
+    baseDamage: 0,
+    fortune: 0,
+    speed: 0,
+    attackRange: 0,
+    attackCooldown: 1,
+    isRanged: false,
+    knockback: 0,
+    isStationary: true,
+    placeable: true,
+    isSupport: true,
+    isBarrier: true,
+    description:
+      'Muro de sacos de arena que instalas donde quieras: los zombis de tierra deben romperlo para pasar. Tus unidades lo cruzan y disparan por encima.',
+    quotes: [],
+    hotkey: 'B',
+  },
+  watchtower: {
+    id: 'watchtower',
+    name: 'Torre de Vigilancia',
+    roleTitle: 'Puesto de Tirador',
+    unlockLevel: 2,
+    cost: 20,
+    prepTime: 12.0,
+    baseHp: 210,
+    baseDamage: 0,
+    fortune: 0,
+    speed: 0,
+    attackRange: 0,
+    attackCooldown: 1,
+    isRanged: false,
+    knockback: 0,
+    meleeResist: 0.2,
+    isStationary: true,
+    placeable: true,
+    isSupport: true,
+    isTower: true,
+    description:
+      'Torre que instalas donde quieras. Aparece vacía: la unidad a distancia más cercana sube y dispara desde arriba con +35% de alcance, a salvo de los golpes.',
+    quotes: [],
+    hotkey: 'V',
+  },
 };
 
 /** Damage a unit deals per attack at a given upgrade level (shotgun pellets count together). */
@@ -550,15 +629,18 @@ export function getUnitDamagePerAttack(type: SurvivorType, level = 1): number {
 
 /**
  * Display order everywhere (map squad panel + battle bar): melee first, then ranged,
- * each group from highest to lowest damage per attack at the player's current levels.
+ * then support structures; each group from highest to lowest damage per attack
+ * (structures by toughness) at the player's current levels.
  */
 export function sortUnitsByRoleAndDamage(
   units: SurvivorType[],
   unitLevels: Partial<Record<SurvivorType, number>> = {}
 ): SurvivorType[] {
   return [...units].sort((a, b) => {
-    const ra = SURVIVOR_CONFIGS[a].isRanged ? 1 : 0;
-    const rb = SURVIVOR_CONFIGS[b].isRanged ? 1 : 0;
+    const role = (t: SurvivorType) =>
+      SURVIVOR_CONFIGS[t].isSupport ? 2 : SURVIVOR_CONFIGS[t].isRanged ? 1 : 0;
+    const ra = role(a);
+    const rb = role(b);
     if (ra !== rb) return ra - rb;
     const da = getUnitDamagePerAttack(a, unitLevels[a]);
     const db = getUnitDamagePerAttack(b, unitLevels[b]);
@@ -717,6 +799,52 @@ export const ZOMBIE_CONFIGS: Record<ZombieType, ZombieConfig> = {
     critMultiplier: 1.7,
     explodesOnDeath: true,
     description: 'Coloso explosivo: si lo detonas de lejos, su explosión también arrasa a los zombis cercanos.',
+  },
+  zombie_dog: {
+    id: 'zombie_dog',
+    name: 'Perro Zombi',
+    baseHp: 40,
+    baseDamage: 8,
+    speed: 64,
+    attackRange: 20,
+    attackCooldown: 0.6,
+    rageReward: 4,
+    courageDropChance: 0.18,
+    critChance: 0.14,
+    critMultiplier: 1.5,
+    packSize: 2,
+    description: 'Caza en jauría de tres: rápido y frágil. Una barricada o una escopeta los frena en seco.',
+  },
+  flyer: {
+    id: 'flyer',
+    name: 'Zombi Alado',
+    baseHp: 62,
+    baseDamage: 11,
+    speed: 34,
+    attackRange: 24,
+    attackCooldown: 1.0,
+    rageReward: 8,
+    courageDropChance: 0.35,
+    critChance: 0.15,
+    critMultiplier: 1.6,
+    isFlying: true,
+    description: 'Vuela sobre barricadas y barriles. Solo las unidades a distancia, las torres y Bill pueden derribarlo; también caza drones.',
+  },
+  acid_spitter: {
+    id: 'acid_spitter',
+    name: 'Escupidor de Ácido',
+    baseHp: 95,
+    baseDamage: 14,
+    speed: 15,
+    attackRange: 135,
+    attackCooldown: 2.7,
+    rageReward: 9,
+    courageDropChance: 0.4,
+    critChance: 0.1,
+    critMultiplier: 1.4,
+    bulletResist: 0.1,
+    spitsAcid: true,
+    description: 'Lanza bolas de ácido desde lejos que dejan charcos corrosivos. Ataca primero o aléjate del charco.',
   },
 };
 

@@ -12,6 +12,7 @@ import {
   ROAD_Y_MAX,
   ROAD_Y_MIN,
   syncCanvasHiDPI,
+  WORLD_WIDTH,
 } from './hdEnvironment';
 
 export {
@@ -20,6 +21,7 @@ export {
   ROAD_Y_MIN,
   ROAD_Y_MAX,
   syncCanvasHiDPI,
+  WORLD_WIDTH,
   renderBiomeBackground,
   renderForegroundLeftProps,
   renderArmoredBus,
@@ -29,6 +31,8 @@ export {
 export interface RenderUnit {
   /** Placement preview: draw the body only (no health bar, halos or quotes). */
   isGhost?: boolean;
+  /** Watchtower: a shooter is inside (green lamp) or it is still empty (blinking red). */
+  occupied?: boolean;
   id: string;
   team: 'survivor' | 'zombie';
   subType: SurvivorType | ZombieType;
@@ -68,7 +72,7 @@ export interface RenderUnit {
 
 export interface RenderObstacle {
   id: string;
-  type: TacticalItemType;
+  type: TacticalItemType | 'sandbags';
   x: number;
   y: number;
   z: number;
@@ -153,6 +157,22 @@ export interface RenderFloatingText {
   isComic?: boolean;
 }
 
+/** Acid ball lobbed by an Acid Spitter (flies in an arc, splashes on landing). */
+export interface RenderAcidBlob {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/** Corrosive puddle left by an acid splash. */
+export interface RenderAcidPool {
+  x: number;
+  y: number;
+  radius: number;
+  duration: number;
+  maxDuration: number;
+}
+
 /** Tesla Coil chain lightning: polyline through the coil tip and every shocked zombie. */
 export interface RenderLightningArc {
   points: { x: number; y: number }[];
@@ -181,6 +201,239 @@ const RANGED_SURVIVORS = new Set<string>([
 
 /** Height of the Tesla Coil tip above the ground (arc origin), in unit-local pixels. */
 export const TESLA_TIP_Z = 37;
+/** Height of the Watchtower platform: the shooter inside stands at this z. */
+export const TOWER_PLATFORM_Z = 27;
+/** Depth offsets of the three sandbag piles that make up one barricade. */
+export const BARRICADE_SEGMENT_OFFSETS = [-27, 0, 27];
+/** Visual hover height of flying zombies above their ground shadow. */
+export const FLYER_HOVER_Z = 30;
+
+function drawSandbag(ctx: CanvasRenderingContext2D, x: number, y: number, flash: boolean, worn: number) {
+  inkedRoundRect(
+    ctx,
+    x - 7,
+    y - 4.5,
+    14,
+    9,
+    4,
+    flash ? '#ffffff' : worn > 1 ? '#8a7a57' : '#a8946b',
+    flash ? '#ffffff' : '#d6c49a',
+    '#6b5a3b',
+    1.3
+  );
+  ctx.strokeStyle = 'rgba(60, 45, 25, 0.55)';
+  ctx.lineWidth = 0.9;
+  ctx.beginPath();
+  ctx.moveTo(x - 4, y - 3);
+  ctx.lineTo(x - 4, y + 3);
+  ctx.moveTo(x + 4, y - 3);
+  ctx.lineTo(x + 4, y + 3);
+  ctx.stroke();
+  if (worn > 0) {
+    ctx.fillStyle = 'rgba(30, 22, 12, 0.55)';
+    ctx.fillRect(x - 1, y - 1, 3, 2);
+  }
+}
+
+/** Pyramid of sandbags (one barricade segment) centered at (x, y). */
+export function drawSandbagPile(ctx: CanvasRenderingContext2D, x: number, y: number, flash = false, worn = 0) {
+  drawSoftShadow(ctx, x, y + 2, 17, 4, 0.36);
+  drawSandbag(ctx, x - 7.5, y - 3, flash, worn);
+  drawSandbag(ctx, x + 7.5, y - 3, flash, worn);
+  if (worn < 2) drawSandbag(ctx, x, y - 10.5, flash, worn);
+}
+
+function renderZombieDogRig(ctx: CanvasRenderingContext2D, unit: RenderUnit, flash: boolean) {
+  const stride = unit.state === 'march' ? Math.sin(unit.animTime * 20) : 0;
+  const lunge = unit.state === 'attack' ? Math.sin(unit.attackProgress * Math.PI) * 6 : 0;
+  const fur = flash ? '#ffffff' : '#5f6f4a';
+  const dark = flash ? '#f8fafc' : '#2c3522';
+  ctx.save();
+  ctx.translate(lunge, -Math.abs(stride) * 2);
+  for (const [lx, phase] of [
+    [-6, stride],
+    [-3, -stride],
+    [5, -stride],
+    [8, stride],
+  ]) {
+    ctx.save();
+    ctx.translate(lx, -7);
+    ctx.rotate(phase * 0.6);
+    inkedRoundRect(ctx, -1.5, 0, 3, 7.5, 1.1, dark, fur, undefined, 1.1);
+    ctx.restore();
+  }
+  // Ragged tail
+  ctx.save();
+  ctx.translate(-9, -12);
+  ctx.rotate(-0.9 + stride * 0.3);
+  inkedRoundRect(ctx, -5, -1.2, 5.5, 2.4, 1, dark, undefined, undefined, 1);
+  ctx.restore();
+  // Rotting body with exposed ribs
+  inkedRoundRect(ctx, -9.5, -14.5, 19, 8.5, 4, fur, '#7c8c62', dark, 1.5);
+  ctx.fillStyle = '#7f1d1d';
+  ctx.fillRect(-4, -13, 7, 4.5);
+  ctx.strokeStyle = '#e7e5e4';
+  ctx.lineWidth = 0.9;
+  for (let rx = -3; rx <= 2; rx += 2) {
+    ctx.beginPath();
+    ctx.moveTo(rx, -12.8);
+    ctx.lineTo(rx, -8.8);
+    ctx.stroke();
+  }
+  // Head + torn ear + glowing eye + bloody fangs
+  inkedRoundRect(ctx, 6.5, -19.5, 9.5, 8, 3.2, fur, '#7c8c62', dark, 1.4);
+  ctx.beginPath();
+  ctx.moveTo(8, -19);
+  ctx.lineTo(9.2, -23);
+  ctx.lineTo(11, -19);
+  ctx.closePath();
+  ctx.fillStyle = dark;
+  ctx.fill();
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 1.1;
+  ctx.stroke();
+  inkedRoundRect(ctx, 13, -16.5, 6.4, 4.4, 1.6, dark);
+  inkedCircle(ctx, 11.4, -16.8, 1.3, '#ef4444', '#fecaca', 0.6);
+  ctx.fillStyle = '#fef2f2';
+  ctx.fillRect(15, -12.6, 1.1, 1.8);
+  ctx.fillRect(17.4, -12.6, 1.1, 1.8);
+  ctx.fillStyle = '#b91c1c';
+  ctx.fillRect(16, -11.4, 1.2, 2.2);
+  ctx.restore();
+}
+
+function renderFlyerRig(ctx: CanvasRenderingContext2D, unit: RenderUnit, time: number, flash: boolean) {
+  const flap = Math.sin(time * 13 + unit.animTime * 3);
+  const dive = unit.state === 'attack' ? Math.sin(unit.attackProgress * Math.PI) : 0;
+  const skin = flash ? '#ffffff' : '#6f8b63';
+  const wing = flash ? 'rgba(255,255,255,0.95)' : 'rgba(76, 29, 49, 0.92)';
+  const bone = flash ? '#ffffff' : '#3b1d2a';
+  ctx.save();
+  ctx.translate(dive * 6, -FLYER_HOVER_Z + Math.sin(time * 4 + unit.x) * 2.5 + dive * 12);
+
+  // Membranous bat wings (left & right), flapping
+  for (const side of [-1, 1]) {
+    ctx.save();
+    ctx.translate(side * 2, -12);
+    ctx.scale(side, 1);
+    ctx.rotate(-0.25 + flap * 0.55);
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(9, -9);
+    ctx.lineTo(20, -6);
+    ctx.lineTo(16, 0);
+    ctx.lineTo(19, 4);
+    ctx.lineTo(11, 3);
+    ctx.lineTo(8, 7);
+    ctx.closePath();
+    ctx.fillStyle = wing;
+    ctx.fill();
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.strokeStyle = bone;
+    ctx.lineWidth = 0.9;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(20, -6);
+    ctx.moveTo(9, -9);
+    ctx.lineTo(11, 3);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Hunched torso, dangling clawed legs
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.moveTo(-2.5, -3);
+  ctx.lineTo(-4, 5 + flap);
+  ctx.moveTo(2.5, -3);
+  ctx.lineTo(3, 5 - flap);
+  ctx.stroke();
+  ctx.strokeStyle = skin;
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+  inkedRoundRect(ctx, -5.5, -15, 11, 13, 4, skin, '#93ad86', '#3f5239', 1.4);
+  ctx.fillStyle = '#7f1d1d';
+  ctx.fillRect(-3, -10, 5, 3);
+
+  // Head with glowing eyes and fanged maw
+  inkedRoundRect(ctx, -4.5, -24, 10, 9.5, 4, skin, '#93ad86', '#3f5239', 1.4);
+  inkedCircle(ctx, 2, -20, 1.4, '#f43f5e', '#fecdd3', 0.6);
+  inkedCircle(ctx, -1.6, -20, 1.2, '#f43f5e', undefined, 0.6);
+  ctx.fillStyle = '#fef2f2';
+  ctx.fillRect(1, -16.5, 1, 1.6);
+  ctx.fillRect(3, -16.5, 1, 1.6);
+  ctx.restore();
+}
+
+function renderWatchtowerRig(ctx: CanvasRenderingContext2D, unit: RenderUnit, time: number, flash: boolean) {
+  const wood = flash ? '#ffffff' : '#8b5a2b';
+  const woodHi = flash ? '#ffffff' : '#b07a43';
+  const woodDk = '#4a2c12';
+  const top = -TOWER_PLATFORM_Z;
+
+  // Two stilts + cross braces
+  for (const lx of [-11, 9]) {
+    inkedRoundRect(ctx, lx, top, 3, TOWER_PLATFORM_Z + 1, 1, wood, woodHi, woodDk, 1.3);
+  }
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  ctx.moveTo(-9, -2);
+  ctx.lineTo(10, top + 4);
+  ctx.moveTo(10, -2);
+  ctx.lineTo(-9, top + 4);
+  ctx.stroke();
+  ctx.strokeStyle = wood;
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+
+  // Side ladder
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(-15, 0);
+  ctx.lineTo(-13, top);
+  ctx.moveTo(-19, 0);
+  ctx.lineTo(-17, top);
+  ctx.stroke();
+  ctx.lineWidth = 1;
+  for (let ry = -3; ry > top; ry -= 4.5) {
+    ctx.beginPath();
+    ctx.moveTo(-18.6, ry);
+    ctx.lineTo(-14.4, ry);
+    ctx.stroke();
+  }
+
+  // Plank platform + low front railing
+  inkedRoundRect(ctx, -15, top - 1.5, 30, 5, 1.5, wood, woodHi, woodDk, 1.4);
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-14, top - 1);
+  ctx.lineTo(-14, top - 8);
+  ctx.lineTo(14, top - 8);
+  ctx.lineTo(14, top - 1);
+  ctx.stroke();
+  ctx.strokeStyle = woodHi;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Status lamp: blinking red while empty, steady green once a shooter climbed in
+  const occupied = !!unit.occupied;
+  const on = occupied || Math.sin(time * 7) > 0;
+  inkedCircle(
+    ctx,
+    14,
+    top - 10.5,
+    2.1,
+    on ? (occupied ? '#4ade80' : '#ef4444') : '#57534e',
+    on ? '#ffffff' : undefined,
+    1
+  );
+}
 
 /** Jagged electric bolt between two points; regenerated every frame so it flickers. */
 function strokeJaggedBolt(
@@ -321,6 +574,48 @@ export function renderLightningArcs(ctx: CanvasRenderingContext2D, arcs: RenderL
   }
 }
 
+/** Bubbling corrosive puddles left by acid splashes. */
+export function renderAcidPools(ctx: CanvasRenderingContext2D, pools: RenderAcidPool[], time: number) {
+  for (let i = 0; i < pools.length; i++) {
+    const p = pools[i];
+    const fade = Math.min(1, p.duration / Math.max(0.01, p.maxDuration) + 0.25);
+    ctx.save();
+    ctx.globalAlpha = fade;
+    ctx.fillStyle = 'rgba(101, 163, 13, 0.42)';
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y, p.radius, p.radius * 0.42, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(190, 242, 100, 0.5)';
+    ctx.beginPath();
+    ctx.ellipse(p.x - 3, p.y - 1, p.radius * 0.55, p.radius * 0.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    for (let b = 0; b < 3; b++) {
+      const ph = (time * 1.8 + b * 0.37 + i * 0.13) % 1;
+      const bx = p.x + Math.sin(b * 2.3 + i) * p.radius * 0.6;
+      const by = p.y + Math.cos(b * 1.7 + i) * p.radius * 0.2 - ph * 4;
+      ctx.strokeStyle = `rgba(217, 249, 157, ${1 - ph})`;
+      ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      ctx.arc(bx, by, 1 + ph * 2, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+/** Acid balls in flight (glowing green glob with a dripping trail). */
+export function renderAcidBlobs(ctx: CanvasRenderingContext2D, blobs: RenderAcidBlob[]) {
+  for (let i = 0; i < blobs.length; i++) {
+    const b = blobs[i];
+    drawSoftShadow(ctx, b.x, b.y + 1, 4, 1.5, 0.3);
+    ctx.fillStyle = 'rgba(163, 230, 53, 0.45)';
+    ctx.beginPath();
+    ctx.arc(b.x + 3, b.y - b.z + 2, 2.6, 0, Math.PI * 2);
+    ctx.fill();
+    inkedCircle(ctx, b.x, b.y - b.z, 3.6, '#84cc16', '#ecfccb', 1.1);
+  }
+}
+
 /** Translucent preview of a placeable unit (Turret / Tesla) + its attack range, while choosing a spot. */
 export function renderPlacementGhost(
   ctx: CanvasRenderingContext2D,
@@ -332,15 +627,32 @@ export function renderPlacementGhost(
 ) {
   const pulse = 0.94 + Math.sin(time * 7) * 0.06;
   const col = subType === 'tesla' ? '56, 189, 248' : '250, 204, 21';
+  if (subType === 'barricade') {
+    const o = BARRICADE_SEGMENT_OFFSETS;
+    ctx.save();
+    ctx.globalAlpha = 0.6;
+    for (const off of o) {
+      drawSandbagPile(ctx, x, y + off);
+    }
+    ctx.globalAlpha = 0.9;
+    ctx.strokeStyle = 'rgba(250, 204, 21, 0.85)';
+    ctx.setLineDash([5, 4]);
+    ctx.lineWidth = 1.4;
+    ctx.strokeRect(x - 20, y + o[0] - 18, 40, o[2] - o[0] + 26);
+    ctx.restore();
+    return;
+  }
   ctx.save();
   ctx.fillStyle = `rgba(${col}, 0.12)`;
   ctx.strokeStyle = `rgba(${col}, 0.85)`;
   ctx.lineWidth = 1.6;
   ctx.setLineDash([6, 5]);
-  ctx.beginPath();
-  ctx.ellipse(x, y, range * pulse, range * 0.36 * pulse, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
+  if (range > 0) {
+    ctx.beginPath();
+    ctx.ellipse(x, y, range * pulse, range * 0.36 * pulse, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
   ctx.setLineDash([]);
   ctx.globalAlpha = 0.62;
   renderUnitSprite(
@@ -707,6 +1019,12 @@ export function renderUnitSprite(
     renderDroneRig(ctx, unit, time, flash);
   } else if (unit.subType === 'tesla') {
     renderTeslaRig(ctx, unit, time, flash);
+  } else if (unit.subType === 'watchtower') {
+    renderWatchtowerRig(ctx, unit, time, flash);
+  } else if (unit.subType === 'zombie_dog') {
+    renderZombieDogRig(ctx, unit, flash);
+  } else if (unit.subType === 'flyer') {
+    renderFlyerRig(ctx, unit, time, flash);
   } else {
     // ===============================================================
     // 7-NODE ARTICULATED HUMANOID / ZOMBIE RIG (4x Supersampled Parts)
@@ -900,8 +1218,12 @@ export function renderUnitSprite(
   const topOffset =
     unit.subType === 'juggernaut' || unit.subType === 'bloated'
       ? 42
-      : unit.subType === 'hound'
+      : unit.subType === 'hound' || unit.subType === 'zombie_dog'
       ? 29
+      : unit.subType === 'flyer'
+      ? 62
+      : unit.subType === 'watchtower'
+      ? 44
       : unit.subType === 'turret'
       ? 31
       : unit.subType === 'tesla'
@@ -1046,7 +1368,7 @@ export function renderTracersAndShells(
 }
 
 let lightmapCanvas: HTMLCanvasElement | null = null;
-const LM_W = 360;
+const LM_W = WORLD_WIDTH / 2;
 const LM_H = 168;
 
 function drawLightHalo(
@@ -1075,7 +1397,8 @@ export function renderDynamicLightmap(
   fireZones: RenderFireZone[],
   obstacles: RenderObstacle[],
   tracers: RenderTracer[],
-  arcs: RenderLightningArc[] = []
+  arcs: RenderLightningArc[] = [],
+  acidPools: RenderAcidPool[] = []
 ) {
   if (!lightmapCanvas && typeof document !== 'undefined') {
     lightmapCanvas = document.createElement('canvas');
@@ -1133,6 +1456,11 @@ export function renderDynamicLightmap(
     drawLightHalo(lctx, t.x1 * 0.5, t.y1 * 0.5, 14, 'rgba(254, 240, 138, 0.28)');
   }
 
+  for (let i = 0; i < acidPools.length; i++) {
+    const ap = acidPools[i];
+    drawLightHalo(lctx, ap.x * 0.5, ap.y * 0.5, ap.radius * 0.8, 'rgba(132, 204, 22, 0.32)');
+  }
+
   for (let i = 0; i < arcs.length; i++) {
     const arc = arcs[i];
     const a = 0.45 * Math.max(0, arc.life / arc.maxLife);
@@ -1143,14 +1471,14 @@ export function renderDynamicLightmap(
 
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
-  ctx.drawImage(lightmapCanvas, 0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+  ctx.drawImage(lightmapCanvas, 0, 0, WORLD_WIDTH, LOGICAL_HEIGHT);
 
   ctx.globalCompositeOperation = 'source-over';
   const vigTop = ctx.createLinearGradient(0, 0, 0, 26);
   vigTop.addColorStop(0, 'rgba(10, 10, 14, 0.25)');
   vigTop.addColorStop(1, 'rgba(10, 10, 14, 0)');
   ctx.fillStyle = vigTop;
-  ctx.fillRect(0, 0, LOGICAL_WIDTH, 26);
+  ctx.fillRect(0, 0, WORLD_WIDTH, 26);
   ctx.restore();
 }
 
@@ -1189,6 +1517,18 @@ export function renderTacticalObstacle(
     ctx.fillRect(x - 1.8, y - z - 9.5, 3.6, 7);
     ctx.fillRect(x - 3.5, y - z - 7.8, 7, 3.6);
     ctx.restore();
+    return;
+  }
+
+  if (obs.type === 'sandbags') {
+    const ratio = obs.maxHp > 0 ? obs.hp / obs.maxHp : 1;
+    const worn = ratio < 0.35 ? 2 : ratio < 0.7 ? 1 : 0;
+    drawSandbagPile(ctx, x, y - z, obs.whiteFlashTimer > 0, worn);
+    if (obs.hp < obs.maxHp) {
+      inkedRoundRect(ctx, x - 10, y - z - 22, 20, 3.5, 1.5, '#09090b', undefined, undefined, 1);
+      ctx.fillStyle = '#d6c49a';
+      ctx.fillRect(x - 9, y - z - 21, Math.max(1, 18 * Math.max(0, ratio)), 1.6);
+    }
     return;
   }
 
@@ -1271,6 +1611,17 @@ export function renderCharacterPreview(
   const fitScale = Math.min(w / 38, h / 42);
   ctx.translate(w * 0.5 - (isZombie ? -2 : 2), h - 5);
   ctx.scale(fitScale, fitScale);
+
+  if (subType === 'barricade') {
+    drawSandbagPile(ctx, 2, -8);
+    drawSandbagPile(ctx, 2, 0);
+    ctx.restore();
+    return;
+  }
+  if (subType === 'flyer') {
+    // Hovering rig would be cut off at the top of a small portrait: bring it down
+    ctx.translate(0, FLYER_HOVER_Z * 0.75);
+  }
 
   const previewUnit: RenderUnit = {
     id: 'preview',

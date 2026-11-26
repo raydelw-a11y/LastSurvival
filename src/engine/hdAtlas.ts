@@ -388,7 +388,11 @@ export function getUnitAtlas(subType: SurvivorType | ZombieType): UnitPartAtlas 
     case 'hound':
     case 'turret':
     case 'drone':
-    case 'tesla': {
+    case 'tesla':
+    case 'barricade':
+    case 'watchtower':
+    case 'zombie_dog':
+    case 'flyer': {
       // Custom non-humanoid rigs rendered directly in PixelArtRenderer, bake fallback badge
       inkedCircle(hctx, 12, 12, 6, '#475569', '#94a3b8');
       inkedRoundRect(tctx, 6, 6, 12, 12, 3, '#334155', '#64748b');
@@ -483,6 +487,25 @@ export function getUnitAtlas(subType: SurvivorType | ZombieType): UnitPartAtlas 
       for (let ry = 7; ry <= 14; ry += 2.6) {
         tctx.fillRect(8.8, ry, 6.4, 1.1);
       }
+      break;
+    }
+
+    case 'acid_spitter': {
+      skinColor = '#7a9a52';
+      shirtColor = '#3f6212';
+      pantColor = '#292524';
+      scale = 1.04;
+      widthFactor = 1.06;
+      inkedRoundRect(hctx, 6.6, 7.2, 11.2, 11, 4.4, skinColor, '#a3c27a', '#4d6133');
+      drawZombieEyes(hctx, 10.2, 11.8, '#a3e635');
+      // Swollen acid gland throat + dripping green drool
+      inkedCircle(hctx, 14.5, 16.6, 3.4, '#84cc16', '#d9f99d', 1.1);
+      hctx.fillStyle = '#a3e635';
+      hctx.fillRect(15.4, 18.8, 1.6, 3.8);
+      // Hazmat rags stained with corrosive splashes
+      inkedRoundRect(tctx, 6.2, 4.4, 11.6, 13.8, 3.2, '#3f6212', '#65a30d', '#1a2e05');
+      inkedCircle(tctx, 10, 9, 2.2, '#a3e635', '#ecfccb', 0.9);
+      inkedCircle(tctx, 14.5, 13, 1.6, '#a3e635', undefined, 0.8);
       break;
     }
 

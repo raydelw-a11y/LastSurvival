@@ -1271,8 +1271,9 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                 {modalTab === 'deck' &&
                   sortUnitsByRoleAndDamage(SURVIVOR_ORDER, progress.unitLevels).map((sType, idx, arr) => {
                     const cfg = SURVIVOR_CONFIGS[sType];
-                    const startsGroup =
-                      idx === 0 || SURVIVOR_CONFIGS[arr[idx - 1]].isRanged !== cfg.isRanged;
+                    const roleOf = (t: SurvivorType) =>
+                      SURVIVOR_CONFIGS[t].isSupport ? 2 : SURVIVOR_CONFIGS[t].isRanged ? 1 : 0;
+                    const startsGroup = idx === 0 || roleOf(arr[idx - 1]) !== roleOf(sType);
                     const isUnlocked = isUnitUnlocked(sType, commanderLvl);
                     const isEquipped = equippedDeck.includes(sType);
                     const deckSlotIdx = equippedDeck.indexOf(sType);
@@ -1288,9 +1289,15 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                       {startsGroup && (
                         <div className="col-span-full flex items-center gap-2 px-0.5 pt-0.5">
                           <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-300">
-                            {cfg.isRanged ? '🎯 A distancia' : '⚔️ Cuerpo a cuerpo'}
+                            {cfg.isSupport
+                              ? '🛡️ Estructuras'
+                              : cfg.isRanged
+                              ? '🎯 A distancia'
+                              : '⚔️ Cuerpo a cuerpo'}
                           </span>
-                          <span className="text-[9px] text-zinc-500">de mayor a menor daño</span>
+                          <span className="text-[9px] text-zinc-500">
+                            {cfg.isSupport ? 'se instalan donde tú elijas' : 'de mayor a menor daño'}
+                          </span>
                           <div className="flex-1 h-px bg-[#4a4737]" />
                         </div>
                       )}
@@ -1339,10 +1346,14 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
 
                           <div className="flex items-center justify-between gap-1 text-[8.5px] text-zinc-200 mb-1.5 bg-zinc-900/85 px-1.5 py-0.5 rounded border border-zinc-800">
                             <span>❤️ {Math.round(cfg.baseHp * mult)}</span>
-                            <span>
-                              ⚔️ {Math.round(cfg.baseDamage * mult)}
-                              {cfg.pellets && cfg.pellets > 1 ? `×${cfg.pellets}` : ''}
-                            </span>
+                            {cfg.isSupport ? (
+                              <span>{cfg.isTower ? '🗼 +35% alcance' : '🧱 Bloquea'}</span>
+                            ) : (
+                              <span>
+                                ⚔️ {Math.round(cfg.baseDamage * mult)}
+                                {cfg.pellets && cfg.pellets > 1 ? `×${cfg.pellets}` : ''}
+                              </span>
+                            )}
                           </div>
                         </div>
                         {isUnlocked ? (
