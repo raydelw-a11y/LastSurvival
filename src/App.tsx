@@ -20,7 +20,7 @@ import { ContinuePrompt } from './components/ContinuePrompt';
 import { useCloudSync } from './sync/useCloudSync';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '9:17 PM - 11/25/2026';
+const FALLBACK_TIMESTAMP = '9:21 PM - 11/25/2026';
 export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 const CURRENT_BUILD_ID = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : '';

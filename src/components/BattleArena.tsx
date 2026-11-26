@@ -252,7 +252,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     maxBusHp,
     busDamagedEver: false,
     busX: -2,
-    busY: 100,
+    busY: 66, // Parked at the top of the (deeper) road
     doorOpenTimer: 0,
     barricadeHp: mission.barricadeHp,
     maxBarricadeHp: mission.barricadeHp,
