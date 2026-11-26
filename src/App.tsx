@@ -22,7 +22,7 @@ import { ContinuePrompt } from './components/ContinuePrompt';
 import { useCloudSync } from './sync/useCloudSync';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '12:35 PM - 11/26/2026';
+const FALLBACK_TIMESTAMP = '1:30 PM - 11/26/2026';
 export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 const CURRENT_BUILD_ID = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : '';
@@ -66,6 +66,7 @@ const INITIAL_PROGRESS: PlayerProgress = {
   },
   missionStars: {},
   ultraStars: {},
+  fortressBest: {},
   heroOutfits: ['commander'],
   heroOutfit: 'commander',
   unlockedMissions: [1],
@@ -145,6 +146,10 @@ function sanitizeProgress(rawObj: Partial<PlayerProgress>): PlayerProgress {
       rawObj.ultraStars && typeof rawObj.ultraStars === 'object' && !Array.isArray(rawObj.ultraStars)
         ? rawObj.ultraStars
         : {},
+    fortressBest:
+      rawObj.fortressBest && typeof rawObj.fortressBest === 'object' && !Array.isArray(rawObj.fortressBest)
+        ? rawObj.fortressBest
+        : {},
     unlockedMissions: (() => {
       const savedStars = rawObj.missionStars || {};
       let highestBeaten = 0;
@@ -217,6 +222,8 @@ export function App() {
   // ULTRA mode for the battle in progress (much stronger enemies, separate stars)
   const [activeUltra, setActiveUltra] = useState<boolean>(false);
   const activeUltraRef = useRef(false);
+  // FORTRESS mode for the battle in progress (endless hordes until the player leaves)
+  const [activeFortress, setActiveFortress] = useState<boolean>(false);
   // After a silent auto-update reload from the map, don't nag with the continue prompt again.
   const [continueDismissed, setContinueDismissed] = useState<boolean>(() => {
     try {
@@ -423,9 +430,10 @@ export function App() {
     }
   }, []);
 
-  const handleLaunchMission = useCallback((mission: MissionNode, ultra = false) => {
-    activeUltraRef.current = ultra;
-    setActiveUltra(ultra);
+  const handleLaunchMission = useCallback((mission: MissionNode, ultra = false, fortress = false) => {
+    activeUltraRef.current = ultra && !fortress;
+    setActiveUltra(ultra && !fortress);
+    setActiveFortress(fortress);
     soundFX.resumeFromBackground();
     soundFX.playUnitSpawn();
     setContinueDismissed(true);
@@ -440,6 +448,25 @@ export function App() {
 
   const handleRetreat = useCallback(() => {
     setActiveBattleMission(null);
+  }, []);
+
+  // FORTRESS run finished (the player left or the bus fell): bank the loot and the horde record.
+  // It never grants campaign stars nor unlocks missions.
+  const handleFortressEnd = useCallback((coinsEarned: number, hordes: number) => {
+    setActiveBattleMission((currentMission) => {
+      if (!currentMission) return null;
+      const mId = currentMission.id;
+      setProgress((prev) => ({
+        ...prev,
+        coins: prev.coins + Math.max(0, Math.round(coinsEarned)),
+        fortressBest: {
+          ...(prev.fortressBest || {}),
+          [mId]: Math.max((prev.fortressBest || {})[mId] || 0, hordes),
+        },
+        lastPlayedAt: Date.now(),
+      }));
+      return null;
+    });
   }, []);
 
   const handleVictory = useCallback(
@@ -680,10 +707,12 @@ export function App() {
         <BattleArena
           mission={activeBattleMission}
           ultra={activeUltra}
+          fortress={activeFortress}
           progress={progress}
           isPortrait={isPortrait}
           onVictory={handleVictory}
           onRetreat={handleRetreat}
+          onFortressEnd={handleFortressEnd}
           onLevelUpCommander={handleLevelUpCommanderLive}
         />
       ) : (

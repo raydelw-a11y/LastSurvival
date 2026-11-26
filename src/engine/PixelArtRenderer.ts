@@ -12,6 +12,7 @@ import {
   ROAD_Y_MAX,
   ROAD_Y_MIN,
   syncCanvasHiDPI,
+  WORLD_HEIGHT,
   WORLD_WIDTH,
 } from './hdEnvironment';
 
@@ -21,6 +22,7 @@ export {
   ROAD_Y_MIN,
   ROAD_Y_MAX,
   syncCanvasHiDPI,
+  WORLD_HEIGHT,
   WORLD_WIDTH,
   renderBiomeBackground,
   renderForegroundLeftProps,
@@ -88,6 +90,8 @@ export interface RenderObstacle {
   maxHp: number;
   whiteFlashTimer: number;
   healDuration?: number;
+  /** Sandbag wall: every pile of the same barricade shares this id (they are sold together). */
+  groupId?: string;
 }
 
 export interface RenderPickup {
@@ -1557,7 +1561,7 @@ export function renderTracersAndShells(
 
 let lightmapCanvas: HTMLCanvasElement | null = null;
 const LM_W = WORLD_WIDTH / 2;
-const LM_H = 168;
+const LM_H = WORLD_HEIGHT / 2;
 
 function drawLightHalo(
   lctx: CanvasRenderingContext2D,
@@ -1659,7 +1663,7 @@ export function renderDynamicLightmap(
 
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
-  ctx.drawImage(lightmapCanvas, 0, 0, WORLD_WIDTH, LOGICAL_HEIGHT);
+  ctx.drawImage(lightmapCanvas, 0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
   ctx.globalCompositeOperation = 'source-over';
   const vigTop = ctx.createLinearGradient(0, 0, 0, 26);

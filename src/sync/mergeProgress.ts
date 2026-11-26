@@ -75,6 +75,10 @@ export function mergeEnvelopes(local: SyncEnvelope, remote: SyncEnvelope): SyncE
       (a.ultraStars || {}) as unknown as Record<string, number>,
       (b.ultraStars || {}) as unknown as Record<string, number>
     ) as unknown as PlayerProgress['ultraStars'],
+    fortressBest: maxRecord(
+      (a.fortressBest || {}) as unknown as Record<string, number>,
+      (b.fortressBest || {}) as unknown as Record<string, number>
+    ) as unknown as PlayerProgress['fortressBest'],
     heroOutfits: union(a.heroOutfits || ['commander'], b.heroOutfits || ['commander']),
     heroOutfit: newer.heroOutfit ?? a.heroOutfit ?? b.heroOutfit,
     lastPlayedMission: lastPlayed.lastPlayedMission,

@@ -58,7 +58,7 @@ interface RoadMapHubProps {
   progress: PlayerProgress;
   selectedMissionId: number;
   onSelectMission: (id: number) => void;
-  onLaunchMission: (mission: MissionNode, ultra?: boolean) => void;
+  onLaunchMission: (mission: MissionNode, ultra?: boolean, fortress?: boolean) => void;
   onUpgradeSurvivor: (type: SurvivorType, cost: number) => void;
   onUpgradeBusStat: (kind: 'hp' | 'bill' | 'bumper' | 'armor', cost: number) => void;
   onUpgradeSurvivorMax: (type: SurvivorType) => void;
@@ -1274,6 +1274,23 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
             );
           })()}
         </div>
+
+        {/* FORTRESS: endless hordes on this same mission until the player leaves */}
+        {(() => {
+          const fortressBest = progress.fortressBest?.[selectedMission.id] || 0;
+          return (
+            <button
+              onClick={() => onLaunchMission(selectedMission, false, true)}
+              title="MODO FORTRESS: hordas infinitas cada vez más fuertes. Resiste lo que puedas y sal cuando quieras para cobrar el botín."
+              className="mt-1.5 w-full px-2.5 py-1.5 rounded-lg bg-gradient-to-b from-sky-700 to-slate-900 hover:from-sky-600 hover:to-slate-800 border-2 border-sky-300/80 text-white text-[10px] font-extrabold uppercase tracking-wide shadow-md flex items-center justify-between gap-2 cursor-pointer"
+            >
+              <span>🏰 Fortress · hordas ∞</span>
+              <span className="text-[9px] text-sky-200 normal-case whitespace-nowrap">
+                {fortressBest > 0 ? `Récord: ${fortressBest} · ` : ''}-{selectedMission.fuelCost} ⛽
+              </span>
+            </button>
+          );
+        })()}
       </div>
 
       {/* ===================================================================== */}

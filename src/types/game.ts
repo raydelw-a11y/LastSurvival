@@ -158,6 +158,8 @@ export interface PlayerProgress {
   lastPlayedAt?: number;
   /** Best stars per mission in ULTRA mode (much stronger enemies). */
   ultraStars?: Record<number, number>;
+  /** FORTRESS mode: most hordes resisted per mission (endless survival record). */
+  fortressBest?: Record<number, number>;
   /** Hero outfits the player owns (armor / clothing). */
   heroOutfits?: HeroOutfitType[];
   /** Hero outfit currently worn. */
@@ -268,6 +270,58 @@ export function getMissionEnemyCount(mission: { campaignTier?: number; id: numbe
 export function getMissionHordeCount(mission: { campaignTier?: number; id: number }, ultra = false): number {
   const tier = mission.campaignTier || mission.id;
   return Math.round((8 + tier * 1.9) * (ultra ? ULTRA.hordeCount : 1));
+}
+
+/**
+ * FORTRESS mode: the mission never ends. Hordes keep coming, each one bigger and tougher,
+ * until the player decides to leave (or the bus is destroyed).
+ */
+export const FORTRESS = {
+  /** Seconds before the first horde arrives. */
+  firstHordeDelay: 40,
+  /** Seconds between hordes (counted once a horde has finished arriving). */
+  hordeInterval: 36,
+  hordeIntervalStep: 1.2,
+  minHordeInterval: 20,
+  /** Every horde makes the zombies this much stronger. */
+  hpPerHorde: 0.11,
+  damagePerHorde: 0.05,
+  speedPerHorde: 0.012,
+  maxSpeed: 1.3,
+  /** More zombies allowed on the road as the hordes go by. */
+  maxZombiesPerHorde: 1,
+  maxZombiesBonusCap: 14,
+  hordeBase: 9,
+  hordeGrowth: 3,
+  hordeCap: 70,
+  /** Reward: a share of the mission bounty per kill plus a bonus per horde resisted. */
+  killShare: 0.6,
+  hordeShare: 0.1,
+  /** If the bus is destroyed the convoy only keeps this part of the loot. */
+  destroyedShare: 0.5,
+} as const;
+
+/** How many zombies horde number `horde` (1-based) sends in FORTRESS mode. */
+export function getFortressHordeSize(mission: { campaignTier?: number; id: number }, horde: number): number {
+  const tier = mission.campaignTier || mission.id;
+  return Math.min(
+    FORTRESS.hordeCap,
+    Math.round(FORTRESS.hordeBase + tier * 0.6 + horde * FORTRESS.hordeGrowth)
+  );
+}
+
+/** Coins earned by a FORTRESS run. */
+export function getFortressCoins(
+  mission: { campaignTier?: number; id: number; coinsReward: number },
+  kills: number,
+  hordes: number,
+  busDestroyed: boolean
+): number {
+  const missionTotal = getMissionEnemyCount(mission) + getMissionHordeCount(mission);
+  const full =
+    mission.coinsReward *
+    ((FORTRESS.killShare * kills) / Math.max(1, missionTotal) + FORTRESS.hordeShare * hordes);
+  return Math.max(0, Math.round(full * (busDestroyed ? FORTRESS.destroyedShare : 1)));
 }
 
 // ---- HERO: the player's unique, fully manual unit and its arsenal -----------------

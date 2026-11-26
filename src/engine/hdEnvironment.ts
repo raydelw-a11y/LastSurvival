@@ -3,15 +3,20 @@ import { INK, inkedCircle, inkedRoundRect } from './hdAtlas';
 
 export const LOGICAL_WIDTH = 720; // Camera viewport width (what fits on screen)
 export const LOGICAL_HEIGHT = 336;
-/** The battlefield is 1.5x longer than the screen; a camera scrolls across it. */
-export const WORLD_WIDTH = 1080;
-// Battle road is 1.5x deeper than the original 180..278 band, extended upward
-export const ROAD_Y_MAX = 278;
-export const ROAD_Y_MIN = 98; // ~1.85x the original 180..278 band, extended upward
+/** The battlefield is 2x wider than the screen; a camera scrolls across it. */
+export const WORLD_WIDTH = 1440;
+/** Extra road depth added below the original band: the camera also scrolls vertically over it. */
+export const ROAD_EXTRA_DEPTH = 84;
+/** Full world height (the screen shows LOGICAL_HEIGHT of it at a time). */
+export const WORLD_HEIGHT = LOGICAL_HEIGHT + ROAD_EXTRA_DEPTH;
+export const ROAD_Y_MAX = 278 + ROAD_EXTRA_DEPTH;
+export const ROAD_Y_MIN = 98; // road band is ROAD_Y_MIN..ROAD_Y_MAX (264 px deep)
+/** Refinery flare stacks of the junkyard skyline (baked towers + live flames share these). */
+const JUNKYARD_STACKS = [303, 331, 513, 840, 1215];
 /** How far the horizon scenery (guardrail, trees, buildings) moved up to make room. */
 const HORIZON_SHIFT = 180 - ROAD_Y_MIN; // 49
 
-const BIOME_BAKE_SCALE = 2.5; // 2700x840 crisp offscreen cache (full 1080px world)
+const BIOME_BAKE_SCALE = 2.5; // 3600x1050 crisp offscreen cache (full 1440x420 world)
 const bakedBiomeCache = new Map<string, HTMLCanvasElement>();
 
 export function syncCanvasHiDPI(
@@ -156,9 +161,20 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
   const existing = bakedBiomeCache.get(key);
   if (existing) return existing;
 
+  // Each bake is a large bitmap: keep only the two most recent ones in memory
+  while (bakedBiomeCache.size >= 2) {
+    const oldestKey = bakedBiomeCache.keys().next().value as string;
+    const oldest = bakedBiomeCache.get(oldestKey);
+    if (oldest) {
+      oldest.width = 0;
+      oldest.height = 0;
+    }
+    bakedBiomeCache.delete(oldestKey);
+  }
+
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(WORLD_WIDTH * BIOME_BAKE_SCALE);
-  canvas.height = Math.round(LOGICAL_HEIGHT * BIOME_BAKE_SCALE);
+  canvas.height = Math.round(WORLD_HEIGHT * BIOME_BAKE_SCALE);
   const ctx = canvas.getContext('2d')!;
   ctx.scale(BIOME_BAKE_SCALE, BIOME_BAKE_SCALE);
   ctx.lineJoin = 'round';
@@ -235,7 +251,10 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
     for (let bx = 780; bx < 960; bx += 26) {
       ctx.strokeRect(bx, 104, 26, 20);
     }
-    for (let i = 0; i < 29; i++) {
+    for (let bx = 1170; bx < 1378; bx += 26) {
+      ctx.strokeRect(bx, 100, 26, 24);
+    }
+    for (let i = 0; 18 + i * 38 < WORLD_WIDTH + 10; i++) {
       const tx = 18 + i * 38 + ((hash32(i, 3, seed) % 14) - 7);
       const sc = 0.72 + (hash32(i, 4, seed) % 35) / 100;
       drawPineTreeHD(ctx, tx, 154, sc, '#244735', '#173023');
@@ -249,9 +268,15 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
     ctx.strokeRect(292, 122, 26, 28);
     // Eastern fields: second grain silo + hay bales
     inkedRoundRect(ctx, 820, 100, 22, 52, 8, '#cbd5e1', '#f8fafc', '#64748b');
-    for (const hx of [760, 880, 905]) {
+    for (const hx of [760, 880, 905, 1120, 1145, 1350]) {
       inkedRoundRect(ctx, hx, 138, 18, 13, 5, '#ca8a04', '#facc15', '#854d0e', 1.2);
     }
+    // Far-east homestead: a smaller barn with its own silo
+    inkedRoundRect(ctx, 1216, 100, 20, 52, 8, '#cbd5e1', '#f8fafc', '#64748b');
+    inkedRoundRect(ctx, 1234, 110, 60, 42, 3, '#7f1d1d', '#b91c1c', '#450a0a');
+    ctx.strokeStyle = '#f8fafc';
+    ctx.lineWidth = 1.6;
+    ctx.strokeRect(1253, 126, 22, 24);
     // Windmill tower centered at 440, hub at (440,56)
     ctx.strokeStyle = '#3f2e26';
     ctx.lineWidth = 2.2;
@@ -275,7 +300,9 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
     for (let tx = 45; tx < WORLD_WIDTH - 40; tx += 52) {
       inkedRoundRect(ctx, tx, 136, 13, 17, 4, '#475569', '#94a3b8', '#1e293b', 1.1);
     }
-    for (const lx of [200, 444, 700, 930]) {
+    // Eastern mausoleum
+    inkedRoundRect(ctx, 1196, 98, 54, 52, 3, '#1e293b', '#334155', '#0f172a');
+    for (const lx of [200, 444, 700, 930, 1150, 1385]) {
       inkedRoundRect(ctx, lx - 2, 112, 4, 40, 1, '#0f172a');
       inkedCircle(ctx, lx, 112, 4.5, '#fef08a', '#ffffff');
     }
@@ -293,6 +320,11 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
       [868, 76, 58],
       [955, 60, 56],
       [1030, 70, 48],
+      [1104, 58, 54],
+      [1176, 74, 46],
+      [1258, 62, 58],
+      [1334, 54, 50],
+      [1398, 72, 46],
     ];
     for (const [bx, topY, bw] of bldgs) {
       inkedRoundRect(ctx, bx, topY, bw, 152 - topY, 2, '#27272a', '#3f3f46', '#18181b');
@@ -303,7 +335,7 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
         }
       }
     }
-    for (const sx of [303, 331, 513, 840]) {
+    for (const sx of JUNKYARD_STACKS) {
       inkedRoundRect(ctx, sx - 4, 38, 8, 114, 1.5, '#3f3f46', '#71717a', '#18181b');
     }
   }
@@ -324,12 +356,13 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
   drawWreckedSedanHD(ctx, 168, 150, '#3b5d7a', '#64748b');
   drawWreckedSedanHD(ctx, 476, 149, '#7f1d1d', '#991b1b');
   drawWreckedSedanHD(ctx, 812, 150, '#3f6212', '#4d7c0f');
+  drawWreckedSedanHD(ctx, 1136, 149, '#854d0e', '#a16207');
 
   ctx.restore();
 
   // Lower shoulder below the road (not shifted)
   ctx.fillStyle = dirtCol;
-  ctx.fillRect(0, ROAD_Y_MAX - 2, WORLD_WIDTH, LOGICAL_HEIGHT - ROAD_Y_MAX + 4);
+  ctx.fillRect(0, ROAD_Y_MAX - 2, WORLD_WIDTH, WORLD_HEIGHT - ROAD_Y_MAX + 4);
 
   // 5. Rich Multi-Layered Asphalt Roadway (ROAD_Y_MIN..ROAD_Y_MAX)
   const roadGrad = ctx.createLinearGradient(0, ROAD_Y_MIN, 0, ROAD_Y_MAX);
@@ -351,7 +384,7 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
   }
 
   // Deterministic asphalt aggregate, oil stains, skid marks & branching cracks
-  for (let i = 0; i < 72; i++) {
+  for (let i = 0; i < 140; i++) {
     const ox = hash32(i, 11, seed) % WORLD_WIDTH;
     const oy = ROAD_Y_MIN + 8 + (hash32(i, 12, seed) % (ROAD_Y_MAX - ROAD_Y_MIN - 16));
     ctx.fillStyle = i % 3 === 0 ? 'rgba(15, 17, 21, 0.34)' : 'rgba(148, 163, 184, 0.12)';
@@ -361,7 +394,7 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
   }
   ctx.strokeStyle = 'rgba(15, 17, 22, 0.55)';
   ctx.lineWidth = 1.1;
-  for (let c = 0; c < 27; c++) {
+  for (let c = 0; c < 52; c++) {
     let cx = (c * 41 + (hash32(c, 21, seed) % 25)) % WORLD_WIDTH;
     let cy = ROAD_Y_MIN + 6 + (hash32(c, 22, seed) % (ROAD_Y_MAX - ROAD_Y_MIN - 14));
     ctx.beginPath();
@@ -393,7 +426,7 @@ export function renderBiomeBackground(
   seed = 1
 ) {
   const baked = getBakedBiomeCanvas(biome, seed);
-  ctx.drawImage(baked, 0, 0, WORLD_WIDTH, LOGICAL_HEIGHT);
+  ctx.drawImage(baked, 0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
   if (biome === 'farm_crossing') {
     const hubX = 440;
@@ -413,20 +446,20 @@ export function renderBiomeBackground(
   } else if (biome === 'graveyard') {
     ctx.save();
     const shift = (time * 14) % WORLD_WIDTH;
-    const mistGrad = ctx.createLinearGradient(0, 150, 0, 282);
+    const mistGrad = ctx.createLinearGradient(0, 150 - HORIZON_SHIFT, 0, ROAD_Y_MAX + 4);
     mistGrad.addColorStop(0, 'rgba(148, 163, 184, 0.14)');
     mistGrad.addColorStop(0.5, 'rgba(148, 163, 184, 0.04)');
     mistGrad.addColorStop(1, 'rgba(148, 163, 184, 0.16)');
     ctx.fillStyle = mistGrad;
-    for (let i = -1; i <= 4; i++) {
+    for (let i = -1; i <= 11; i++) {
       ctx.beginPath();
-      ctx.ellipse(i * 250 + shift * 0.45, 164 - HORIZON_SHIFT, 110, 10, 0, 0, Math.PI * 2);
-      ctx.ellipse(i * 270 - shift * 0.35, 272, 125, 11, 0, 0, Math.PI * 2);
+      ctx.ellipse(i * 250 + shift * 0.45 - WORLD_WIDTH * 0.45, 164 - HORIZON_SHIFT, 110, 10, 0, 0, Math.PI * 2);
+      ctx.ellipse(i * 270 - shift * 0.35, ROAD_Y_MAX - 6, 125, 11, 0, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.restore();
   } else if (biome === 'junkyard_city') {
-    [303, 331, 513, 840].forEach((sx, idx) => {
+    JUNKYARD_STACKS.forEach((sx, idx) => {
       const flk = Math.sin(time * 16 + idx * 2.1) * 2.4;
       ctx.fillStyle = 'rgba(249, 115, 22, 0.85)';
       ctx.beginPath();
@@ -442,9 +475,9 @@ export function renderBiomeBackground(
   // Smooth drifting atmospheric dust motes
   ctx.fillStyle =
     biome === 'graveyard' ? 'rgba(186, 230, 253, 0.34)' : 'rgba(254, 240, 138, 0.30)';
-  for (let m = 0; m < 18; m++) {
+  for (let m = 0; m < 30; m++) {
     const mx = (m * 67 + time * (9 + (m % 4) * 2.5)) % WORLD_WIDTH;
-    const my = 84 + ((m * 37) % 180) + Math.sin(time * 2 + m) * 4.5;
+    const my = 84 + ((m * 37) % (ROAD_Y_MAX - ROAD_Y_MIN)) + Math.sin(time * 2 + m) * 4.5;
     ctx.beginPath();
     ctx.arc(mx, my, 1.15, 0, Math.PI * 2);
     ctx.fill();
@@ -452,6 +485,9 @@ export function renderBiomeBackground(
 }
 
 export function renderForegroundLeftProps(ctx: CanvasRenderingContext2D) {
+  // Anchored to the lower shoulder: it moves down together with the deeper road
+  ctx.save();
+  ctx.translate(0, ROAD_EXTRA_DEPTH);
   const tx = -6;
   const ty = 212;
   drawSoftShadow(ctx, tx + 42, ty + 84, 48, 10, 0.42);
@@ -464,6 +500,7 @@ export function renderForegroundLeftProps(ctx: CanvasRenderingContext2D) {
   renderOilDrumHD(ctx, 56, 282, '#2d3325', '#464f39', '#6b7857');
   renderOilDrumHD(ctx, 76, 278, '#363d2c', '#525c43', '#788762');
   renderOilDrumHD(ctx, 66, 294, '#272c20', '#3d4532', '#5f6b4e');
+  ctx.restore();
 }
 
 export function renderArmoredBus(

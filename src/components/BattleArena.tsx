@@ -19,6 +19,9 @@ import {
   ZOMBIE_XP_REWARD,
   ZombieType,
   ULTRA,
+  FORTRESS,
+  getFortressCoins,
+  getFortressHordeSize,
   getMissionEnemyCount,
   getMissionHordeCount,
   HERO_WEAPONS,
@@ -67,6 +70,7 @@ import {
   renderAcidBlobs,
   renderHeroShots,
   RenderHeroShot,
+  WORLD_HEIGHT,
   WORLD_WIDTH,
 } from '../engine/PixelArtRenderer';
 import { MuteButton } from './MuteButton';
@@ -77,10 +81,14 @@ interface BattleArenaProps {
   mission: MissionNode;
   /** ULTRA mode: much stronger enemies, bigger rewards. */
   ultra?: boolean;
+  /** FORTRESS mode: endless, escalating hordes until the player leaves the mission. */
+  fortress?: boolean;
   progress: PlayerProgress;
   isPortrait?: boolean;
   onVictory: (stars: number, coinsEarned: number, zombiesKilled: number) => void;
   onRetreat: () => void;
+  /** FORTRESS run over (manual exit or bus destroyed): loot earned and hordes resisted. */
+  onFortressEnd?: (coinsEarned: number, hordes: number) => void;
   onLevelUpCommander?: (newLevel: number, newXp: number) => void;
 }
 
@@ -134,12 +142,24 @@ interface InternalUnit extends RenderUnit {
 
 const TACTICAL_ORDER: TacticalItemType[] = ['blue_barrel', 'red_barrel', 'medkit'];
 
-/** Extra length of the battlefield beyond one screen (world is 1.5x the viewport). */
+/** Extra length of the battlefield beyond one screen (world is 2x the viewport). */
 const FIELD_EXTRA = WORLD_WIDTH - LOGICAL_WIDTH;
+/** The opening guard waits this far east (kept a bit closer than the far end of the longer road). */
+const GUARD_SHIFT = FIELD_EXTRA - 240;
+/** Opening-guard lanes were authored for the old 98..278 road: spread them over the deeper one. */
+const guardY = (y: number) => ROAD_Y_MIN + ((y - 98) / 180) * (ROAD_Y_MAX - ROAD_Y_MIN);
 const MAX_CAM_X = WORLD_WIDTH - LOGICAL_WIDTH;
 const clampCam = (x: number) => Math.max(0, Math.min(MAX_CAM_X, x));
-/** Minimap strip (screen space, logical px) that shows the whole battlefield. */
-const MINIMAP = { x: LOGICAL_WIDTH / 2 - 95, y: 50, w: 190, h: 10 };
+/** The road is deeper than the screen: the camera also scrolls vertically over it. */
+const MAX_CAM_Y = WORLD_HEIGHT - LOGICAL_HEIGHT;
+const clampCamY = (y: number) => Math.max(0, Math.min(MAX_CAM_Y, y));
+/** Screen Y where the camera tries to keep the hero (middle of the visible road band). */
+const CAM_FOCUS_Y = 190;
+/** Sell tag that floats above a tapped fixed structure (world px). */
+const SELL_TAG = { w: 72, h: 16, hitW: 40, hitH: 14, seconds: 4.5 };
+type SellRef = { kind: 'unit' | 'wall'; id: string; anchorId?: string };
+/** Minimap (screen space, logical px) that shows the whole battlefield. */
+const MINIMAP = { x: LOGICAL_WIDTH / 2 - 100, y: 49, w: 200, h: 15 };
 /** Shooter in a watchtower gets this much extra range. */
 const TOWER_RANGE_BONUS = 1.35;
 
@@ -227,10 +247,12 @@ const INITIAL_UNIT_COOLDOWNS: Record<SurvivorType, number> = {
 export const BattleArena: React.FC<BattleArenaProps> = ({
   mission,
   ultra = false,
+  fortress = false,
   progress,
   isPortrait = false,
   onVictory,
   onRetreat,
+  onFortressEnd,
   onLevelUpCommander,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -280,7 +302,16 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     medkit: 0,
   });
   const [furyBuffCount, setFuryBuffCount] = useState<number>(1);
-  const [timeRemaining, setTimeRemaining] = useState<number>(150);
+  const [timeRemaining, setTimeRemaining] = useState<number>(
+    fortress ? FORTRESS.firstHordeDelay : 150
+  );
+  // FORTRESS: horde on its way, hordes already resisted, kills, and the cash-out prompt
+  const [fortressHud, setFortressHud] = useState<{ horde: number; resisted: number; kills: number }>({
+    horde: 0,
+    resisted: 0,
+    kills: 0,
+  });
+  const [fortressExit, setFortressExit] = useState<boolean>(false);
   const [hordeTriggered, setHordeTriggered] = useState<boolean>(false);
   const [rushWarningState, setRushWarningState] = useState<{ active: boolean; yPct: number }>({
     active: false,
@@ -334,16 +365,20 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     barricadeHp: 0,
     maxBarricadeHp: 1,
     // Zombies this mission still has to send (victory = budget spent + every zombie dead)
-    enemiesToSpawn: getMissionEnemyCount(mission, ultra),
+    enemiesToSpawn: fortress ? Infinity : getMissionEnemyCount(mission, ultra),
     // FINAL HORDE: a huge last wave that closes every mission
-    hordeToSpawn: getMissionHordeCount(mission, ultra),
+    hordeToSpawn: fortress ? 0 : getMissionHordeCount(mission, ultra),
+    // FORTRESS: hordes launched so far, hordes resisted, and whether the last one is still being fought
+    fortressHorde: 0,
+    fortressResisted: 0,
+    fortressHordePending: false,
     hordeBurstTimer: 0,
     barricadeX: WORLD_WIDTH - 106,
     barricadeShake: 0,
     barricadeThresholdIdx: 0,
     rushPackTimer: initialSector === 1 ? 36 : initialSector === 2 ? 32 : initialSector === 3 ? 28 : 24,
     rushWarningTimer: 0,
-    rushWarningY: 228,
+    rushWarningY: (ROAD_Y_MIN + ROAD_Y_MAX) / 2,
     waveCount: 0,
     emptyRoadTimer: 0,
     medkitTickTimer: 0,
@@ -370,14 +405,18 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     fireZones: [] as RenderFireZone[],
     keysPressed: new Set<string>(),
     selectedUnitId: null as string | null,
+    // SELL (2 steps): the tapped fixed structure showing its sell tag, and the tap being tracked
+    sellTarget: null as null | (SellRef & { timer: number }),
+    structTap: null as null | (SellRef & { pointerId: number; at: number; sx: number; sy: number }),
     mouseLogical: { x: 360, y: 228, insideRoad: false },
     draggingItem: null as TacticalItemType | null,
     placingUnit: null as SurvivorType | null,
     lightningArcs: [] as RenderLightningArc[],
     acidBlobs: [] as AcidBlob[],
     acidPools: [] as (RenderAcidPool & { dps: number })[],
-    // Scrolling camera over the 1.5x battlefield
+    // Scrolling camera over the larger battlefield (horizontal + vertical)
     camX: 0,
+    camY: clampCamY((ROAD_Y_MIN + ROAD_Y_MAX) / 2 - CAM_FOCUS_Y),
     camManualTimer: 0,
     minimapPointer: null as number | null,
     // HERO (fully manual): joystick, fire pointers, weapon state & projectiles
@@ -404,7 +443,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     heroShots: [] as HeroShot[],
     waveTimer: initialSector === 1 ? 5.2 : initialSector === 2 ? 4.5 : 3.8,
     skeletonTimer: mission.skeletonAmbush ? 14.0 : 9999,
-    timeRemaining: 150,
+    timeRemaining: fortress ? FORTRESS.firstHordeDelay : 150,
     hordeTriggered: false,
     screenShake: 0,
     hitStopTimer: 0,
@@ -428,6 +467,24 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     soundFX.resumeFromBackground();
     soundFX.unlockAudio();
   }, []);
+
+  const syncFortressHud = () => {
+    const sim = simRef.current;
+    setFortressHud({ horde: sim.fortressHorde, resisted: sim.fortressResisted, kills: sim.zombiesKilled });
+  };
+
+  /** FORTRESS: leaving is the only way to end the run. Freeze the fight and offer to cash out. */
+  const requestFortressExit = () => {
+    if (simRef.current.phase !== 'combat') return;
+    pauseBattle();
+    syncFortressHud();
+    setFortressExit(true);
+  };
+
+  // Resuming the fight (button or Esc) always closes the cash-out prompt
+  useEffect(() => {
+    if (!paused && fortressExit) setFortressExit(false);
+  }, [paused, fortressExit]);
 
   // Automatically pause the battle & audio if the user leaves the app, switches tabs, or locks screen
   useEffect(() => {
@@ -501,12 +558,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     if (!decalCanvasRef.current) {
       decalCanvasRef.current = document.createElement('canvas');
       decalCanvasRef.current.width = WORLD_WIDTH * 2;
-      decalCanvasRef.current.height = LOGICAL_HEIGHT * 2;
+      decalCanvasRef.current.height = WORLD_HEIGHT * 2;
     }
     const dctx = decalCanvasRef.current.getContext('2d');
     if (!dctx) return;
     dctx.setTransform(2, 0, 0, 2, 0, 0);
-    dctx.clearRect(0, 0, WORLD_WIDTH, LOGICAL_HEIGHT);
+    dctx.clearRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
   }, []);
 
   const addFloatingText = useCallback(
@@ -587,7 +644,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             ? `¡NV.${sim.commanderLevel}: ${unlockedCfg.name.toUpperCase()}!`
             : `¡MAESTRÍA NV.${sim.commanderLevel} (+10% GLOBAL)!`,
           sim.camX + 360,
-          164,
+          164 + sim.camY,
           30,
           '#fde047',
           true
@@ -746,7 +803,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       // Gentle campaign-tier scaling (+3.2% HP per tier past Tier 1) across all 50 missions
       const tier = (mission.campaignTier || mission.id) + (ultra ? ULTRA.tierBonus : 0);
       const missionScale = 1 + Math.max(0, tier - 1) * 0.032;
-      const scaledMaxHp = Math.round(cfg.baseHp * missionScale * (ultra ? ULTRA.zombieHp : 1));
+      // FORTRESS: every horde that has arrived makes the infected tougher, meaner and a bit faster
+      const fortHordes = fortress ? simRef.current.fortressHorde : 0;
+      const scaledMaxHp = Math.round(
+        cfg.baseHp * missionScale * (ultra ? ULTRA.zombieHp : 1) * (1 + fortHordes * FORTRESS.hpPerHorde)
+      );
       const initialHp = Math.max(12, Math.round(scaledMaxHp * hpScale));
 
       const zUnit: InternalUnit = {
@@ -763,8 +824,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         hp: initialHp,
         ghostHp: initialHp,
         maxHp: scaledMaxHp,
-        damage: Math.round(cfg.baseDamage * (ultra ? ULTRA.zombieDamage : 1)),
-        speed: cfg.speed * (0.93 + Math.random() * 0.14) * (ultra ? ULTRA.zombieSpeed : 1),
+        damage: Math.round(
+          cfg.baseDamage * (ultra ? ULTRA.zombieDamage : 1) * (1 + fortHordes * FORTRESS.damagePerHorde)
+        ),
+        speed:
+          cfg.speed *
+          (0.93 + Math.random() * 0.14) *
+          (ultra ? ULTRA.zombieSpeed : 1) *
+          Math.min(FORTRESS.maxSpeed, 1 + fortHordes * FORTRESS.speedPerHorde),
         attackRange: cfg.attackRange,
         attackCooldown: cfg.attackCooldown,
         attackTimer: 0,
@@ -955,9 +1022,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       if (cfg.isBarrier) {
         // Sandbag wall: four piles stacked in depth that ground zombies must break through
         const segHp = Math.max(30, Math.round(hp / BARRICADE_SEGMENT_OFFSETS.length));
+        const groupId = `wall_${Date.now()}_${Math.random()}`;
         for (const off of BARRICADE_SEGMENT_OFFSETS) {
           sim.obstacles.push({
             id: `sand_${Date.now()}_${Math.random()}`,
+            groupId,
             type: 'sandbags',
             x: spawnX,
             y: Math.max(ROAD_Y_MIN + 6, Math.min(ROAD_Y_MAX - 4, spawnY + off)),
@@ -1256,7 +1325,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       }
     });
     soundFX.playCouragePickup();
-    addFloatingText('¡FURIA ACTIVADA!', sim.camX + 280, 195, 25, '#fde047', true);
+    addFloatingText('¡FURIA ACTIVADA!', sim.camX + 280, 195 + sim.camY, 25, '#fde047', true);
   }, [addFloatingText, furyBuffCount]);
 
   const cycleSelectedSurvivor = useCallback(() => {
@@ -1292,7 +1361,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       sim.draggingItem = null;
       setDraggingItem(null);
       if (!sim.mouseLogical.insideRoad) {
-        sim.mouseLogical = { x: 330, y: 228, insideRoad: true };
+        sim.mouseLogical = { x: sim.camX + 330, y: sim.camY + CAM_FOCUS_Y, insideRoad: true };
       }
       soundFX.playUnitSpawn();
       sim.placingUnit = type;
@@ -1326,7 +1395,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     if (sim.rage < cfg.rageCost || sim.itemCooldowns[itemType] > 0) return;
 
     if (!sim.mouseLogical.insideRoad) {
-      sim.mouseLogical = { x: 350, y: 228, insideRoad: true };
+      sim.mouseLogical = { x: sim.camX + 350, y: sim.camY + CAM_FOCUS_Y, insideRoad: true };
     }
     soundFX.playUnitSpawn();
     setDraggingItem(itemType);
@@ -1404,7 +1473,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
   const getLogicalCoords = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
-    if (!canvas) return { x: 360, y: 228, insideRoad: false, sx: 360, scale: 1 };
+    if (!canvas) return { x: 360, y: 228, insideRoad: false, sx: 360, sy: 228, scale: 1 };
     const rect = canvas.getBoundingClientRect();
     const scale = Math.max(rect.width / LOGICAL_WIDTH, rect.height / LOGICAL_HEIGHT);
     const renderedW = LOGICAL_WIDTH * scale;
@@ -1413,12 +1482,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     const offsetY = (rect.height - renderedH) / 2;
 
     const sx = (clientX - rect.left - offsetX) / scale;
-    const y = (clientY - rect.top - offsetY) / scale;
-    // Screen → world: the camera scrolls across the 1.5x battlefield
+    const sy = (clientY - rect.top - offsetY) / scale;
+    // Screen → world: the camera scrolls across the larger battlefield (both axes)
     const x = sx + simRef.current.camX;
+    const y = sy + simRef.current.camY;
     const insideRoad =
       x >= 120 && x <= WORLD_WIDTH - 100 && y >= ROAD_Y_MIN - 15 && y <= ROAD_Y_MAX + 15;
-    return { x, y, insideRoad, sx, scale };
+    return { x, y, insideRoad, sx, sy, scale };
   };
 
   const collectPickupIndex = (i: number) => {
@@ -1474,10 +1544,140 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   const heroAlive = () =>
     simRef.current.units.some((u) => u.isHero && u.hp > 0 && u.state !== 'dying' && u.state !== 'corpse');
 
-  const jumpCameraToMinimap = (sx: number) => {
+  // ---------------------------------------------------------------------------------
+  // SELLING FIXED STRUCTURES (turret, Tesla coil, barricade, watchtower) for half their cost.
+  // Tapping one never sells it: it only shows a sell tag above it, and tapping that tag sells.
+  // ---------------------------------------------------------------------------------
+  const wallIdOf = (o: RenderObstacle) => o.groupId ?? o.id;
+
+  /** Fixed structure under a world point (null if there is none). */
+  const findStructureAt = (wx: number, wy: number): SellRef | null => {
+    const sim = simRef.current;
+    let best: SellRef | null = null;
+    let bestD = Infinity;
+    for (const u of sim.units) {
+      if (u.team !== 'survivor' || !u.isStationary || u.hp <= 0) continue;
+      if (u.state === 'dying' || u.state === 'corpse') continue;
+      const tall = SURVIVOR_CONFIGS[u.subType as SurvivorType]?.isTower ? 50 : 32;
+      if (Math.abs(wx - u.x) > 16 || wy < u.y - tall || wy > u.y + 8) continue;
+      const d = Math.hypot(wx - u.x, wy - (u.y - tall / 2));
+      if (d < bestD) {
+        bestD = d;
+        best = { kind: 'unit', id: u.id };
+      }
+    }
+    for (const o of sim.obstacles) {
+      if (o.type !== 'sandbags' || o.hp <= 0) continue;
+      if (Math.abs(wx - o.x) > 18 || wy < o.y - 20 || wy > o.y + 7) continue;
+      const d = Math.hypot(wx - o.x, wy - (o.y - 7));
+      if (d < bestD) {
+        bestD = d;
+        best = { kind: 'wall', id: wallIdOf(o), anchorId: o.id };
+      }
+    }
+    return best;
+  };
+
+  /** Where the sell tag of the selected structure floats, its refund and what to highlight. */
+  const getSellTag = () => {
+    const sim = simRef.current;
+    const t = sim.sellTarget;
+    if (!t) return null;
+    const minY = sim.camY + 82; // keep the tag below the top HUD
+    if (t.kind === 'unit') {
+      const u = sim.units.find((x) => x.id === t.id);
+      if (!u || u.hp <= 0 || u.state === 'dying' || u.state === 'corpse') return null;
+      const cfg = SURVIVOR_CONFIGS[u.subType as SurvivorType];
+      if (!cfg) return null;
+      const tall = cfg.isTower ? 50 : 32;
+      return {
+        x: u.x,
+        y: Math.max(minY, u.y - tall - 14),
+        refund: Math.round(cfg.cost / 2),
+        ax: u.x,
+        ay: u.y,
+        box: null as null | { x: number; y: number; w: number; h: number },
+      };
+    }
+    const segs = sim.obstacles.filter((o) => o.type === 'sandbags' && o.hp > 0 && wallIdOf(o) === t.id);
+    if (segs.length === 0) return null;
+    const anchor = segs.find((o) => o.id === t.anchorId) ?? segs[0];
+    const top = Math.min(...segs.map((o) => o.y));
+    const bottom = Math.max(...segs.map((o) => o.y));
+    // A damaged wall refunds only the piles that are still standing
+    const refund = Math.max(
+      1,
+      Math.round(((SURVIVOR_CONFIGS.barricade.cost / 2) * segs.length) / BARRICADE_SEGMENT_OFFSETS.length)
+    );
+    return {
+      x: anchor.x,
+      y: Math.max(minY, anchor.y - 30),
+      refund,
+      ax: anchor.x,
+      ay: anchor.y,
+      box: { x: anchor.x - 20, y: top - 20, w: 40, h: bottom - top + 28 } as null | {
+        x: number;
+        y: number;
+        w: number;
+        h: number;
+      },
+    };
+  };
+
+  /** Sells the structure whose tag is showing: it is removed and half its courage comes back. */
+  const sellSelectedStructure = () => {
+    const sim = simRef.current;
+    const t = sim.sellTarget;
+    const tag = getSellTag();
+    sim.sellTarget = null;
+    if (!t || !tag || sim.phase !== 'combat' || pausedRef.current) return;
+
+    if (t.kind === 'unit') {
+      // A sold watchtower lets its shooter climb down and keep fighting on foot
+      for (const o of sim.units) {
+        if (o.inTowerId === t.id) {
+          o.inTowerId = undefined;
+          o.attackRange = o.baseAttackRange ?? o.attackRange;
+          o.vz = 20;
+        }
+        if (o.towerTargetId === t.id) o.towerTargetId = undefined;
+      }
+      sim.units = sim.units.filter((u) => u.id !== t.id);
+      if (sim.selectedUnitId === t.id) sim.selectedUnitId = null;
+    } else {
+      for (let i = sim.obstacles.length - 1; i >= 0; i--) {
+        const o = sim.obstacles[i];
+        if (o.type === 'sandbags' && wallIdOf(o) === t.id) sim.obstacles.splice(i, 1);
+      }
+    }
+
+    sim.courage = Math.min(100, sim.courage + tag.refund);
+    setCourage(Math.floor(sim.courage));
+    soundFX.playCouragePickup();
+    addFloatingText(`VENDIDA +${tag.refund}`, tag.ax, tag.ay, 26, '#38bdf8', true);
+    for (let i = 0; i < 12; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      sim.particles.push({
+        x: tag.ax,
+        y: tag.ay,
+        z: 4,
+        vx: Math.cos(ang) * (26 + Math.random() * 36),
+        vy: Math.sin(ang) * 10,
+        vz: 22 + Math.random() * 38,
+        color: i % 2 === 0 ? '#a8a29e' : '#38bdf8',
+        size: 2 + (i % 2),
+        life: 0.4 + Math.random() * 0.25,
+        maxLife: 0.65,
+      });
+    }
+  };
+
+  const jumpCameraToMinimap = (sx: number, sy: number) => {
     const sim = simRef.current;
     const frac = (sx - MINIMAP.x) / MINIMAP.w;
+    const fracY = Math.max(0, Math.min(1, (sy - MINIMAP.y) / MINIMAP.h));
     sim.camX = clampCam(frac * WORLD_WIDTH - LOGICAL_WIDTH / 2);
+    sim.camY = clampCamY(ROAD_Y_MIN + fracY * (ROAD_Y_MAX - ROAD_Y_MIN) - CAM_FOCUS_Y);
     sim.camManualTimer = 4;
   };
 
@@ -1485,13 +1685,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     const sim = simRef.current;
     const coords = getLogicalCoords(e.clientX, e.clientY);
     if (sim.minimapPointer === e.pointerId) {
-      jumpCameraToMinimap(coords.sx);
+      jumpCameraToMinimap(coords.sx, coords.sy);
       return;
     }
     const joy = sim.heroJoy;
     if (joy.active && joy.pointerId === e.pointerId) {
       let dx = (coords.sx - joy.ox) / JOY_RADIUS;
-      let dy = (coords.y - joy.oy) / JOY_RADIUS;
+      let dy = (coords.sy - joy.oy) / JOY_RADIUS;
       const len = Math.hypot(dx, dy);
       if (len > 1) {
         dx /= len;
@@ -1514,6 +1714,20 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     if (sim.minimapPointer === e.pointerId) sim.minimapPointer = null;
     if (sim.heroJoy.pointerId === e.pointerId) {
       sim.heroJoy = { active: false, pointerId: -1, ox: 0, oy: 0, dx: 0, dy: 0 };
+    }
+    // A quick tap (not a hold / drag) on a fixed structure shows its sell tag
+    const st = sim.structTap;
+    if (st && st.pointerId === e.pointerId) {
+      sim.structTap = null;
+      const up = getLogicalCoords(e.clientX, e.clientY);
+      if (
+        e.type !== 'pointercancel' &&
+        sim.phase === 'combat' &&
+        performance.now() - st.at <= 400 &&
+        Math.hypot(up.sx - st.sx, up.sy - st.sy) <= 12
+      ) {
+        sim.sellTarget = { kind: st.kind, id: st.id, anchorId: st.anchorId, timer: SELL_TAG.seconds };
+      }
     }
     const pressedAt = sim.heroFirePointers.get(e.pointerId);
     if (pressedAt !== undefined) {
@@ -1546,10 +1760,10 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     if (
       coords.sx >= MINIMAP.x - 4 &&
       coords.sx <= MINIMAP.x + MINIMAP.w + 4 &&
-      coords.y >= MINIMAP.y - 6 &&
-      coords.y <= MINIMAP.y + MINIMAP.h + 6
+      coords.sy >= MINIMAP.y - 6 &&
+      coords.sy <= MINIMAP.y + MINIMAP.h + 6
     ) {
-      jumpCameraToMinimap(coords.sx);
+      jumpCameraToMinimap(coords.sx, coords.sy);
       sim.minimapPointer = e.pointerId;
       capture();
       return;
@@ -1557,7 +1771,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
     // Install the armed Turret / Tesla Coil / structure exactly where the player tapped
     if (sim.placingUnit) {
-      if (coords.y >= 72) {
+      if (coords.sy >= 72) {
         const type = sim.placingUnit;
         sim.mouseLogical = { x: coords.x, y: coords.y, insideRoad: true };
         sim.placingUnit = null;
@@ -1569,7 +1783,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
     // 2-Tap Tactical Item System: 2nd tap on battlefield drops selected item at tapped location!
     if (sim.draggingItem) {
-      if (coords.y >= 72) {
+      if (coords.sy >= 72) {
         sim.mouseLogical = { x: coords.x, y: coords.y, insideRoad: true };
         deployTacticalItem(sim.draggingItem, coords.x, coords.y);
       }
@@ -1592,6 +1806,27 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       return;
     }
 
+    // SELL, step 2: the sell tag above a selected structure was tapped → sell it
+    if (sim.sellTarget) {
+      const tag = getSellTag();
+      if (
+        tag &&
+        Math.abs(coords.x - tag.x) <= SELL_TAG.hitW &&
+        Math.abs(coords.y - tag.y) <= SELL_TAG.hitH
+      ) {
+        sellSelectedStructure();
+        return;
+      }
+      sim.sellTarget = null; // tapping anywhere else hides the tag
+    }
+    // SELL, step 1: remember a tap that starts on a fixed structure (the tag shows on release)
+    {
+      const struct = sim.phase === 'combat' ? findStructureAt(coords.x, coords.y) : null;
+      sim.structTap = struct
+        ? { ...struct, pointerId: e.pointerId, at: performance.now(), sx: coords.sx, sy: coords.sy }
+        : null;
+    }
+
     // HERO CONTROLS: hold the left half to move (virtual joystick), tap / hold the right half to attack
     if (heroAlive()) {
       setShowControlsHint(false);
@@ -1599,7 +1834,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       // Joystick only on the far-left 40% and only if no finger is already moving the hero:
       // while retreating, a second touch anywhere (even behind / diagonal) always shoots
       if (!sim.heroJoy.active && coords.sx < LOGICAL_WIDTH * 0.4) {
-        sim.heroJoy = { active: true, pointerId: e.pointerId, ox: coords.sx, oy: coords.y, dx: 0, dy: 0 };
+        sim.heroJoy = { active: true, pointerId: e.pointerId, ox: coords.sx, oy: coords.sy, dx: 0, dy: 0 };
       } else {
         sim.heroFirePointers.set(e.pointerId, performance.now());
         sim.heroAimPoint = { x: coords.x, y: coords.y };
@@ -1639,39 +1874,39 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     simRef.current.units = [];
     if (tier === 1) {
       // Staggered 105px apart so player's first Redneck fights 1v1 cleanly!
-      spawnZombie('walker', 485 + FIELD_EXTRA, 212);
-      spawnZombie('walker', 590 + FIELD_EXTRA, 248);
+      spawnZombie('walker', 485 + GUARD_SHIFT, guardY(212));
+      spawnZombie('walker', 590 + GUARD_SHIFT, guardY(248));
     } else if (tier === 2) {
-      spawnZombie('walker', 490 + FIELD_EXTRA, 210);
-      spawnZombie('walker', 555 + FIELD_EXTRA, 250);
-      spawnZombie('runner', 595 + FIELD_EXTRA, 228);
+      spawnZombie('walker', 490 + GUARD_SHIFT, guardY(210));
+      spawnZombie('walker', 555 + GUARD_SHIFT, guardY(250));
+      spawnZombie('runner', 595 + GUARD_SHIFT, guardY(228));
     } else if (tier === 3) {
-      spawnZombie('walker', 490 + FIELD_EXTRA, 208);
-      spawnZombie('walker', 545 + FIELD_EXTRA, 250);
-      spawnZombie('runner', 585 + FIELD_EXTRA, 224);
-      spawnZombie(mission.skeletonAmbush ? 'skeleton' : 'walker', 520 + FIELD_EXTRA, 236);
+      spawnZombie('walker', 490 + GUARD_SHIFT, guardY(208));
+      spawnZombie('walker', 545 + GUARD_SHIFT, guardY(250));
+      spawnZombie('runner', 585 + GUARD_SHIFT, guardY(224));
+      spawnZombie(mission.skeletonAmbush ? 'skeleton' : 'walker', 520 + GUARD_SHIFT, guardY(236));
     } else if (tier === 4) {
-      spawnZombie('walker', 495 + FIELD_EXTRA, 212);
-      spawnZombie('walker', 545 + FIELD_EXTRA, 252);
-      spawnZombie('runner', 575 + FIELD_EXTRA, 222);
-      spawnZombie(mission.zombiePool.includes('armored') ? 'armored' : 'runner', 598 + FIELD_EXTRA, 240);
+      spawnZombie('walker', 495 + GUARD_SHIFT, guardY(212));
+      spawnZombie('walker', 545 + GUARD_SHIFT, guardY(252));
+      spawnZombie('runner', 575 + GUARD_SHIFT, guardY(222));
+      spawnZombie(mission.zombiePool.includes('armored') ? 'armored' : 'runner', 598 + GUARD_SHIFT, guardY(240));
     } else if (tier <= 6) {
-      spawnZombie('walker', 495 + FIELD_EXTRA, 208);
-      spawnZombie('runner', 540 + FIELD_EXTRA, 248);
-      spawnZombie('crit_zombie', 575 + FIELD_EXTRA, 220);
-      spawnZombie('armored', 598 + FIELD_EXTRA, 242);
+      spawnZombie('walker', 495 + GUARD_SHIFT, guardY(208));
+      spawnZombie('runner', 540 + GUARD_SHIFT, guardY(248));
+      spawnZombie('crit_zombie', 575 + GUARD_SHIFT, guardY(220));
+      spawnZombie('armored', 598 + GUARD_SHIFT, guardY(242));
     } else if (tier <= 9) {
-      spawnZombie('walker', 490 + FIELD_EXTRA, 208);
-      spawnZombie('runner', 532 + FIELD_EXTRA, 248);
-      spawnZombie('crit_zombie', 562 + FIELD_EXTRA, 218);
-      spawnZombie('armored', 585 + FIELD_EXTRA, 252);
-      spawnZombie('bloated', 602 + FIELD_EXTRA, 232);
+      spawnZombie('walker', 490 + GUARD_SHIFT, guardY(208));
+      spawnZombie('runner', 532 + GUARD_SHIFT, guardY(248));
+      spawnZombie('crit_zombie', 562 + GUARD_SHIFT, guardY(218));
+      spawnZombie('armored', 585 + GUARD_SHIFT, guardY(252));
+      spawnZombie('bloated', 602 + GUARD_SHIFT, guardY(232));
     } else {
-      spawnZombie('runner', 495 + FIELD_EXTRA, 210);
-      spawnZombie('runner', 532 + FIELD_EXTRA, 250);
-      spawnZombie('crit_zombie', 564 + FIELD_EXTRA, 220);
-      spawnZombie('armored', 586 + FIELD_EXTRA, 252);
-      spawnZombie('bloated', 602 + FIELD_EXTRA, 232);
+      spawnZombie('runner', 495 + GUARD_SHIFT, guardY(210));
+      spawnZombie('runner', 532 + GUARD_SHIFT, guardY(250));
+      spawnZombie('crit_zombie', 564 + GUARD_SHIFT, guardY(220));
+      spawnZombie('armored', 586 + GUARD_SHIFT, guardY(252));
+      spawnZombie('bloated', 602 + GUARD_SHIFT, guardY(232));
     }
 
     // The opening guard is part of the mission's enemy total
@@ -1682,9 +1917,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     spawnHero();
 
     const sector = tier <= 3 ? 1 : tier <= 6 ? 2 : tier <= 9 ? 3 : 4;
-    const maxActiveZombies =
+    const maxActiveBase =
       (tier === 1 ? 7 : sector === 1 ? 8 : sector === 2 ? 10 : sector === 3 ? 12 : 15) +
       (ultra ? ULTRA.maxZombiesBonus : 0);
+    // FORTRESS raises this cap a little with every horde
+    let maxActiveZombies = maxActiveBase;
 
     /** Director spawns draw from the mission's enemy budget; returns false once it is spent. */
     const spawnB = (type: ZombieType, x?: number, y?: number) => {
@@ -1996,7 +2233,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         let len = w.range;
         if (dirX > 0.001) len = Math.min(len, (WORLD_WIDTH - muzzleX) / dirX);
         if (dirX < -0.001) len = Math.min(len, -muzzleX / dirX);
-        if (sinP > 0.001) len = Math.min(len, (LOGICAL_HEIGHT - muzzleScreenY) / sinP);
+        if (sinP > 0.001) len = Math.min(len, (WORLD_HEIGHT - muzzleScreenY) / sinP);
         if (sinP < -0.001) len = Math.min(len, -muzzleScreenY / sinP);
         tracer(muzzleX + dirX * len, muzzleScreenY + sinP * len + wobble * 0.4, kind);
         collectPickupsOnSegment(muzzleX, u.y, muzzleX + dirX * len, u.y + sinP * len);
@@ -2031,6 +2268,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           sim.levelShockwaveTimer = Math.max(0, sim.levelShockwaveTimer - dt);
         }
 
+        // The sell tag hides by itself after a few seconds
+        if (sim.sellTarget) {
+          sim.sellTarget.timer -= dt;
+          if (sim.sellTarget.timer <= 0 || sim.phase !== 'combat') sim.sellTarget = null;
+        }
+
         // CAMERA: never moves on its own — only the minimap, mouse wheel, or the player moving the hero
         if (sim.camManualTimer > 0) sim.camManualTimer = Math.max(0, sim.camManualTimer - dt);
         // The hero is always the center of focus (clamped at the battlefield edges)
@@ -2040,6 +2283,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             sim.camManualTimer = 0;
             const target = clampCam(heroU.x - LOGICAL_WIDTH / 2);
             sim.camX += (target - sim.camX) * Math.min(1, dt * 7);
+            const targetY = clampCamY(heroU.y - CAM_FOCUS_Y);
+            sim.camY += (targetY - sim.camY) * Math.min(1, dt * 6);
           }
         }
 
@@ -2099,7 +2344,51 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           sim.timeRemaining = Math.max(0, sim.timeRemaining - dt);
           let aliveNow = 0;
           for (const zz of sim.units) if (zz.team === 'zombie' && zz.hp > 0) aliveNow++;
-          if (
+          if (fortress) {
+            // FORTRESS: every countdown ends in another horde, bigger and tougher than the last
+            if (sim.fortressHordePending && (aliveNow <= 2 || sim.timeRemaining <= 0)) {
+              sim.fortressHordePending = false;
+              sim.fortressResisted = sim.fortressHorde;
+              awardCommanderXp(12);
+              addFloatingText(
+                `🏰 ¡HORDA ${sim.fortressHorde} RESISTIDA!`,
+                sim.camX + 360,
+                176 + sim.camY,
+                30,
+                '#7dd3fc',
+                true
+              );
+            }
+            if (!sim.hordeTriggered && sim.timeRemaining <= 0) {
+              sim.fortressHorde += 1;
+              sim.hordeToSpawn = getFortressHordeSize(mission, sim.fortressHorde);
+              maxActiveZombies =
+                maxActiveBase +
+                Math.min(FORTRESS.maxZombiesBonusCap, sim.fortressHorde * FORTRESS.maxZombiesPerHorde);
+              sim.hordeTriggered = true;
+              setHordeTriggered(true);
+              soundFX.playSiren();
+              sim.screenShake = 10;
+              sim.hordeBurstTimer = 1.6;
+              addFloatingText(
+                `☠️ ¡HORDA ${sim.fortressHorde}! ☠️`,
+                sim.camX + 360,
+                160 + sim.camY,
+                30,
+                '#ef4444',
+                true
+              );
+            } else if (sim.hordeTriggered && sim.hordeToSpawn <= 0) {
+              // The whole horde is on the road: the countdown to the next one starts now
+              sim.hordeTriggered = false;
+              setHordeTriggered(false);
+              sim.fortressHordePending = true;
+              sim.timeRemaining = Math.max(
+                FORTRESS.minHordeInterval,
+                FORTRESS.hordeInterval - sim.fortressHorde * FORTRESS.hordeIntervalStep
+              );
+            }
+          } else if (
             !sim.hordeTriggered &&
             (sim.timeRemaining <= 0 || (sim.enemiesToSpawn <= 0 && aliveNow <= 2))
           ) {
@@ -2108,7 +2397,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             soundFX.playSiren();
             sim.screenShake = 10;
             sim.hordeBurstTimer = 1.6;
-            addFloatingText('☠️ ¡HORDA FINAL! ☠️', sim.camX + 360, 160, 30, '#ef4444', true);
+            addFloatingText('☠️ ¡HORDA FINAL! ☠️', sim.camX + 360, 160 + sim.camY, 30, '#ef4444', true);
           }
 
           // FINAL HORDE: bursts of zombies from the right until the whole horde is out
@@ -2117,9 +2406,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             if (sim.hordeBurstTimer <= 0 && aliveNow < maxActiveZombies + 14) {
               sim.hordeBurstTimer = 0.9;
               const hordePool: ZombieType[] = [...mission.zombiePool, 'runner', 'armored', 'crit_zombie'];
-              if (ultra || tier >= 3) hordePool.push('zombie_dog');
-              if (ultra || tier >= 5) hordePool.push('acid_spitter');
-              if (ultra || tier >= 7) hordePool.push('flyer');
+              // FORTRESS unlocks the nastier infected as the hordes go by
+              const vTier = tier + (fortress ? sim.fortressHorde : 0);
+              if (ultra || vTier >= 3) hordePool.push('zombie_dog');
+              if (ultra || vTier >= 5) hordePool.push('acid_spitter');
+              if (ultra || vTier >= 7) hordePool.push('flyer');
               const burst = Math.min(sim.hordeToSpawn, 3 + Math.floor(Math.random() * 2) + (ultra ? 1 : 0));
               for (let i = 0; i < burst; i++) {
                 sim.hordeToSpawn -= 1;
@@ -2147,6 +2438,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
           // VICTORY: the mission's whole enemy force has been sent and eliminated
           if (
+            !fortress &&
             sim.enemiesToSpawn <= 0 &&
             sim.hordeTriggered &&
             sim.hordeToSpawn <= 0 &&
@@ -2184,25 +2476,33 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
             sim.waveTimer = sim.hordeTriggered
               ? 2.1
-              : mission.waveInterval * (ultra ? ULTRA.waveInterval : 1) * (0.9 + Math.random() * 0.2) +
+              : mission.waveInterval *
+                  (ultra ? ULTRA.waveInterval : 1) *
+                  (fortress ? Math.max(0.55, 1 - sim.fortressHorde * 0.04) : 1) *
+                  (0.9 + Math.random() * 0.2) +
                 (isBreather ? 2.2 : 0);
 
             const pool = mission.zombiePool;
             let packSize = sector <= 2 ? 2 : 2 + (Math.random() < 0.45 ? 1 : 0);
             if (isClimax) packSize += 1;
             if (isBreather) packSize = Math.max(1, packSize - 1);
+            if (fortress) packSize += Math.min(3, Math.floor(sim.fortressHorde / 3));
 
+            // FORTRESS never runs out of zombies, so its hordes must respect the road cap too
             const roomLeft = sim.hordeTriggered
-              ? 6
+              ? fortress
+                ? Math.max(0, maxActiveZombies + 14 - aliveZombies)
+                : 6
               : Math.max(1, maxActiveZombies + 2 - aliveZombies);
             const finalCount = Math.min(packSize, roomLeft);
 
             // New enemy variety unlocks along the campaign (dogs → spitters → flyers)
             const extraPool: ZombieType[] = [];
             // ULTRA unleashes every new enemy type from the very first mission
-            if (ultra || tier >= 3) extraPool.push('zombie_dog');
-            if (ultra || tier >= 5) extraPool.push('acid_spitter');
-            if (ultra || tier >= 7) extraPool.push('flyer');
+            const vTier = tier + (fortress ? sim.fortressHorde : 0);
+            if (ultra || vTier >= 3) extraPool.push('zombie_dog');
+            if (ultra || vTier >= 5) extraPool.push('acid_spitter');
+            if (ultra || vTier >= 7) extraPool.push('flyer');
             for (let p = 0; p < finalCount; p++) {
               const useExtra =
                 extraPool.length > 0 && Math.random() < (ultra ? ULTRA.extraEnemyChance : 0.3);
@@ -2394,6 +2694,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               if (sim.busHp <= 0 && sim.phase === 'combat') {
                 sim.phase = 'defeat';
                 soundFX.playExplosion();
+                setZombiesKilledCount(sim.zombiesKilled);
+                if (fortress) syncFortressHud();
                 setBattleResult('defeat');
               }
             } else {
@@ -3456,6 +3758,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   if (sim.busHp <= 0) {
                     sim.phase = 'defeat';
                     soundFX.playExplosion();
+                    setZombiesKilledCount(sim.zombiesKilled);
+                    if (fortress) syncFortressHud();
                     setBattleResult('defeat');
                   }
                 }
@@ -3569,7 +3873,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             {
               let alive = 0;
               for (const zz of sim.units) if (zz.team === 'zombie' && zz.hp > 0) alive++;
-              setEnemiesLeft(sim.enemiesToSpawn + sim.hordeToSpawn + alive);
+              if (fortress) syncFortressHud();
+              else setEnemiesLeft(sim.enemiesToSpawn + sim.hordeToSpawn + alive);
             }
             {
               const hw = HERO_WEAPONS[sim.heroWeapon];
@@ -3578,7 +3883,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             }
             setRushWarningState({
               active: sim.rushWarningTimer > 0,
-              yPct: Math.round((sim.rushWarningY / LOGICAL_HEIGHT) * 100),
+              yPct: Math.round(((sim.rushWarningY - sim.camY) / LOGICAL_HEIGHT) * 100),
             });
           }
         }
@@ -3598,14 +3903,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           ctx.translate(sx, sy);
         }
         // Camera: everything below is drawn in world coordinates
-        ctx.translate(-Math.round(sim.camX * 2) / 2, 0);
+        ctx.translate(-Math.round(sim.camX * 2) / 2, -Math.round(sim.camY * 2) / 2);
 
         // LAYER 0: 2.5x HiDPI Cached Biome Background + Live Biome Details
         renderBiomeBackground(ctx, mission.biome, sim.time, mission.id);
 
         // LAYER 1: 2x HiDPI Persistent Decal Buffer (Blood puddles, blast craters & spent shells)
         if (decalCanvasRef.current) {
-          ctx.drawImage(decalCanvasRef.current, 0, 0, WORLD_WIDTH, LOGICAL_HEIGHT);
+          ctx.drawImage(decalCanvasRef.current, 0, 0, WORLD_WIDTH, WORLD_HEIGHT);
         }
 
         // Golden Commander Level-Up Shockwave Ring expanding across the road!
@@ -3823,9 +4128,50 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           ctx.restore();
         });
 
+        // SELL TAG: floats above the fixed structure the player tapped (tap the tag to sell it)
+        {
+          const tag = getSellTag();
+          if (tag) {
+            const pulse = 1 + Math.sin(sim.time * 7) * 0.05;
+            ctx.save();
+            ctx.strokeStyle = 'rgba(253, 224, 71, 0.95)';
+            ctx.lineWidth = 1.4;
+            ctx.setLineDash([4, 3]);
+            ctx.lineDashOffset = -sim.time * 14;
+            ctx.beginPath();
+            if (tag.box) ctx.roundRect(tag.box.x, tag.box.y, tag.box.w, tag.box.h, 5);
+            else ctx.ellipse(tag.ax, tag.ay + 1, 18, 7, 0, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            ctx.translate(tag.x, tag.y);
+            ctx.scale(pulse, pulse);
+            ctx.fillStyle = '#facc15';
+            ctx.beginPath();
+            ctx.moveTo(-4.5, SELL_TAG.h / 2 - 0.5);
+            ctx.lineTo(4.5, SELL_TAG.h / 2 - 0.5);
+            ctx.lineTo(0, SELL_TAG.h / 2 + 5);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = 'rgba(24, 20, 12, 0.95)';
+            ctx.strokeStyle = '#facc15';
+            ctx.lineWidth = 1.6;
+            ctx.beginPath();
+            ctx.roundRect(-SELL_TAG.w / 2, -SELL_TAG.h / 2, SELL_TAG.w, SELL_TAG.h, 5);
+            ctx.fill();
+            ctx.stroke();
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = '800 8.5px "Chakra Petch", sans-serif';
+            ctx.fillStyle = '#fde047';
+            ctx.fillText(`💰 VENDER +${tag.refund}`, 0, 0.5);
+            ctx.restore();
+          }
+        }
+
         ctx.restore();
 
-        // SCREEN-SPACE MINIMAP: the whole 1.5x battlefield + the visible window (tap to jump)
+        // SCREEN-SPACE MINIMAP: the whole battlefield + the visible window (tap to jump)
         {
           const mm = MINIMAP;
           const toMm = (wx: number) => mm.x + (Math.max(0, Math.min(WORLD_WIDTH, wx)) / WORLD_WIDTH) * mm.w;
@@ -3866,7 +4212,17 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           // Visible camera window
           ctx.strokeStyle = '#ffffff';
           ctx.lineWidth = 1;
-          ctx.strokeRect(toMm(sim.camX) + 0.5, mm.y - 1.5, (LOGICAL_WIDTH / WORLD_WIDTH) * mm.w - 1, mm.h + 3);
+          {
+            // Road band actually visible between the top HUD and the deck
+            const viewTop = Math.max(mm.y - 1.5, roadT(sim.camY + ROAD_Y_MIN) - 1.5);
+            const viewBot = Math.min(mm.y + mm.h + 1.5, roadT(sim.camY + 278) + 1.5);
+            ctx.strokeRect(
+              toMm(sim.camX) + 0.5,
+              viewTop,
+              (LOGICAL_WIDTH / WORLD_WIDTH) * mm.w - 1,
+              Math.max(4, viewBot - viewTop)
+            );
+          }
           ctx.restore();
         }
 
@@ -3902,6 +4258,15 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   const victoryCoins = Math.round(
     (mission.coinsReward + starsEarned * 15) * (ultra ? ULTRA.coinsMultiplier : 1)
   );
+  // FORTRESS loot so far (half of it is lost if the bus is destroyed)
+  const fortressCoins = fortress
+    ? getFortressCoins(mission, fortressHud.kills, fortressHud.resisted, battleResult === 'defeat')
+    : 0;
+  const cashOutFortress = () => {
+    soundFX.resumeFromBackground();
+    if (onFortressEnd) onFortressEnd(fortressCoins, fortressHud.resisted);
+    else onRetreat();
+  };
 
   // Active Tactical Squad (any number of unlocked units) + 1 Next-Unlock Teaser Card!
   const activeSquadUnits = progress.equippedDeck.filter(
@@ -4079,11 +4444,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       {/* ===================================================================== */}
       <div className="absolute top-2 right-3 safe-r z-20 flex items-center gap-2">
         <button
-          onClick={onRetreat}
+          onClick={fortress ? requestFortressExit : onRetreat}
           className="px-2 py-0.5 rounded-xs bg-[#323626]/90 hover:bg-[#414732] border border-[#8e9472] text-[10px] font-extrabold text-amber-200 shadow cursor-pointer"
-          title="Volver al Mapa de Campaña"
+          title={fortress ? 'Salir de la fortaleza y cobrar el botín' : 'Volver al Mapa de Campaña'}
         >
-          🗺️ Mapa
+          {fortress ? '💰 Salir' : '🗺️ Mapa'}
         </button>
 
         <div className="relative flex items-center">
@@ -4180,9 +4545,38 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       )}
 
       {/* ENEMIES REMAINING (victory when it reaches 0) */}
-      {battleResult === 'none' && (
-        <div className="absolute top-[86px] right-2 safe-r z-20 px-2 py-0.5 rounded bg-black/80 border border-red-500/70 text-[10px] font-extrabold text-red-200 shadow pointer-events-none">
+      {battleResult === 'none' && !fortress && (
+        <div className="absolute top-[62px] right-2 safe-r z-20 px-2 py-0.5 rounded bg-black/80 border border-red-500/70 text-[10px] font-extrabold text-red-200 shadow pointer-events-none">
           🧟 Enemigos: <span className="text-white">{enemiesLeft}</span>
+        </div>
+      )}
+
+      {/* FORTRESS: horde counter + kills (there is no enemy total: it never ends) */}
+      {battleResult === 'none' && fortress && (
+        <div className="absolute top-[60px] right-2 safe-r z-20 px-2 py-0.5 rounded bg-black/80 border border-sky-400/70 text-[10px] font-extrabold text-sky-200 shadow pointer-events-none text-right leading-tight">
+          {hordeTriggered ? (
+            <div className="text-red-300">
+              ☠️ ¡Horda <span className="text-white">{fortressHud.horde}</span>!
+            </div>
+          ) : (
+            <div>
+              ⏳ Horda <span className="text-white">{fortressHud.horde + 1}</span> en{' '}
+              <span className="text-white">
+                {Math.floor(timeRemaining / 60)}:{String(timeRemaining % 60).padStart(2, '0')}
+              </span>
+            </div>
+          )}
+          <div>
+            🏰 Resistidas: <span className="text-white">{fortressHud.resisted}</span> · 💀{' '}
+            <span className="text-white">{fortressHud.kills}</span>
+          </div>
+        </div>
+      )}
+
+      {/* FORTRESS MODE BADGE */}
+      {fortress && (
+        <div className="absolute top-1.5 left-1/2 -translate-x-[150%] z-20 px-2 py-0.5 rounded bg-gradient-to-b from-sky-600 to-slate-900 border border-sky-300 text-[9px] font-extrabold text-white shadow-lg pointer-events-none">
+          🏰 FORTRESS
         </div>
       )}
 
@@ -4674,7 +5068,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       </div>
 
       {/* PAUSE MODAL OVERLAY */}
-      {paused && battleResult === 'none' && (
+      {paused && battleResult === 'none' && !fortressExit && (
         <div className="absolute inset-0 z-40 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="max-w-xs w-full bg-[#1f2118] border-2 border-amber-500 rounded-lg p-5 text-center shadow-2xl">
             <div className="font-pixel text-sm sm:text-base text-amber-400 mb-1.5">
@@ -4692,12 +5086,47 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               </button>
               <button
                 onClick={() => {
+                  if (fortress) {
+                    syncFortressHud();
+                    setFortressExit(true);
+                    return;
+                  }
                   soundFX.resumeFromBackground();
                   onRetreat();
                 }}
                 className="w-full py-2 rounded bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 text-zinc-200 font-bold text-xs cursor-pointer"
               >
-                🗺️ Salir al Mapa de Campaña
+                {fortress ? '💰 Salir y cobrar el botín' : '🗺️ Salir al Mapa de Campaña'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* FORTRESS CASH-OUT PROMPT (the fight stays frozen behind it) */}
+      {fortress && fortressExit && battleResult === 'none' && (
+        <div className="absolute inset-0 z-40 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="max-w-xs w-full bg-[#1b2027] border-2 border-sky-400 rounded-lg p-5 text-center shadow-2xl">
+            <div className="font-pixel text-sm sm:text-base text-sky-300 mb-1.5">🏰 ¿SALIR DE LA FORTALEZA?</div>
+            <p className="text-[11px] text-zinc-300 mb-1 leading-relaxed">
+              Hordas resistidas: <strong className="text-white">{fortressHud.resisted}</strong> · Infectados
+              abatidos: <strong className="text-white">{fortressHud.kills}</strong>
+            </p>
+            <p className="text-xs text-zinc-200 mb-4">
+              Botín acumulado: <strong className="text-yellow-400">+{fortressCoins} 🪙</strong>
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={resumeBattle}
+                className="w-full py-2.5 rounded bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-extrabold text-xs uppercase tracking-wider cursor-pointer shadow-lg"
+              >
+                ▶ Seguir defendiendo
+              </button>
+              <button
+                onClick={cashOutFortress}
+                className="w-full py-2 rounded bg-yellow-500 hover:bg-yellow-400 text-zinc-950 font-extrabold text-xs uppercase tracking-wider cursor-pointer"
+              >
+                💰 Cobrar y salir al mapa
               </button>
             </div>
           </div>
@@ -4745,6 +5174,25 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   className="w-full py-2.5 rounded bg-yellow-500 hover:bg-yellow-400 text-zinc-950 font-extrabold text-xs uppercase tracking-wider cursor-pointer shadow-lg"
                 >
                   Continuar al Mapa Mundial →
+                </button>
+              </>
+            ) : fortress ? (
+              <>
+                <div className="font-pixel text-base text-red-500 mb-1.5">¡LA FORTALEZA CAYÓ!</div>
+                <p className="text-[11px] text-zinc-300 mb-1 leading-relaxed">
+                  Hordas resistidas: <strong className="text-white">{fortressHud.resisted}</strong> · Infectados
+                  abatidos: <strong className="text-white">{fortressHud.kills}</strong>
+                </p>
+                <p className="text-xs text-zinc-200 mb-4">
+                  Botín rescatado:{' '}
+                  <strong className="text-yellow-400">+{fortressCoins} 🪙</strong>{' '}
+                  <span className="text-zinc-400">(la mitad se perdió con el autobús)</span>
+                </p>
+                <button
+                  onClick={cashOutFortress}
+                  className="w-full py-2.5 rounded bg-amber-500 hover:bg-amber-400 text-zinc-950 font-extrabold text-xs uppercase cursor-pointer"
+                >
+                  Cobrar y volver al Mapa →
                 </button>
               </>
             ) : (
