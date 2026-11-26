@@ -159,7 +159,8 @@ const CAM_FOCUS_Y = 190;
 const SELL_TAG = { w: 72, h: 16, hitW: 40, hitH: 14, seconds: 4.5 };
 type SellRef = { kind: 'unit' | 'wall'; id: string; anchorId?: string };
 /** Minimap (screen space, logical px) that shows the whole battlefield. */
-const MINIMAP = { x: LOGICAL_WIDTH / 2 - 100, y: 49, w: 200, h: 15 };
+// It sits in the free strip of the top HUD row (left of the center icon), off the road
+const MINIMAP = { x: 205, y: 6, w: 132, h: 12 };
 /** Shooter in a watchtower gets this much extra range. */
 const TOWER_RANGE_BONUS = 1.35;
 
@@ -4575,14 +4576,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
       {/* FORTRESS MODE BADGE */}
       {fortress && (
-        <div className="absolute top-1.5 left-1/2 -translate-x-[150%] z-20 px-2 py-0.5 rounded bg-gradient-to-b from-sky-600 to-slate-900 border border-sky-300 text-[9px] font-extrabold text-white shadow-lg pointer-events-none">
+        <div className="absolute top-1.5 left-1/2 ml-7 z-20 px-2 py-0.5 rounded bg-gradient-to-b from-sky-600 to-slate-900 border border-sky-300 text-[9px] font-extrabold text-white shadow-lg pointer-events-none">
           🏰 FORTRESS
         </div>
       )}
 
       {/* ULTRA MODE BADGE */}
       {ultra && (
-        <div className="absolute top-1.5 left-1/2 -translate-x-[155%] z-20 px-2 py-0.5 rounded bg-gradient-to-b from-fuchsia-600 to-purple-900 border border-fuchsia-300 text-[9px] font-extrabold text-white shadow-lg pointer-events-none">
+        <div className="absolute top-1.5 left-1/2 ml-7 z-20 px-2 py-0.5 rounded bg-gradient-to-b from-fuchsia-600 to-purple-900 border border-fuchsia-300 text-[9px] font-extrabold text-white shadow-lg pointer-events-none">
           ☠️ ULTRA
         </div>
       )}

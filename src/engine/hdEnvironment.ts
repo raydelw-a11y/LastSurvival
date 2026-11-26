@@ -8,7 +8,9 @@ export const WORLD_WIDTH = 1440;
 /** Extra road depth added below the original band: the camera also scrolls vertically over it. */
 export const ROAD_EXTRA_DEPTH = 84;
 /** Full world height (the screen shows LOGICAL_HEIGHT of it at a time). */
-export const WORLD_HEIGHT = LOGICAL_HEIGHT + ROAD_EXTRA_DEPTH;
+/** Extra verge below the road so the camera can lift the bottom lane clear of the unit cards. */
+export const BOTTOM_VERGE_EXTRA = 24;
+export const WORLD_HEIGHT = LOGICAL_HEIGHT + ROAD_EXTRA_DEPTH + BOTTOM_VERGE_EXTRA;
 export const ROAD_Y_MAX = 278 + ROAD_EXTRA_DEPTH;
 export const ROAD_Y_MIN = 98; // road band is ROAD_Y_MIN..ROAD_Y_MAX (264 px deep)
 /** Refinery flare stacks of the junkyard skyline (baked towers + live flames share these). */
