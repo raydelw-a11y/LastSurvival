@@ -19,6 +19,7 @@ import {
   ZOMBIE_XP_REWARD,
   ZombieType,
   ULTRA,
+  getMissionEnemyCount,
   HERO_WEAPONS,
   HERO_WEAPON_ORDER,
   HeroWeaponCategory,
@@ -266,7 +267,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   const [busHp, setBusHp] = useState<number>(maxBusHp);
   // ULTRA mode reinforces the enemy barricade too
   const missionBarricadeHp = Math.round(mission.barricadeHp * (ultra ? ULTRA.barricadeHp : 1));
-  const [barricadeHp, setBarricadeHp] = useState<number>(missionBarricadeHp);
+  const [barricadeHp, setBarricadeHp] = useState<number>(0);
+  const [enemiesLeft, setEnemiesLeft] = useState<number>(getMissionEnemyCount(mission, ultra));
   const [unitCooldowns, setUnitCooldowns] =
     useState<Record<SurvivorType, number>>(INITIAL_UNIT_COOLDOWNS);
   const [itemCooldowns, setItemCooldowns] = useState<Record<TacticalItemType, number>>({
@@ -325,8 +327,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     busX: -2,
     busY: 66, // Parked at the top of the (deeper) road
     doorOpenTimer: 0,
-    barricadeHp: missionBarricadeHp,
-    maxBarricadeHp: missionBarricadeHp,
+    // The enemy barricade is gone: barricadeX is just the invisible spawn line on the right
+    barricadeHp: 0,
+    maxBarricadeHp: 1,
+    // Zombies this mission still has to send (victory = budget spent + every zombie dead)
+    enemiesToSpawn: getMissionEnemyCount(mission, ultra),
     barricadeX: WORLD_WIDTH - 106,
     barricadeShake: 0,
     barricadeThresholdIdx: 0,
@@ -374,6 +379,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     // Right-half pointers → press start time (hold = fire, quick tap = reload)
     heroFirePointers: new Map<number, number>(),
     heroTapAttack: false,
+    // After a reload starts, firing needs a fresh press (no auto-fire when it finishes)
+    heroFireLock: false,
     heroReloadStage: 0,
     // Keeps the hero facing / aiming at the last target briefly after each shot
     heroAimTimer: 0,
@@ -895,6 +902,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     const hw = HERO_WEAPONS[sim.heroWeapon];
     if (hw.magSize <= 0 || sim.heroReload > 0 || sim.heroAmmo[hw.id] >= hw.magSize) return false;
     sim.heroReload = hw.reloadTime * heroOutfitCfg().reloadMult;
+    sim.heroTapAttack = false;
+    sim.heroFireLock = true;
     sim.heroReloadStage = 0;
     return true;
   }, []);
@@ -1559,7 +1568,10 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         const hw = HERO_WEAPONS[sim.heroWeapon];
         if (hw.magSize > 0 && sim.heroAmmo[hw.id] <= 0 && sim.heroReload <= 0) {
           requestHeroReload(); // empty magazine: the tap reloads
+        } else if (sim.heroReload > 0 && !(hw.reloadPerShell && sim.heroAmmo[hw.id] > 0)) {
+          // Reloading: ignore the tap (it must not fire by itself when the reload ends)
         } else {
+          sim.heroFireLock = false; // a fresh press after reloading
           sim.heroTapAttack = true; // every tap fires one shot; holding keeps firing
         }
       }
@@ -1624,12 +1636,26 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       spawnZombie('bloated', 602 + FIELD_EXTRA, 232);
     }
 
+    // The opening guard is part of the mission's enemy total
+    simRef.current.enemiesToSpawn = Math.max(
+      0,
+      simRef.current.enemiesToSpawn - simRef.current.units.filter((zz) => zz.team === 'zombie').length
+    );
     spawnHero();
 
     const sector = tier <= 3 ? 1 : tier <= 6 ? 2 : tier <= 9 ? 3 : 4;
     const maxActiveZombies =
       (tier === 1 ? 7 : sector === 1 ? 8 : sector === 2 ? 10 : sector === 3 ? 12 : 15) +
       (ultra ? ULTRA.maxZombiesBonus : 0);
+
+    /** Director spawns draw from the mission's enemy budget; returns false once it is spent. */
+    const spawnB = (type: ZombieType, x?: number, y?: number) => {
+      const sim = simRef.current;
+      if (sim.enemiesToSpawn <= 0) return false;
+      sim.enemiesToSpawn -= 1;
+      spawnZombie(type, x, y);
+      return true;
+    };
 
     // Damage the enemy barricade (shared by squad units and the hero): defenders, XP, final ram
     const damageEnemyBarricade = (dmg: number, y: number) => {
@@ -1925,8 +1951,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         tracer(sim.barricadeX - 8, muzzleScreenY + (sim.barricadeX - 8 - muzzleX) * Math.tan(aim.pitch) + wobble, kind);
         damageEnemyBarricade(Math.round(base * 0.8), u.y);
       } else {
-        // No target: straight along the aim direction
-        tracer(muzzleX + u.facing * w.range * cosP, muzzleScreenY + w.range * sinP + wobble * 0.4, kind);
+        // No target: the bullet keeps flying until it leaves the field
+        const dirX = u.facing * cosP;
+        let len = w.range;
+        if (dirX > 0.001) len = Math.min(len, (WORLD_WIDTH - muzzleX) / dirX);
+        if (dirX < -0.001) len = Math.min(len, -muzzleX / dirX);
+        if (sinP > 0.001) len = Math.min(len, (LOGICAL_HEIGHT - muzzleScreenY) / sinP);
+        if (sinP < -0.001) len = Math.min(len, -muzzleScreenY / sinP);
+        tracer(muzzleX + dirX * len, muzzleScreenY + sinP * len + wobble * 0.4, kind);
       }
       sim.screenShake = Math.max(sim.screenShake, w.id === 'ak47' ? 1.4 : 0.6);
     };
@@ -2032,7 +2064,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             sim.screenShake = 9;
             addFloatingText('¡HORDA FINAL!', sim.camX + 360, 165, 28, '#ef4444', true);
             for (let i = 0; i < 7; i++) {
-              spawnZombie(
+              spawnB(
                 i % 3 === 0 ? 'armored' : i % 2 === 0 ? 'runner' : 'crit_zombie',
                 sim.barricadeX - 54 + i * 12
               );
@@ -2051,6 +2083,20 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             sim.emptyRoadTimer += dt;
           } else {
             sim.emptyRoadTimer = 0;
+          }
+
+          // VICTORY: the mission's whole enemy force has been sent and eliminated
+          if (sim.enemiesToSpawn <= 0 && aliveZombies === 0 && sim.phase === 'combat') {
+            sim.phase = 'victory';
+            soundFX.playCouragePickup();
+            const integrityBonus =
+              sim.busHp >= sim.maxBusHp * 0.85 ? 30 : sim.busHp >= sim.maxBusHp * 0.45 ? 20 : 10;
+            awardCommanderXp(35 + integrityBonus);
+            const stars = sim.busHp >= sim.maxBusHp * 0.85 ? 3 : sim.busHp >= sim.maxBusHp * 0.45 ? 2 : 1;
+            setStarsEarned(stars);
+            setZombiesKilledCount(sim.zombiesKilled);
+            setEnemiesLeft(0);
+            setBattleResult('victory');
           }
 
           const waveDrainRate = sim.hordeTriggered
@@ -2098,11 +2144,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 ? extraPool[Math.floor(Math.random() * extraPool.length)]
                 : pool[Math.floor(Math.random() * pool.length)];
               const px = sim.barricadeX - 20 - p * 20 - Math.random() * 18;
-              spawnZombie(pick, px);
+              spawnB(pick, px);
               const pack = ZOMBIE_CONFIGS[pick].packSize ?? 0;
               if (pack > 0 && aliveZombies + finalCount < maxActiveZombies + 4) {
                 for (let k = 1; k <= pack; k++) {
-                  spawnZombie(pick, px - k * 14, undefined);
+                  spawnB(pick, px - k * 14, undefined);
                 }
                 soundFX.playZombieDogPack();
               }
@@ -2114,13 +2160,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             sim.rushWarningTimer -= dt;
             if (sim.rushWarningTimer <= 0) {
               addFloatingText('¡CORREDORES!', sim.barricadeX - 70, sim.rushWarningY - 12, 20, '#ef4444', true);
-              spawnZombie('runner', sim.barricadeX - 14, sim.rushWarningY - 6);
+              spawnB('runner', sim.barricadeX - 14, sim.rushWarningY - 6);
               if (sector === 1) {
-                spawnZombie('runner', sim.barricadeX - 34, sim.rushWarningY + 8);
+                spawnB('runner', sim.barricadeX - 34, sim.rushWarningY + 8);
               } else {
-                spawnZombie('crit_zombie', sim.barricadeX - 32, sim.rushWarningY + 8);
+                spawnB('crit_zombie', sim.barricadeX - 32, sim.rushWarningY + 8);
                 if (sector >= 3 && aliveZombies < maxActiveZombies) {
-                  spawnZombie('runner', sim.barricadeX - 48, sim.rushWarningY);
+                  spawnB('runner', sim.barricadeX - 48, sim.rushWarningY);
                 }
               }
             }
@@ -2139,9 +2185,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             sim.skeletonTimer = 13 + Math.random() * 5;
             const ambushX = 250 + Math.random() * (sim.barricadeX - 400);
             const ambushY = ROAD_Y_MIN + 14 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 28);
-            spawnZombie('skeleton', ambushX, ambushY);
+            spawnB('skeleton', ambushX, ambushY);
             if (sector >= 3 && Math.random() < 0.5) {
-              spawnZombie('skeleton', ambushX + 28, ambushY);
+              spawnB('skeleton', ambushX + 28, ambushY);
             }
           }
 
@@ -2354,7 +2400,10 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             p.x += stepX;
             p.y += stepY;
             p.traveled += Math.hypot(stepX, stepY);
-            if (p.y < ROAD_Y_MIN - 30 || p.y > ROAD_Y_MAX + 30) p.traveled = p.range; // left the road
+            // Flies until it hits a zombie or leaves the battlefield
+            if (p.y < ROAD_Y_MIN - 30 || p.y > ROAD_Y_MAX + 30 || p.x < -20 || p.x > WORLD_WIDTH + 20) {
+              p.traveled = p.range;
+            }
             let done = false;
             // Rockets / arrows smash into the enemy barricade
             if (p.vx > 0 && sim.barricadeHp > 0 && p.x >= sim.barricadeX - 16) {
@@ -2758,6 +2807,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               sim.heroFirePointers.forEach((t0) => {
                 if (now - t0 >= HOLD_TO_FIRE_MS) heldFire = true;
               });
+              // A press held through a reload doesn't fire on its own afterwards
+              if (sim.heroFireLock) {
+                const pressing = sim.heroFirePointers.size > 0 || keys.has('j') || keys.has('k');
+                if (!pressing) sim.heroFireLock = false; // released → next press can fire
+                else if (!(hw.reloadPerShell && sim.heroReload > 0)) heldFire = false;
+              }
               const wantsAttack = heldFire || sim.heroTapAttack;
 
               if (sim.heroReload > 0) {
@@ -3139,7 +3194,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                     );
                   }
                 }
-              } else if (!u.isStationary && !u.inTowerId && distToBarricade <= (u.isRanged ? 92 : 28)) {
+              } else if (
+                sim.barricadeHp > 0 &&
+                !u.isStationary &&
+                !u.inTowerId &&
+                distToBarricade <= (u.isRanged ? 92 : 28)
+              ) {
                 u.facing = 1;
                 if (u.attackTimer <= 0) {
                   u.state = 'attack';
@@ -3438,6 +3498,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             setUnitCooldowns({ ...sim.unitCooldowns });
             setItemCooldowns({ ...sim.itemCooldowns });
             setTimeRemaining(Math.ceil(sim.timeRemaining));
+            {
+              let alive = 0;
+              for (const zz of sim.units) if (zz.team === 'zombie' && zz.hp > 0) alive++;
+              setEnemiesLeft(sim.enemiesToSpawn + alive);
+            }
             {
               const hw = HERO_WEAPONS[sim.heroWeapon];
               setHeroAmmoHud({ ammo: sim.heroAmmo[hw.id], mag: hw.magSize, reloading: sim.heroReload > 0 });
@@ -4046,6 +4111,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         </div>
       )}
 
+      {/* ENEMIES REMAINING (victory when it reaches 0) */}
+      {battleResult === 'none' && (
+        <div className="absolute top-[86px] right-2 z-20 px-2 py-0.5 rounded bg-black/80 border border-red-500/70 text-[10px] font-extrabold text-red-200 shadow pointer-events-none">
+          🧟 Enemigos: <span className="text-white">{enemiesLeft}</span>
+        </div>
+      )}
+
       {/* ULTRA MODE BADGE */}
       {ultra && (
         <div className="absolute top-1.5 left-1/2 -translate-x-[155%] z-20 px-2 py-0.5 rounded bg-gradient-to-b from-fuchsia-600 to-purple-900 border border-fuchsia-300 text-[9px] font-extrabold text-white shadow-lg pointer-events-none">
@@ -4554,7 +4626,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             {battleResult === 'victory' ? (
               <>
                 <div className="font-pixel text-base text-yellow-400 mb-1.5">
-                  ¡BARRICADA DEMOLIDA!
+                  ¡ZONA LIMPIA!
                 </div>
                 <div className="flex items-center justify-center gap-2 my-2">
                   {[1, 2, 3].map((s) => (
@@ -4571,7 +4643,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   ))}
                 </div>
                 <p className="text-[11px] text-zinc-400 mb-1">
-                  Integridad del Autobús: <strong className="text-emerald-400">{Math.round((busHp / maxBusHp) * 100)}%</strong> ({barricadeHp === 0 ? 'Ruta Despejada' : ''})
+                  Integridad del Autobús: <strong className="text-emerald-400">{Math.round((busHp / maxBusHp) * 100)}%</strong> (todos los infectados eliminados)
                 </p>
                 <p className="text-xs text-zinc-200 mb-4">
                   Botín: <strong className="text-yellow-400">+{victoryCoins} 🪙</strong>
