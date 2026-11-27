@@ -78,6 +78,8 @@ export interface RenderUnit {
   quoteText?: string;
   quoteTimer?: number;
   firstHitReady?: boolean;
+  /** Legs keep walking while the arms shoot / reload (walking to a tower, backing away). */
+  moving?: boolean;
 }
 
 export interface RenderObstacle {
@@ -219,6 +221,8 @@ export const TESLA_TIP_Z = 37;
 export const TOWER_PLATFORM_Z = 27;
 /** Depth offsets of the three sandbag piles that make up one barricade. */
 export const BARRICADE_SEGMENT_OFFSETS = [-48, -16, 16, 48];
+/** A barricade laid sideways spreads its piles this much wider (they are wider than deep). */
+export const BARRICADE_FLAT_SPACING = 1.15;
 /** Visual hover height of flying zombies above their ground shadow. */
 export const FLYER_HOVER_Z = 30;
 
@@ -730,7 +734,9 @@ export function renderPlacementGhost(
   x: number,
   y: number,
   range: number,
-  time: number
+  time: number,
+  /** Barricade laid sideways (a wall across a north–south approach) instead of in depth. */
+  flatWall = false
 ) {
   const pulse = 0.94 + Math.sin(time * 7) * 0.06;
   const col = subType === 'tesla' ? '56, 189, 248' : '250, 204, 21';
@@ -739,13 +745,19 @@ export function renderPlacementGhost(
     ctx.save();
     ctx.globalAlpha = 0.6;
     for (const off of o) {
-      drawSandbagPile(ctx, x, y + off);
+      if (flatWall) drawSandbagPile(ctx, x + off * BARRICADE_FLAT_SPACING, y);
+      else drawSandbagPile(ctx, x, y + off);
     }
     ctx.globalAlpha = 0.9;
     ctx.strokeStyle = 'rgba(250, 204, 21, 0.85)';
     ctx.setLineDash([5, 4]);
     ctx.lineWidth = 1.4;
-    ctx.strokeRect(x - 20, y + o[0] - 18, 40, o[o.length - 1] - o[0] + 26);
+    if (flatWall) {
+      const half = o[o.length - 1] * BARRICADE_FLAT_SPACING + 20;
+      ctx.strokeRect(x - half, y - 18, half * 2, 26);
+    } else {
+      ctx.strokeRect(x - 20, y + o[0] - 18, 40, o[o.length - 1] - o[0] + 26);
+    }
     ctx.restore();
     return;
   }
@@ -1136,7 +1148,7 @@ export function renderUnitSprite(
     // ===============================================================
     // 7-NODE ARTICULATED HUMANOID / ZOMBIE RIG (4x Supersampled Parts)
     // ===============================================================
-    const isMoving = unit.state === 'march' || unit.state === 'spawning';
+    const isMoving = unit.state === 'march' || unit.state === 'spawning' || !!unit.moving;
     const walkFreq = unit.subType === 'runner' ? 16 : isSurvivor ? 12 : 8.5;
     const stride = isMoving ? Math.sin(unit.animTime * walkFreq) : 0;
     const bob = isMoving ? Math.abs(Math.cos(unit.animTime * walkFreq)) * 1.6 : Math.sin(time * 3.5 + unit.x) * 0.5;
@@ -1586,8 +1598,6 @@ export function renderTracersAndShells(
 }
 
 let lightmapCanvas: HTMLCanvasElement | null = null;
-const LM_W = WORLD_WIDTH / 2;
-const LM_H = WORLD_HEIGHT / 2;
 
 function drawLightHalo(
   lctx: CanvasRenderingContext2D,
@@ -1616,10 +1626,17 @@ export function renderDynamicLightmap(
   obstacles: RenderObstacle[],
   tracers: RenderTracer[],
   arcs: RenderLightningArc[] = [],
-  acidPools: RenderAcidPool[] = []
+  acidPools: RenderAcidPool[] = [],
+  /** Size of the battlefield being lit (the SIEGE arena is larger than the highway). */
+  worldW: number = WORLD_WIDTH,
+  worldH: number = WORLD_HEIGHT
 ) {
+  const LM_W = Math.round(worldW / 2);
+  const LM_H = Math.round(worldH / 2);
   if (!lightmapCanvas && typeof document !== 'undefined') {
     lightmapCanvas = document.createElement('canvas');
+  }
+  if (lightmapCanvas && (lightmapCanvas.width !== LM_W || lightmapCanvas.height !== LM_H)) {
     lightmapCanvas.width = LM_W;
     lightmapCanvas.height = LM_H;
   }
@@ -1689,14 +1706,14 @@ export function renderDynamicLightmap(
 
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
-  ctx.drawImage(lightmapCanvas, 0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+  ctx.drawImage(lightmapCanvas, 0, 0, worldW, worldH);
 
   ctx.globalCompositeOperation = 'source-over';
   const vigTop = ctx.createLinearGradient(0, 0, 0, 26);
   vigTop.addColorStop(0, 'rgba(10, 10, 14, 0.25)');
   vigTop.addColorStop(1, 'rgba(10, 10, 14, 0)');
   ctx.fillStyle = vigTop;
-  ctx.fillRect(0, 0, WORLD_WIDTH, 26);
+  ctx.fillRect(0, 0, worldW, 26);
   ctx.restore();
 }
 

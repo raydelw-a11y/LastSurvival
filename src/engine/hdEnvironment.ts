@@ -18,7 +18,45 @@ const JUNKYARD_STACKS = [303, 331, 513, 840, 1215];
 /** How far the horizon scenery (guardrail, trees, buildings) moved up to make room. */
 const HORIZON_SHIFT = 180 - ROAD_Y_MIN; // 49
 
-const BIOME_BAKE_SCALE = 2.5; // 3600x1050 crisp offscreen cache (full 1440x420 world)
+/**
+ * Battlefield geometry. NORMAL is the highway (bus at the left end); SIEGE is a larger stretch of
+ * open country with the bus parked in the middle, seen from further away so every side can be watched.
+ */
+export interface FieldGeom {
+  /** World size in logical px. */
+  w: number;
+  h: number;
+  /** Walkable band (top / bottom of the ground the units can stand on). */
+  yMin: number;
+  yMax: number;
+  /** Camera zoom: 1 = normal, below 1 shows more of the map. */
+  zoom: number;
+  /** Resolution of the offscreen background bake (px per world px). */
+  bakeScale: number;
+  /** Bus in the middle, infected arriving from every side. */
+  siege: boolean;
+}
+// bakeScale 2.5 → 3600x1110 crisp offscreen cache of the highway
+export const NORMAL_FIELD: FieldGeom = {
+  w: WORLD_WIDTH,
+  h: WORLD_HEIGHT,
+  yMin: ROAD_Y_MIN,
+  yMax: ROAD_Y_MAX,
+  zoom: 1,
+  bakeScale: 2.5,
+  siege: false,
+};
+// A lower bake scale is enough here: the zoomed-out camera never magnifies it
+export const SIEGE_FIELD: FieldGeom = {
+  w: 1800,
+  h: 1130,
+  // No horizon here: the ground fills the whole map (the margins are what the HUD covers)
+  yMin: 58,
+  yMax: 1012,
+  zoom: 0.62,
+  bakeScale: 1.6,
+  siege: true,
+};
 const bakedBiomeCache = new Map<string, HTMLCanvasElement>();
 
 export function syncCanvasHiDPI(
@@ -158,10 +196,237 @@ function drawWreckedSedanHD(ctx: CanvasRenderingContext2D, x: number, y: number,
   inkedCircle(ctx, x + 48, y + 21, 5.8, '#18181b', '#52525b');
 }
 
-function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement {
-  const key = `${biome}_${seed}`;
+/**
+ * SIEGE ground: open country in every direction — no roads and no horizon. The bus is camped in
+ * the middle of it and the rim fades into the dark, which is where the infected walk out of.
+ */
+function bakeSiegeGround(ctx: CanvasRenderingContext2D, biome: BiomeType, seed: number, field: FieldGeom) {
+  const W = field.w;
+  const H = field.h;
+  const cx = W / 2;
+  const cy = (field.yMin + field.yMax) / 2;
+  const pal =
+    biome === 'graveyard'
+      ? { base: '#1c2430', dark: '#121924', light: '#2a3646', tuft: '#3b4d66', rock: '#475569', rockHi: '#7c8ba1' }
+      : biome === 'forest_highway'
+      ? { base: '#38472f', dark: '#27341f', light: '#4a5d3b', tuft: '#6c8c58', rock: '#6b7280', rockHi: '#a8b0bc' }
+      : biome === 'farm_crossing'
+      ? { base: '#5b4a2d', dark: '#44361f', light: '#74603a', tuft: '#a8923f', rock: '#78716c', rockHi: '#b5ada6' }
+      : { base: '#453a31', dark: '#31281f', light: '#5a4c3f', tuft: '#7a6a5c', rock: '#52525b', rockHi: '#8b8b95' };
+  /** Is (x, y) inside the trampled camp around the bus? (kept clear of scenery) */
+  const inCamp = (x: number, y: number, pad = 0) =>
+    ((x - cx) / (215 + pad)) ** 2 + ((y - cy) / (125 + pad)) ** 2 < 1;
+
+  ctx.fillStyle = pal.base;
+  ctx.fillRect(0, 0, W, H);
+
+  // Broad patches of lighter and darker ground so the plain does not look flat
+  for (let i = 0; i < 110; i++) {
+    const px = hash32(i, 71, seed) % W;
+    const py = hash32(i, 72, seed) % H;
+    ctx.globalAlpha = 0.16 + (hash32(i, 73, seed) % 14) / 100;
+    ctx.fillStyle = i % 2 === 0 ? pal.light : pal.dark;
+    ctx.beginPath();
+    ctx.ellipse(px, py, 70 + (hash32(i, 74, seed) % 150), 26 + (hash32(i, 75, seed) % 50), 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  // Fine mottling
+  for (let i = 0; i < 620; i++) {
+    const px = hash32(i, 51, seed) % W;
+    const py = hash32(i, 52, seed) % H;
+    ctx.fillStyle =
+      i % 3 === 0 ? 'rgba(0, 0, 0, 0.11)' : i % 3 === 1 ? 'rgba(255, 255, 255, 0.045)' : 'rgba(0, 0, 0, 0.06)';
+    ctx.beginPath();
+    ctx.ellipse(px, py, 14 + (i % 24), 4 + (i % 7), 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Biome ground cover (all of it flat: units walk over it)
+  if (biome === 'farm_crossing') {
+    // Ploughed plots with furrows
+    for (let f = 0; f < 9; f++) {
+      const fx = 60 + (hash32(f, 81, seed) % (W - 420));
+      const fy = 70 + (hash32(f, 82, seed) % (H - 300));
+      const fw = 220 + (hash32(f, 83, seed) % 160);
+      const fh = 110 + (hash32(f, 84, seed) % 80);
+      if (inCamp(fx + fw / 2, fy + fh / 2, 190)) continue;
+      ctx.fillStyle = 'rgba(58, 42, 22, 0.42)';
+      ctx.fillRect(fx, fy, fw, fh);
+      ctx.strokeStyle = 'rgba(160, 130, 62, 0.35)';
+      ctx.lineWidth = 1.6;
+      for (let ry = fy + 6; ry < fy + fh - 2; ry += 9) {
+        ctx.beginPath();
+        ctx.moveTo(fx + 4, ry);
+        ctx.lineTo(fx + fw - 4, ry + ((hash32(f, ry, seed) % 5) - 2));
+        ctx.stroke();
+      }
+    }
+  } else if (biome === 'junkyard_city') {
+    // Cracked concrete slabs, oil puddles and half-buried tyres
+    for (let f = 0; f < 34; f++) {
+      const fx = hash32(f, 81, seed) % W;
+      const fy = hash32(f, 82, seed) % H;
+      if (inCamp(fx, fy, 40)) continue;
+      const fw = 46 + (hash32(f, 83, seed) % 70);
+      ctx.fillStyle = 'rgba(113, 113, 122, 0.3)';
+      ctx.strokeStyle = 'rgba(24, 24, 27, 0.5)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.rect(fx, fy, fw, fw * 0.42);
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(fx + fw * 0.3, fy);
+      ctx.lineTo(fx + fw * 0.45, fy + fw * 0.2);
+      ctx.lineTo(fx + fw * 0.38, fy + fw * 0.42);
+      ctx.stroke();
+    }
+    for (let f = 0; f < 46; f++) {
+      const fx = hash32(f, 85, seed) % W;
+      const fy = hash32(f, 86, seed) % H;
+      if (inCamp(fx, fy, 20)) continue;
+      if (f % 2 === 0) {
+        ctx.fillStyle = 'rgba(10, 10, 14, 0.5)';
+        ctx.beginPath();
+        ctx.ellipse(fx, fy, 16 + (f % 14), 5 + (f % 5), 0, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.strokeStyle = '#18181b';
+        ctx.lineWidth = 3.4;
+        ctx.beginPath();
+        ctx.ellipse(fx, fy, 9, 4.2, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+  } else if (biome === 'graveyard') {
+    // Sunken grave slabs and freshly turned earth
+    for (let f = 0; f < 60; f++) {
+      const fx = hash32(f, 81, seed) % W;
+      const fy = hash32(f, 82, seed) % H;
+      if (inCamp(fx, fy, 30)) continue;
+      if (f % 3 === 0) {
+        ctx.fillStyle = 'rgba(10, 14, 22, 0.5)';
+        ctx.beginPath();
+        ctx.ellipse(fx, fy, 20, 8, 0, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        inkedRoundRect(ctx, fx, fy, 24, 11, 2, '#334155', '#475569', '#0f172a', 1.1);
+      }
+    }
+  } else {
+    // Forest clearing: fallen leaves, moss and bare earth
+    for (let f = 0; f < 240; f++) {
+      const fx = hash32(f, 81, seed) % W;
+      const fy = hash32(f, 82, seed) % H;
+      ctx.fillStyle = f % 4 === 0 ? 'rgba(180, 120, 50, 0.32)' : f % 4 === 1 ? 'rgba(96, 140, 70, 0.28)' : 'rgba(40, 30, 20, 0.2)';
+      ctx.beginPath();
+      ctx.ellipse(fx, fy, 3 + (f % 6), 1.6 + (f % 3), (f % 7) * 0.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // The camp: ground trampled bare around the bus, and the ruts it left driving in from the west
+  const camp = ctx.createRadialGradient(cx, cy, 30, cx, cy, 215);
+  camp.addColorStop(0, 'rgba(20, 16, 12, 0.34)');
+  camp.addColorStop(0.7, 'rgba(20, 16, 12, 0.2)');
+  camp.addColorStop(1, 'rgba(20, 16, 12, 0)');
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(1, 0.58);
+  ctx.translate(-cx, -cy);
+  ctx.fillStyle = camp;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 215, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(12, 10, 8, 0.3)';
+  ctx.lineWidth = 4;
+  for (const off of [26, 48]) {
+    ctx.beginPath();
+    ctx.moveTo(-10, cy + 150 + off);
+    ctx.bezierCurveTo(W * 0.14, cy + 170 + off, W * 0.27, cy - 20 + off, cx - 110, cy + off);
+    ctx.stroke();
+  }
+
+  // Grass tufts / dry weeds everywhere but the camp
+  ctx.strokeStyle = pal.tuft;
+  ctx.lineWidth = 1.2;
+  for (let i = 0; i < 900; i++) {
+    const px = hash32(i, 61, seed) % W;
+    const py = 8 + (hash32(i, 62, seed) % (H - 10));
+    if (inCamp(px, py, -40)) continue;
+    ctx.beginPath();
+    ctx.moveTo(px - 3, py);
+    ctx.lineTo(px - 4.5, py - 5);
+    ctx.moveTo(px, py);
+    ctx.lineTo(px, py - 6.5);
+    ctx.moveTo(px + 3, py);
+    ctx.lineTo(px + 4.5, py - 4.5);
+    ctx.stroke();
+  }
+  // Stones
+  for (let i = 0; i < 150; i++) {
+    const px = hash32(i, 91, seed) % W;
+    const py = 10 + (hash32(i, 92, seed) % (H - 20));
+    if (inCamp(px, py)) continue;
+    const r = 2.5 + (hash32(i, 93, seed) % 5);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.beginPath();
+    ctx.ellipse(px + 1, py + r * 0.5, r * 1.15, r * 0.4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = pal.rock;
+    ctx.beginPath();
+    ctx.ellipse(px, py, r, r * 0.62, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = pal.rockHi;
+    ctx.beginPath();
+    ctx.ellipse(px - r * 0.25, py - r * 0.2, r * 0.45, r * 0.22, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // The edge of the map: whatever stands there is what the infected come out from behind
+  for (let i = 0; i < 64; i++) {
+    const along = hash32(i, 95, seed);
+    const side = i % 4;
+    const depth = 6 + (hash32(i, 96, seed) % 40);
+    const ex = side === 0 ? depth : side === 1 ? W - depth : 30 + (along % (W - 60));
+    const ey = side === 2 ? 34 + depth : side === 3 ? H - 6 - depth * 0.5 : 40 + (along % (H - 70));
+    if (biome === 'forest_highway') {
+      drawPineTreeHD(ctx, ex, ey, 0.8 + (hash32(i, 97, seed) % 40) / 100, '#244735', '#173023');
+    } else if (biome === 'graveyard') {
+      inkedRoundRect(ctx, ex - 7, ey - 18, 14, 19, 5, '#475569', '#94a3b8', '#1e293b', 1.1);
+    } else if (biome === 'farm_crossing') {
+      inkedRoundRect(ctx, ex - 10, ey - 13, 20, 14, 5, '#ca8a04', '#facc15', '#854d0e', 1.2);
+    } else if (i % 3 === 0) {
+      drawWreckedSedanHD(ctx, ex - 31, ey - 24, i % 2 === 0 ? '#3b5d7a' : '#7f1d1d', i % 2 === 0 ? '#64748b' : '#991b1b');
+    } else {
+      renderOilDrumHD(ctx, ex, ey, '#2d3325', '#464f39', '#6b7857');
+    }
+  }
+
+  // ...and it all fades into the dark on every side
+  const fade = (x0: number, y0: number, x1: number, y1: number, rx: number, ry: number, rw: number, rh: number) => {
+    const g = ctx.createLinearGradient(x0, y0, x1, y1);
+    g.addColorStop(0, 'rgba(6, 7, 10, 0.72)');
+    g.addColorStop(1, 'rgba(6, 7, 10, 0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(rx, ry, rw, rh);
+  };
+  fade(0, 0, 110, 0, 0, 0, 110, H);
+  fade(W, 0, W - 110, 0, W - 110, 0, 110, H);
+  fade(0, 0, 0, 96, 0, 0, W, 96);
+  fade(0, H, 0, H - 96, 0, H - 96, W, 96);
+}
+
+function getBakedBiomeCanvas(biome: BiomeType, seed: number, field: FieldGeom = NORMAL_FIELD): HTMLCanvasElement {
+  const key = `${biome}_${seed}_${field.siege ? 'siege' : 'road'}`;
   const existing = bakedBiomeCache.get(key);
   if (existing) return existing;
+  // Geometry of the field being baked (these shadow the highway constants of the module)
+  const WORLD_WIDTH = field.w;
+  const WORLD_HEIGHT = field.h;
+  const ROAD_Y_MAX = field.yMax;
 
   // Each bake is a large bitmap: keep only the two most recent ones in memory
   while (bakedBiomeCache.size >= 2) {
@@ -175,12 +440,19 @@ function getBakedBiomeCanvas(biome: BiomeType, seed: number): HTMLCanvasElement 
   }
 
   const canvas = document.createElement('canvas');
-  canvas.width = Math.round(WORLD_WIDTH * BIOME_BAKE_SCALE);
-  canvas.height = Math.round(WORLD_HEIGHT * BIOME_BAKE_SCALE);
+  canvas.width = Math.round(WORLD_WIDTH * field.bakeScale);
+  canvas.height = Math.round(WORLD_HEIGHT * field.bakeScale);
   const ctx = canvas.getContext('2d')!;
-  ctx.scale(BIOME_BAKE_SCALE, BIOME_BAKE_SCALE);
+  ctx.scale(field.bakeScale, field.bakeScale);
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
+
+  // SIEGE has no sky, skyline or road: just open ground
+  if (field.siege) {
+    bakeSiegeGround(ctx, biome, seed, field);
+    bakedBiomeCache.set(key, canvas);
+    return canvas;
+  }
 
   // 1. Atmospheric Sky Gradient
   const skyGrad = ctx.createLinearGradient(0, 0, 0, 152 - HORIZON_SHIFT);
@@ -425,12 +697,40 @@ export function renderBiomeBackground(
   ctx: CanvasRenderingContext2D,
   biome: BiomeType,
   time: number,
-  seed = 1
+  seed = 1,
+  field: FieldGeom = NORMAL_FIELD
 ) {
-  const baked = getBakedBiomeCanvas(biome, seed);
+  // Geometry of the field on screen (these shadow the highway constants of the module)
+  const WORLD_WIDTH = field.w;
+  const WORLD_HEIGHT = field.h;
+  const ROAD_Y_MAX = field.yMax;
+  const baked = getBakedBiomeCanvas(biome, seed, field);
   ctx.drawImage(baked, 0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
-  if (biome === 'farm_crossing') {
+  if (field.siege) {
+    // Open country: no skyline to animate, only ground mist drifting over the graveyard
+    if (biome === 'graveyard') {
+      ctx.save();
+      ctx.fillStyle = 'rgba(148, 163, 184, 0.07)';
+      const shift = (time * 12) % 360;
+      for (let i = -1; i <= Math.ceil(WORLD_WIDTH / 360); i++) {
+        for (let r = 0; r < 4; r++) {
+          ctx.beginPath();
+          ctx.ellipse(
+            i * 360 + (r % 2 === 0 ? shift : 360 - shift) + r * 90,
+            140 + r * ((WORLD_HEIGHT - 240) / 3),
+            170,
+            16,
+            0,
+            0,
+            Math.PI * 2
+          );
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+  } else if (biome === 'farm_crossing') {
     const hubX = 440;
     const hubY = 56 - HORIZON_SHIFT;
     ctx.save();
@@ -453,7 +753,7 @@ export function renderBiomeBackground(
     mistGrad.addColorStop(0.5, 'rgba(148, 163, 184, 0.04)');
     mistGrad.addColorStop(1, 'rgba(148, 163, 184, 0.16)');
     ctx.fillStyle = mistGrad;
-    for (let i = -1; i <= 11; i++) {
+    for (let i = -1; i <= Math.ceil(WORLD_WIDTH / 130); i++) {
       ctx.beginPath();
       ctx.ellipse(i * 250 + shift * 0.45 - WORLD_WIDTH * 0.45, 164 - HORIZON_SHIFT, 110, 10, 0, 0, Math.PI * 2);
       ctx.ellipse(i * 270 - shift * 0.35, ROAD_Y_MAX - 6, 125, 11, 0, 0, Math.PI * 2);
@@ -477,9 +777,12 @@ export function renderBiomeBackground(
   // Smooth drifting atmospheric dust motes
   ctx.fillStyle =
     biome === 'graveyard' ? 'rgba(186, 230, 253, 0.34)' : 'rgba(254, 240, 138, 0.30)';
-  for (let m = 0; m < 30; m++) {
+  for (let m = 0; m < (field.siege ? 70 : 30); m++) {
     const mx = (m * 67 + time * (9 + (m % 4) * 2.5)) % WORLD_WIDTH;
-    const my = 84 + ((m * 37) % (ROAD_Y_MAX - ROAD_Y_MIN)) + Math.sin(time * 2 + m) * 4.5;
+    const my =
+      (field.siege ? 30 : 84) +
+      ((m * 37) % (ROAD_Y_MAX - (field.siege ? 30 : ROAD_Y_MIN))) +
+      Math.sin(time * 2 + m) * 4.5;
     ctx.beginPath();
     ctx.arc(mx, my, 1.15, 0, Math.PI * 2);
     ctx.fill();

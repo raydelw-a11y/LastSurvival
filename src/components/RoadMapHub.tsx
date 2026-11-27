@@ -24,6 +24,8 @@ import {
   HeroOutfitType,
   ZOMBIE_CONFIGS,
   ZombieType,
+  SIEGE,
+  siegeKey,
 } from '../types/game';
 import {
   Award,
@@ -58,7 +60,7 @@ interface RoadMapHubProps {
   progress: PlayerProgress;
   selectedMissionId: number;
   onSelectMission: (id: number) => void;
-  onLaunchMission: (mission: MissionNode, ultra?: boolean, fortress?: boolean) => void;
+  onLaunchMission: (mission: MissionNode, ultra?: boolean, fortress?: boolean, siege?: boolean) => void;
   onUpgradeSurvivor: (type: SurvivorType, cost: number) => void;
   onUpgradeBusStat: (kind: 'hp' | 'bill' | 'bumper' | 'armor', cost: number) => void;
   onUpgradeSurvivorMax: (type: SurvivorType) => void;
@@ -77,6 +79,8 @@ interface RoadMapHubProps {
 
 // Mission/cache X coords are percentages of the original 2800px span (BASE_W);
 // values above 100 extend the campaign east into Sectors 5..8 (M25..M50).
+/** Remembers whether the player last chose the highway or the bus-in-the-middle layout. */
+const SIEGE_LAYOUT_KEY = 'ls_siege_layout';
 const BASE_W = 2800;
 const WORLD_W = 5800;
 const X_PCT = BASE_W / WORLD_W;
@@ -142,6 +146,23 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
 }) => {
   const [modalTab, setModalTab] = useState<'none' | 'deck' | 'garage' | 'zombiepedia' | 'hero'>('none');
   const [zoomedOut, setZoomedOut] = useState<boolean>(false);
+  // Layout of the next battle: the usual highway, or the bus in the middle of a bigger map
+  // with the infected coming from every side (it applies to Asaltar, ULTRA and Fortress alike)
+  const [siegeLayout, setSiegeLayoutState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(SIEGE_LAYOUT_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const setSiegeLayout = (on: boolean) => {
+    setSiegeLayoutState(on);
+    try {
+      localStorage.setItem(SIEGE_LAYOUT_KEY, on ? '1' : '0');
+    } catch {
+      // Ignore
+    }
+  };
   const [weldBurstKey, setWeldBurstKey] = useState<number>(0);
   const [confirmReset, setConfirmReset] = useState<boolean>(false);
   const mapCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -695,7 +716,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
       const k = e.key.toLowerCase();
       keys.add(k);
       if (k === 'enter') {
-        onLaunchMission(selectedMission);
+        onLaunchMission(selectedMission, false, false, siegeLayout);
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -749,6 +770,7 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
   }, [
     modalTab,
     hotkeysDisabled,
+    siegeLayout,
     onCollectCache,
     onLaunchMission,
     onSelectMission,
@@ -1234,24 +1256,58 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
             <span className="text-zinc-400">(con horda final)</span>
           </span>
           <span>
-            Botín: <strong className="text-yellow-400">+{selectedMission.coinsReward} 🪙</strong>
+            Botín:{' '}
+            <strong className="text-yellow-400">
+              +{Math.round(selectedMission.coinsReward * (siegeLayout ? SIEGE.coinsMultiplier : 1))} 🪙
+            </strong>
           </span>
+        </div>
+
+        {/* LAYOUT: the same mission on the highway, or with the bus in the middle of a bigger map */}
+        <div className="flex items-stretch gap-0.5 mb-1.5 p-0.5 rounded-lg bg-black/60 border border-zinc-700 text-[9px] font-extrabold uppercase tracking-wide">
+          <button
+            type="button"
+            onClick={() => setSiegeLayout(false)}
+            title="Carretera: el bus a la izquierda y los infectados llegan por la derecha"
+            className={`flex-1 py-1 rounded-md cursor-pointer ${
+              !siegeLayout ? 'bg-zinc-200 text-zinc-950' : 'text-zinc-400 hover:text-zinc-100'
+            }`}
+          >
+            🛣️ Carretera
+          </button>
+          <button
+            type="button"
+            onClick={() => setSiegeLayout(true)}
+            title={`Asedio 360°: el bus en el centro de un mapa más grande y los infectados llegan por todos lados (botín x${SIEGE.coinsMultiplier}). Vale para Asaltar, ULTRA y Fortress.`}
+            className={`flex-1 py-1 rounded-md cursor-pointer ${
+              siegeLayout ? 'bg-amber-500 text-zinc-950' : 'text-zinc-400 hover:text-zinc-100'
+            }`}
+          >
+            🧭 Bus al centro · 360°
+          </button>
         </div>
 
         <div className="flex gap-1.5">
           <button
-            onClick={() => onLaunchMission(selectedMission)}
+            onClick={() => onLaunchMission(selectedMission, false, false, siegeLayout)}
             className="flex-1 py-2 rounded-lg bg-gradient-to-b from-yellow-400 to-amber-500 hover:from-yellow-300 hover:to-amber-400 border-2 border-[#181410] text-zinc-950 font-extrabold text-xs uppercase tracking-wider shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
           >
             <Play className="w-4 h-4 fill-zinc-950" />
             <span>¡ASALTAR! (-{selectedMission.fuelCost} ⛽)</span>
+            {siegeLayout && (progress.siegeBest?.[siegeKey('n', selectedMission.id)] || 0) > 0 && (
+              <span className="text-[10px] tracking-normal" title="Mejor resultado en Asedio 360°">
+                {'★'.repeat(progress.siegeBest?.[siegeKey('n', selectedMission.id)] || 0)}
+              </span>
+            )}
           </button>
           {(() => {
             const ultraUnlocked = (progress.missionStars[selectedMission.id] || 0) > 0;
-            const ultraBest = progress.ultraStars?.[selectedMission.id] || 0;
+            const ultraBest = siegeLayout
+              ? progress.siegeBest?.[siegeKey('u', selectedMission.id)] || 0
+              : progress.ultraStars?.[selectedMission.id] || 0;
             return (
               <button
-                onClick={() => ultraUnlocked && onLaunchMission(selectedMission, true)}
+                onClick={() => ultraUnlocked && onLaunchMission(selectedMission, true, false, siegeLayout)}
                 disabled={!ultraUnlocked}
                 title={
                   ultraUnlocked
@@ -1277,10 +1333,12 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
 
         {/* FORTRESS: endless hordes on this same mission until the player leaves */}
         {(() => {
-          const fortressBest = progress.fortressBest?.[selectedMission.id] || 0;
+          const fortressBest = siegeLayout
+            ? progress.siegeBest?.[siegeKey('f', selectedMission.id)] || 0
+            : progress.fortressBest?.[selectedMission.id] || 0;
           return (
             <button
-              onClick={() => onLaunchMission(selectedMission, false, true)}
+              onClick={() => onLaunchMission(selectedMission, false, true, siegeLayout)}
               title="MODO FORTRESS: hordas infinitas cada vez más fuertes. Resiste lo que puedas y sal cuando quieras para cobrar el botín."
               className="mt-1.5 w-full px-2.5 py-1.5 rounded-lg bg-gradient-to-b from-sky-700 to-slate-900 hover:from-sky-600 hover:to-slate-800 border-2 border-sky-300/80 text-white text-[10px] font-extrabold uppercase tracking-wide shadow-md flex items-center justify-between gap-2 cursor-pointer"
             >

@@ -12,6 +12,7 @@ import {
   PlayerProgress,
   SURVIVOR_ORDER,
   SurvivorType,
+  siegeKey,
 } from './types/game';
 import { PrivateAccess } from './components/PrivateAccess';
 import { RoadMapHub } from './components/RoadMapHub';
@@ -22,7 +23,7 @@ import { ContinuePrompt } from './components/ContinuePrompt';
 import { useCloudSync } from './sync/useCloudSync';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '8:55 PM - 11/26/2026';
+const FALLBACK_TIMESTAMP = '2:00 PM - 11/27/2026';
 export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 const CURRENT_BUILD_ID = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : '';
@@ -67,6 +68,7 @@ const INITIAL_PROGRESS: PlayerProgress = {
   missionStars: {},
   ultraStars: {},
   fortressBest: {},
+  siegeBest: {},
   heroOutfits: ['commander'],
   heroOutfit: 'commander',
   unlockedMissions: [1],
@@ -150,6 +152,10 @@ function sanitizeProgress(rawObj: Partial<PlayerProgress>): PlayerProgress {
       rawObj.fortressBest && typeof rawObj.fortressBest === 'object' && !Array.isArray(rawObj.fortressBest)
         ? rawObj.fortressBest
         : {},
+    siegeBest:
+      rawObj.siegeBest && typeof rawObj.siegeBest === 'object' && !Array.isArray(rawObj.siegeBest)
+        ? rawObj.siegeBest
+        : {},
     unlockedMissions: (() => {
       const savedStars = rawObj.missionStars || {};
       let highestBeaten = 0;
@@ -224,6 +230,10 @@ export function App() {
   const activeUltraRef = useRef(false);
   // FORTRESS mode for the battle in progress (endless hordes until the player leaves)
   const [activeFortress, setActiveFortress] = useState<boolean>(false);
+  // SIEGE layout for the battle in progress (bus in the middle of a bigger map, enemies all around).
+  // It combines with normal, ULTRA and FORTRESS and keeps its own records.
+  const [activeSiege, setActiveSiege] = useState<boolean>(false);
+  const activeSiegeRef = useRef(false);
   // After a silent auto-update reload from the map, don't nag with the continue prompt again.
   const [continueDismissed, setContinueDismissed] = useState<boolean>(() => {
     try {
@@ -430,10 +440,13 @@ export function App() {
     }
   }, []);
 
-  const handleLaunchMission = useCallback((mission: MissionNode, ultra = false, fortress = false) => {
+  const handleLaunchMission = useCallback(
+    (mission: MissionNode, ultra = false, fortress = false, siege = false) => {
     activeUltraRef.current = ultra && !fortress;
     setActiveUltra(ultra && !fortress);
     setActiveFortress(fortress);
+    activeSiegeRef.current = siege;
+    setActiveSiege(siege);
     soundFX.resumeFromBackground();
     soundFX.playUnitSpawn();
     setContinueDismissed(true);
@@ -444,7 +457,9 @@ export function App() {
       lastPlayedAt: Date.now(),
     }));
     setActiveBattleMission(mission);
-  }, []);
+    },
+    []
+  );
 
   const handleRetreat = useCallback(() => {
     setActiveBattleMission(null);
@@ -456,6 +471,20 @@ export function App() {
     setActiveBattleMission((currentMission) => {
       if (!currentMission) return null;
       const mId = currentMission.id;
+      if (activeSiegeRef.current) {
+        // FORTRESS with the bus in the middle: its own horde record
+        const key = siegeKey('f', mId);
+        setProgress((prev) => ({
+          ...prev,
+          coins: prev.coins + Math.max(0, Math.round(coinsEarned)),
+          siegeBest: {
+            ...(prev.siegeBest || {}),
+            [key]: Math.max((prev.siegeBest || {})[key] || 0, hordes),
+          },
+          lastPlayedAt: Date.now(),
+        }));
+        return null;
+      }
       setProgress((prev) => ({
         ...prev,
         coins: prev.coins + Math.max(0, Math.round(coinsEarned)),
@@ -475,6 +504,21 @@ export function App() {
         if (!currentMission) return null;
         const mId = currentMission.id;
         const nextId = mId + 1;
+
+        if (activeSiegeRef.current) {
+          // SIEGE win (normal or ULTRA): its own best-star record; the campaign path is untouched
+          const key = siegeKey(activeUltraRef.current ? 'u' : 'n', mId);
+          setProgress((prev) => ({
+            ...prev,
+            coins: prev.coins + coinsEarned,
+            siegeBest: {
+              ...(prev.siegeBest || {}),
+              [key]: Math.max((prev.siegeBest || {})[key] || 0, stars),
+            },
+            lastPlayedAt: Date.now(),
+          }));
+          return null;
+        }
 
         if (activeUltraRef.current) {
           // ULTRA win: separate best-star record, the normal campaign path is untouched
@@ -708,6 +752,7 @@ export function App() {
           mission={activeBattleMission}
           ultra={activeUltra}
           fortress={activeFortress}
+          siege={activeSiege}
           progress={progress}
           isPortrait={isPortrait}
           onVictory={handleVictory}

@@ -20,6 +20,7 @@ import {
   ZombieType,
   ULTRA,
   FORTRESS,
+  SIEGE,
   getFortressCoins,
   getFortressHordeSize,
   getMissionEnemyCount,
@@ -34,8 +35,6 @@ import {
 import {
   LOGICAL_HEIGHT,
   LOGICAL_WIDTH,
-  ROAD_Y_MAX,
-  ROAD_Y_MIN,
   RenderCrow,
   RenderFireZone,
   RenderFloatingText,
@@ -70,9 +69,9 @@ import {
   renderAcidBlobs,
   renderHeroShots,
   RenderHeroShot,
-  WORLD_HEIGHT,
-  WORLD_WIDTH,
+  BARRICADE_FLAT_SPACING,
 } from '../engine/PixelArtRenderer';
+import { FieldGeom, NORMAL_FIELD, SIEGE_FIELD } from '../engine/hdEnvironment';
 import { MuteButton } from './MuteButton';
 import { getHeroWeaponArt } from '../engine/hdAtlas';
 import { soundFX } from '../engine/SoundFX';
@@ -83,6 +82,8 @@ interface BattleArenaProps {
   ultra?: boolean;
   /** FORTRESS mode: endless, escalating hordes until the player leaves the mission. */
   fortress?: boolean;
+  /** SIEGE layout: bus parked in the middle of a larger arena, infected from every side. */
+  siege?: boolean;
   progress: PlayerProgress;
   isPortrait?: boolean;
   onVictory: (stars: number, coinsEarned: number, zombiesKilled: number) => void;
@@ -129,6 +130,11 @@ interface InternalUnit extends RenderUnit {
   towerTargetId?: string;
   /** Shooter: attack range before the watchtower bonus. */
   baseAttackRange?: number;
+  /** SIEGE: the spot around the bus this unit holds and walks back to after a fight. */
+  guardX?: number;
+  guardY?: number;
+  /** SIEGE: seconds spent standing at its post with nothing to fight. */
+  guardIdle?: number;
   barricadeMultiplier: number;
   infectedZombieType?: ZombieType;
   critChance: number;
@@ -142,25 +148,24 @@ interface InternalUnit extends RenderUnit {
 
 const TACTICAL_ORDER: TacticalItemType[] = ['blue_barrel', 'red_barrel', 'medkit'];
 
-/** Extra length of the battlefield beyond one screen (world is 2x the viewport). */
-const FIELD_EXTRA = WORLD_WIDTH - LOGICAL_WIDTH;
+/** Extra length of the highway beyond one screen (it is 2x the viewport). */
+const FIELD_EXTRA = NORMAL_FIELD.w - LOGICAL_WIDTH;
 /** The opening guard waits this far east (kept a bit closer than the far end of the longer road). */
 const GUARD_SHIFT = FIELD_EXTRA - 240;
 /** Opening-guard lanes were authored for the old 98..278 road: spread them over the deeper one. */
-const guardY = (y: number) => ROAD_Y_MIN + ((y - 98) / 180) * (ROAD_Y_MAX - ROAD_Y_MIN);
-const MAX_CAM_X = WORLD_WIDTH - LOGICAL_WIDTH;
-const clampCam = (x: number) => Math.max(0, Math.min(MAX_CAM_X, x));
-/** The road is deeper than the screen: the camera also scrolls vertically over it. */
-const MAX_CAM_Y = WORLD_HEIGHT - LOGICAL_HEIGHT;
-const clampCamY = (y: number) => Math.max(0, Math.min(MAX_CAM_Y, y));
-/** Screen Y where the camera tries to keep the hero (middle of the visible road band). */
-const CAM_FOCUS_Y = 190;
+const guardY = (y: number) =>
+  NORMAL_FIELD.yMin + ((y - 98) / 180) * (NORMAL_FIELD.yMax - NORMAL_FIELD.yMin);
+/** Ranged units back away from a zombie that gets closer than this share of their range. */
+const KITE_RATIO = 0.55;
+/** SIEGE: how far from the bus (flattened ellipse, px) its defenders may chase or fall back. */
+const SIEGE_LEASH = 430;
+/** SIEGE: defenders react to zombies within this distance of themselves. */
+const SIEGE_AGGRO = 250;
+/** Depth counts 1.5x in every "how far is it" test of the 2.5D ground. */
+const DEPTH_W = 1.5;
 /** Sell tag that floats above a tapped fixed structure (world px). */
 const SELL_TAG = { w: 72, h: 16, hitW: 40, hitH: 14, seconds: 4.5 };
 type SellRef = { kind: 'unit' | 'wall'; id: string; anchorId?: string };
-/** Minimap (screen space, logical px) that shows the whole battlefield. */
-// It sits in the free strip of the top HUD row (left of the center icon), off the road
-const MINIMAP = { x: 205, y: 6, w: 132, h: 12 };
 /** Shooter in a watchtower gets this much extra range. */
 const TOWER_RANGE_BONUS = 1.35;
 
@@ -220,14 +225,6 @@ interface AcidBlob {
   hitsBus: boolean;
 }
 
-/** Where a placeable unit (Turret / Tesla Coil) may be installed: on the road, ahead of the bus. */
-function clampPlacement(busX: number, barricadeX: number, x: number, y: number) {
-  return {
-    x: Math.max(busX + 150, Math.min(barricadeX - 40, x)),
-    y: Math.max(ROAD_Y_MIN + 10, Math.min(ROAD_Y_MAX - 6, y)),
-  };
-}
-
 const INITIAL_UNIT_COOLDOWNS: Record<SurvivorType, number> = {
   redneck: 0,
   farmer: 0,
@@ -251,6 +248,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   mission,
   ultra = false,
   fortress = false,
+  siege = false,
   progress,
   isPortrait = false,
   onVictory,
@@ -261,6 +259,199 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const decalCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const bannerTimeoutRef = useRef<number | null>(null);
+
+  // ---------------------------------------------------------------------------------
+  // BATTLEFIELD GEOMETRY of this battle. With `siege` the bus is parked in the middle of a larger
+  // map of open country that the camera shows from further away; otherwise it is the usual highway.
+  // ---------------------------------------------------------------------------------
+  const field: FieldGeom = siege ? SIEGE_FIELD : NORMAL_FIELD;
+  const WORLD_WIDTH = field.w;
+  const WORLD_HEIGHT = field.h;
+  const ROAD_Y_MIN = field.yMin;
+  const ROAD_Y_MAX = field.yMax;
+  const ZOOM = field.zoom;
+  /** World px that fit on screen at this zoom. */
+  const VIEW_W = LOGICAL_WIDTH / ZOOM;
+  const VIEW_H = LOGICAL_HEIGHT / ZOOM;
+  /** Touch tolerance grows as the camera zooms out, so taps stay as easy as on the highway. */
+  const TAP = 1 / ZOOM;
+  const clampCam = (x: number) => Math.max(0, Math.min(WORLD_WIDTH - VIEW_W, x));
+  const clampCamY = (y: number) => Math.max(0, Math.min(WORLD_HEIGHT - VIEW_H, y));
+  /** World offset from the top of the view where the camera keeps the hero. */
+  const CAM_FOCUS_Y = 190 / ZOOM;
+  /** Minimap (screen space, logical px): a thin strip of the highway, or the whole 2D arena. */
+  const MINIMAP = siege ? { x: 206, y: 4, w: 84, h: 42 } : { x: 205, y: 6, w: 132, h: 12 };
+  /** Decals (blood, craters, brass) are baked at this resolution. */
+  const DECAL_SCALE = siege ? 1.25 : 2;
+  /** Where the bus is parked: the left end of the highway, or the middle of the SIEGE arena. */
+  const BUS_X = siege ? Math.round(WORLD_WIDTH / 2 - 78) : -2;
+  const BUS_Y = siege ? Math.round((ROAD_Y_MIN + ROAD_Y_MAX) / 2 - 37) : 66;
+  const BUS_CX = BUS_X + 78;
+  const BUS_CY = BUS_Y + 37;
+  /** SIEGE: ground footprint of the bus — nobody walks through it and zombies bite its edges. */
+  const BUS_RECT = { x0: BUS_X - 6, x1: BUS_X + 160, y0: BUS_Y - 4, y1: BUS_Y + 78 };
+  const clampN = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+  /** Closest point of the bus footprint to (x, y) and how far it is. */
+  const busGap = (x: number, y: number) => {
+    const px = clampN(x, BUS_RECT.x0, BUS_RECT.x1);
+    const py = clampN(y, BUS_RECT.y0, BUS_RECT.y1);
+    return { px, py, d: Math.hypot(x - px, y - py) };
+  };
+  /** SIEGE: (x, y) moved to the nearest edge of the bus footprint if it is inside it. */
+  const outOfBus = (x: number, y: number, margin = 0) => {
+    if (!siege) return { x, y };
+    const x0 = BUS_RECT.x0 - margin;
+    const x1 = BUS_RECT.x1 + margin;
+    const y0 = BUS_RECT.y0 - margin;
+    const y1 = BUS_RECT.y1 + margin;
+    if (x <= x0 || x >= x1 || y <= y0 || y >= y1) return { x, y };
+    const dl = x - x0;
+    const dr = x1 - x;
+    const du = y - y0;
+    const dd = y1 - y;
+    const m = Math.min(dl, dr, du, dd);
+    if (m === dl) return { x: x0, y };
+    if (m === dr) return { x: x1, y };
+    if (m === du) return { x, y: y0 };
+    return { x, y: y1 };
+  };
+  /** Does the straight walk from A to B cut through the bus? */
+  const busBlocks = (ax: number, ay: number, bx: number, by: number) => {
+    for (let k = 1; k < 16; k++) {
+      const t = k / 16;
+      const px = ax + (bx - ax) * t;
+      const py = ay + (by - ay) * t;
+      if (px > BUS_RECT.x0 + 1 && px < BUS_RECT.x1 - 1 && py > BUS_RECT.y0 + 1 && py < BUS_RECT.y1 - 1) {
+        return true;
+      }
+    }
+    return false;
+  };
+  /**
+   * SIEGE: next point to walk to in order to reach (tx, ty) without crossing the bus —
+   * a corner of its footprint to go round, or null when the way is clear (always null on the highway).
+   */
+  const routeAroundBus = (x: number, y: number, tx: number, ty: number): { x: number; y: number } | null => {
+    if (!siege || !busBlocks(x, y, tx, ty)) return null;
+    const m = 10;
+    const corners = [
+      { x: BUS_RECT.x0 - m, y: BUS_RECT.y0 - m },
+      { x: BUS_RECT.x1 + m, y: BUS_RECT.y0 - m },
+      { x: BUS_RECT.x0 - m, y: BUS_RECT.y1 + m },
+      { x: BUS_RECT.x1 + m, y: BUS_RECT.y1 + m },
+    ];
+    let best: { x: number; y: number } | null = null;
+    let bestCost = Infinity;
+    for (const c of corners) {
+      if (busBlocks(x, y, c.x, c.y)) continue;
+      const cost =
+        Math.hypot(c.x - x, c.y - y) +
+        Math.hypot(tx - c.x, ty - c.y) +
+        (busBlocks(c.x, c.y, tx, ty) ? 1000 : 0);
+      if (cost < bestCost) {
+        bestCost = cost;
+        best = c;
+      }
+    }
+    return best;
+  };
+  /** Which way is "away from the bus" for knockbacks: always east on the highway. */
+  const awayFromBus = (x: number) => (!siege || x >= BUS_CX ? 1 : -1);
+  /** Where the hero steps out of the bus. */
+  const HERO_SPAWN = siege
+    ? { x: BUS_RECT.x1 + 24, y: BUS_CY + 12 }
+    : { x: BUS_X + 130, y: (ROAD_Y_MIN + ROAD_Y_MAX) / 2 };
+  /** Where a placeable unit (turret, Tesla coil, wall, tower) may be installed. */
+  const clampPlacement = (x: number, y: number) => {
+    if (!siege) {
+      return {
+        x: clampN(x, BUS_X + 150, WORLD_WIDTH - 146),
+        y: clampN(y, ROAD_Y_MIN + 10, ROAD_Y_MAX - 6),
+      };
+    }
+    return outOfBus(clampN(x, 40, WORLD_WIDTH - 40), clampN(y, ROAD_Y_MIN + 14, ROAD_Y_MAX - 6), 16);
+  };
+  /** SIEGE: a sandbag wall is laid sideways when it shields the bus from the north or the south. */
+  const wallIsFlat = (x: number, y: number) =>
+    siege &&
+    Math.max(0, Math.abs(y - BUS_CY) - 41) > Math.max(0, Math.abs(x - BUS_CX) - 83);
+  /** SIEGE: the defenders hold a ring around the bus, split in sectors. */
+  const GUARD_SECTORS = 8;
+  const guardSector = (x: number, y: number) => {
+    const a = Math.atan2((y - BUS_CY) / 0.62, x - BUS_CX);
+    return (
+      ((Math.round((a / (Math.PI * 2)) * GUARD_SECTORS) % GUARD_SECTORS) + GUARD_SECTORS) % GUARD_SECTORS
+    );
+  };
+  /**
+   * SIEGE: a post on the ring around the bus, on the side with most infected and fewest
+   * defenders. With `self` it only answers when another side clearly needs that unit more.
+   */
+  const pickGuardPost = (ranged: boolean, self?: InternalUnit): { x: number; y: number } | null => {
+    const score = new Array<number>(GUARD_SECTORS).fill(0);
+    for (const o of simRef.current.units) {
+      if (o === self || o.hp <= 0 || o.state === 'corpse' || o.state === 'dying') continue;
+      if (o.team === 'zombie') {
+        const near = Math.hypot(o.x - BUS_CX, (o.y - BUS_CY) / 0.62) < 520;
+        score[guardSector(o.x, o.y)] += near ? 1.6 : 0.7;
+      } else if (o.guardX !== undefined && o.guardY !== undefined) {
+        score[guardSector(o.guardX, o.guardY)] -= 2;
+      }
+    }
+    let best = 0;
+    let bestScore = -Infinity;
+    for (let s = 0; s < GUARD_SECTORS; s++) {
+      const sc = score[s] + Math.random() * 0.8;
+      if (sc > bestScore) {
+        bestScore = sc;
+        best = s;
+      }
+    }
+    if (self && self.guardX !== undefined && self.guardY !== undefined) {
+      const own = guardSector(self.guardX, self.guardY);
+      if (best === own || bestScore < score[own] + 2.5) return null;
+    }
+    const ang = (best / GUARD_SECTORS) * Math.PI * 2 + (Math.random() - 0.5) * 0.55;
+    const r = ranged ? 150 + Math.random() * 40 : 205 + Math.random() * 40;
+    return outOfBus(
+      clampN(BUS_CX + Math.cos(ang) * r, 30, WORLD_WIDTH - 30),
+      clampN(BUS_CY + Math.sin(ang) * r * 0.62, ROAD_Y_MIN + 10, ROAD_Y_MAX - 8),
+      22
+    );
+  };
+  /**
+   * SIEGE: where the rim of the map is in a given direction from the bus (a random one by
+   * default) — the infected can walk in from anywhere around it.
+   */
+  type EdgePoint = { side: number; x: number; y: number };
+  const siegeEdgePoint = (ang = Math.random() * Math.PI * 2): EdgePoint => {
+    const dx = Math.cos(ang);
+    const dy = Math.sin(ang);
+    const tx =
+      dx > 1e-6 ? (WORLD_WIDTH + 14 - BUS_CX) / dx : dx < -1e-6 ? (-14 - BUS_CX) / dx : Infinity;
+    const ty =
+      dy > 1e-6
+        ? (ROAD_Y_MAX + 60 - BUS_CY) / dy
+        : dy < -1e-6
+        ? (ROAD_Y_MIN - 4 - BUS_CY) / dy
+        : Infinity;
+    const t = Math.min(tx, ty);
+    // side: 0 left, 1 right, 2 top, 3 bottom
+    return { side: tx <= ty ? (dx > 0 ? 1 : 0) : dy > 0 ? 3 : 2, x: BUS_CX + dx * t, y: BUS_CY + dy * t };
+  };
+  /** Another spawn point close to `o` on the same side (the rest of a pack). */
+  const nearEdgePoint = (o: EdgePoint, k: number) => {
+    const j = (Math.random() - 0.5) * 70 + (k % 2 === 0 ? 1 : -1) * k * 16;
+    return o.side < 2
+      ? {
+          x: o.x + (o.side === 0 ? -1 : 1) * Math.random() * 20,
+          y: clampN(o.y + j, ROAD_Y_MIN + 6, ROAD_Y_MAX - 6),
+        }
+      : {
+          x: clampN(o.x + j * 1.4, 20, WORLD_WIDTH - 20),
+          y: o.y + (o.side === 2 ? -1 : 1) * Math.random() * 10,
+        };
+  };
 
   // Live Bridge Ref: decouples 60 FPS simulation from React parent re-renders!
   const liveBridgeRef = useRef({
@@ -289,7 +480,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     unitName?: string;
     roleTitle?: string;
   } | null>(null);
-  const maxBusHp = 200 + progress.busHpBonus;
+  const maxBusHp = Math.round((200 + progress.busHpBonus) * (siege ? SIEGE.busHpMultiplier : 1));
   const [busHp, setBusHp] = useState<number>(maxBusHp);
   // ULTRA mode reinforces the enemy barricade too
   const missionBarricadeHp = Math.round(mission.barricadeHp * (ultra ? ULTRA.barricadeHp : 1));
@@ -316,9 +507,17 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   });
   const [fortressExit, setFortressExit] = useState<boolean>(false);
   const [hordeTriggered, setHordeTriggered] = useState<boolean>(false);
-  const [rushWarningState, setRushWarningState] = useState<{ active: boolean; yPct: number }>({
+  const [rushWarningState, setRushWarningState] = useState<{
+    active: boolean;
+    yPct: number;
+    /** SIEGE only: the pack can come from any side, so the warning also has a screen X. */
+    xPct: number | null;
+    side: number;
+  }>({
     active: false,
     yPct: 65,
+    xPct: null,
+    side: 1,
   });
   const [paused, setPaused] = useState<boolean>(false);
   const pausedRef = useRef<boolean>(false);
@@ -361,8 +560,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     busHp: maxBusHp,
     maxBusHp,
     busDamagedEver: false,
-    busX: -2,
-    busY: 66, // Parked at the top of the (deeper) road
+    busX: BUS_X,
+    busY: BUS_Y, // Highway: parked at the top of the road. SIEGE: in the middle of the arena
     doorOpenTimer: 0,
     // The enemy barricade is gone: barricadeX is just the invisible spawn line on the right
     barricadeHp: 0,
@@ -382,6 +581,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     rushPackTimer: initialSector === 1 ? 36 : initialSector === 2 ? 32 : initialSector === 3 ? 28 : 24,
     rushWarningTimer: 0,
     rushWarningY: (ROAD_Y_MIN + ROAD_Y_MAX) / 2,
+    // SIEGE: the rush pack can break in from any side
+    rushWarningX: WORLD_WIDTH,
+    rushSide: 1,
     waveCount: 0,
     emptyRoadTimer: 0,
     medkitTickTimer: 0,
@@ -398,8 +600,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     obstacles: [] as RenderObstacle[],
     pickups: [] as RenderPickup[],
     crows: [
-      { x: 310, y: 212, z: 0, vx: 0, vy: 0, vz: 0, flying: false, animOffset: 0 },
-      { x: 390, y: 238, z: 0, vx: 0, vy: 0, vz: 0, flying: false, animOffset: 1.7 },
+      { x: BUS_X + 312, y: BUS_Y + 146, z: 0, vx: 0, vy: 0, vz: 0, flying: false, animOffset: 0 },
+      { x: BUS_X + 392, y: BUS_Y + 172, z: 0, vx: 0, vy: 0, vz: 0, flying: false, animOffset: 1.7 },
     ] as RenderCrow[],
     particles: [] as RenderParticle[],
     tracers: [] as RenderTracer[],
@@ -418,7 +620,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     acidBlobs: [] as AcidBlob[],
     acidPools: [] as (RenderAcidPool & { dps: number })[],
     // Scrolling camera over the larger battlefield (horizontal + vertical)
-    camX: 0,
+    camX: siege ? clampCam(BUS_CX - VIEW_W / 2) : 0,
     camY: clampCamY((ROAD_Y_MIN + ROAD_Y_MAX) / 2 - CAM_FOCUS_Y),
     camManualTimer: 0,
     minimapPointer: null as number | null,
@@ -560,12 +762,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
   const initDecalCanvas = useCallback(() => {
     if (!decalCanvasRef.current) {
       decalCanvasRef.current = document.createElement('canvas');
-      decalCanvasRef.current.width = WORLD_WIDTH * 2;
-      decalCanvasRef.current.height = WORLD_HEIGHT * 2;
+      decalCanvasRef.current.width = Math.round(WORLD_WIDTH * DECAL_SCALE);
+      decalCanvasRef.current.height = Math.round(WORLD_HEIGHT * DECAL_SCALE);
     }
     const dctx = decalCanvasRef.current.getContext('2d');
     if (!dctx) return;
-    dctx.setTransform(2, 0, 0, 2, 0, 0);
+    dctx.setTransform(DECAL_SCALE, 0, 0, DECAL_SCALE, 0, 0);
     dctx.clearRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
   }, []);
 
@@ -646,8 +848,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           unlockedCfg
             ? `¡NV.${sim.commanderLevel}: ${unlockedCfg.name.toUpperCase()}!`
             : `¡MAESTRÍA NV.${sim.commanderLevel} (+10% GLOBAL)!`,
-          sim.camX + 360,
-          164 + sim.camY,
+          sim.camX + 360 * TAP,
+          sim.camY + 164 * TAP,
           30,
           '#fde047',
           true
@@ -799,9 +1001,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       hpScale = 1
     ) => {
       const cfg = ZOMBIE_CONFIGS[type];
-      const spawnX = customX ?? simRef.current.barricadeX - 30 - Math.random() * 45;
+      // SIEGE: with no spot given, the infected walks in from a random side of the arena
+      const edge = siege && customX === undefined ? siegeEdgePoint() : null;
+      const spawnX = customX ?? (edge ? edge.x : simRef.current.barricadeX - 30 - Math.random() * 45);
       const spawnY =
-        customY ?? ROAD_Y_MIN + 8 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 16);
+        customY ??
+        (edge ? edge.y : ROAD_Y_MIN + 8 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 16));
       const isEmerging = (cfg.emergesFromGround && customX !== undefined) || fromCorpse;
       // Gentle campaign-tier scaling (+3.2% HP per tier past Tier 1) across all 50 missions
       const tier = (mission.campaignTier || mission.id) + (ultra ? ULTRA.tierBonus : 0);
@@ -871,7 +1076,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         critTelegraphTimer: 0,
         isLucky: false,
         isPlayerControlled: false,
-        facing: -1,
+        facing: siege && spawnX < BUS_CX ? 1 : -1,
       };
       simRef.current.units.push(zUnit);
       if (cfg.isFlying) soundFX.playFlyerScreech();
@@ -897,8 +1102,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       team: 'survivor',
       subType: 'hero',
       level: sim.commanderLevel,
-      x: sim.busX + 130,
-      y: (ROAD_Y_MIN + ROAD_Y_MAX) / 2,
+      x: HERO_SPAWN.x,
+      y: HERO_SPAWN.y,
       z: 6,
       vx: 0,
       vy: 0,
@@ -1016,8 +1221,25 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         ? sim.busX + 185 + Math.random() * 80
         : sim.busX + 106;
       let spawnX = customX ?? defaultSpawnX;
+      // SIEGE: every walking defender gets a post on the ring around the bus and steps out of
+      // the bus on that side
+      let post: { x: number; y: number } | null = null;
+      if (siege && customX === undefined) {
+        if (cfg.isStationary) {
+          const a = Math.random() * Math.PI * 2;
+          const spot = clampPlacement(BUS_CX + Math.cos(a) * 190, BUS_CY + Math.sin(a) * 120);
+          spawnX = spot.x;
+          spawnY = spot.y;
+        } else {
+          post = pickGuardPost(cfg.isRanged) ?? { x: BUS_RECT.x1 + 60, y: BUS_CY };
+          const door = busGap(post.x, post.y);
+          const out = Math.hypot(post.x - door.px, post.y - door.py) || 1;
+          spawnX = door.px + ((post.x - door.px) / out) * 8;
+          spawnY = door.py + ((post.y - door.py) / out) * 8;
+        }
+      }
       if (cfg.placeable && customX !== undefined) {
-        const spot = clampPlacement(sim.busX, sim.barricadeX, customX, spawnY);
+        const spot = clampPlacement(customX, spawnY);
         spawnX = spot.x;
         spawnY = spot.y;
       }
@@ -1026,13 +1248,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         // Sandbag wall: four piles stacked in depth that ground zombies must break through
         const segHp = Math.max(30, Math.round(hp / BARRICADE_SEGMENT_OFFSETS.length));
         const groupId = `wall_${Date.now()}_${Math.random()}`;
+        const flat = wallIsFlat(spawnX, spawnY);
         for (const off of BARRICADE_SEGMENT_OFFSETS) {
           sim.obstacles.push({
             id: `sand_${Date.now()}_${Math.random()}`,
             groupId,
             type: 'sandbags',
-            x: spawnX,
-            y: Math.max(ROAD_Y_MIN + 6, Math.min(ROAD_Y_MAX - 4, spawnY + off)),
+            x: flat ? clampN(spawnX + off * BARRICADE_FLAT_SPACING, 12, WORLD_WIDTH - 12) : spawnX,
+            y: flat ? spawnY : Math.max(ROAD_Y_MIN + 6, Math.min(ROAD_Y_MAX - 4, spawnY + off)),
             z: 0,
             hp: segHp,
             maxHp: segHp,
@@ -1065,9 +1288,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         x: spawnX,
         y: spawnY,
         z: freeInitial ? 0 : 6,
-        vx: freeInitial || cfg.isStationary ? 0 : 22,
+        vx: freeInitial || cfg.isStationary || siege ? 0 : 22,
         vy: 0,
         vz: freeInitial ? 0 : 18,
+        guardX: post?.x,
+        guardY: post?.y,
         hp,
         ghostHp: hp,
         maxHp: hp,
@@ -1107,7 +1332,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         whiteFlashTimer: 0,
         isLucky,
         isPlayerControlled: false,
-        facing: 1,
+        facing: post && post.x < spawnX ? -1 : 1,
         firstHitReady: !!cfg.firstHitCritMultiplier,
         quoteText: quote,
         quoteTimer: quote ? 2.1 : 0,
@@ -1247,7 +1472,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       const cfg = TACTICAL_ITEM_CONFIGS[type];
       if (sim.rage < cfg.rageCost || sim.itemCooldowns[type] > 0) return;
 
-      const clampedX = Math.max(142, Math.min(sim.barricadeX - 22, targetX));
+      const clampedX = siege
+        ? clampN(targetX, 20, WORLD_WIDTH - 20)
+        : Math.max(142, Math.min(sim.barricadeX - 22, targetX));
       const clampedY = Math.max(ROAD_Y_MIN + 4, Math.min(ROAD_Y_MAX - 4, targetY));
 
       sim.rage -= cfg.rageCost;
@@ -1290,7 +1517,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           } else if (u.team === 'zombie' && !u.isFlying) {
             u.hp -= cfg.impactDamage;
             u.whiteFlashTimer = 0.12;
-            u.vx += 24;
+            u.vx += 24 * awayFromBus(u.x);
             spawnBloodParticles(u.x, u.y, 8, 14);
             addFloatingText(`${cfg.impactDamage}`, u.x, u.y, 18, '#fde047', true, 'WACK!');
           }
@@ -1330,7 +1557,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       }
     });
     soundFX.playCouragePickup();
-    addFloatingText('¡FURIA ACTIVADA!', sim.camX + 280, 195 + sim.camY, 25, '#fde047', true);
+    addFloatingText('¡FURIA ACTIVADA!', sim.camX + 280 * TAP, sim.camY + 195 * TAP, 25, '#fde047', true);
   }, [addFloatingText, furyBuffCount]);
 
   const cycleSelectedSurvivor = useCallback(() => {
@@ -1366,7 +1593,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       sim.draggingItem = null;
       setDraggingItem(null);
       if (!sim.mouseLogical.insideRoad) {
-        sim.mouseLogical = { x: sim.camX + 330, y: sim.camY + CAM_FOCUS_Y, insideRoad: true };
+        sim.mouseLogical = { x: sim.camX + 330 * TAP, y: sim.camY + CAM_FOCUS_Y, insideRoad: true };
       }
       soundFX.playUnitSpawn();
       sim.placingUnit = type;
@@ -1400,7 +1627,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     if (sim.rage < cfg.rageCost || sim.itemCooldowns[itemType] > 0) return;
 
     if (!sim.mouseLogical.insideRoad) {
-      sim.mouseLogical = { x: sim.camX + 350, y: sim.camY + CAM_FOCUS_Y, insideRoad: true };
+      sim.mouseLogical = { x: sim.camX + 350 * TAP, y: sim.camY + CAM_FOCUS_Y, insideRoad: true };
     }
     soundFX.playUnitSpawn();
     setDraggingItem(itemType);
@@ -1486,11 +1713,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
     const sx = (clientX - rect.left - offsetX) / scale;
     const sy = (clientY - rect.top - offsetY) / scale;
-    // Screen → world: the camera scrolls across the larger battlefield (both axes)
-    const x = sx + simRef.current.camX;
-    const y = sy + simRef.current.camY;
+    // Screen → world: the camera scrolls across the larger battlefield (both axes) at its zoom
+    const x = sx / ZOOM + simRef.current.camX;
+    const y = sy / ZOOM + simRef.current.camY;
     const insideRoad =
-      x >= 120 && x <= WORLD_WIDTH - 100 && y >= ROAD_Y_MIN - 15 && y <= ROAD_Y_MAX + 15;
+      x >= (siege ? 0 : 120) &&
+      x <= WORLD_WIDTH - (siege ? 0 : 100) &&
+      y >= ROAD_Y_MIN - 15 &&
+      y <= ROAD_Y_MAX + 15;
     return { x, y, insideRoad, sx, sy, scale };
   };
 
@@ -1528,7 +1758,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     const sim = simRef.current;
     for (let i = sim.pickups.length - 1; i >= 0; i--) {
       const p = sim.pickups[i];
-      if (Math.hypot(p.x - lx, p.y - ly) <= 30) {
+      if (Math.hypot(p.x - lx, p.y - ly) <= 30 * TAP) {
         soundFX.playCouragePickup();
         if (p.kind === 'courage') {
           sim.courage = Math.min(100, sim.courage + p.amount);
@@ -1562,7 +1792,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       if (u.team !== 'survivor' || !u.isStationary || u.hp <= 0) continue;
       if (u.state === 'dying' || u.state === 'corpse') continue;
       const tall = SURVIVOR_CONFIGS[u.subType as SurvivorType]?.isTower ? 50 : 32;
-      if (Math.abs(wx - u.x) > 16 || wy < u.y - tall || wy > u.y + 8) continue;
+      if (Math.abs(wx - u.x) > 16 * TAP || wy < u.y - tall || wy > u.y + 8 * TAP) continue;
       const d = Math.hypot(wx - u.x, wy - (u.y - tall / 2));
       if (d < bestD) {
         bestD = d;
@@ -1571,7 +1801,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     }
     for (const o of sim.obstacles) {
       if (o.type !== 'sandbags' || o.hp <= 0) continue;
-      if (Math.abs(wx - o.x) > 18 || wy < o.y - 20 || wy > o.y + 7) continue;
+      if (Math.abs(wx - o.x) > 18 * TAP || wy < o.y - 20 || wy > o.y + 7 * TAP) continue;
       const d = Math.hypot(wx - o.x, wy - (o.y - 7));
       if (d < bestD) {
         bestD = d;
@@ -1586,7 +1816,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     const sim = simRef.current;
     const t = sim.sellTarget;
     if (!t) return null;
-    const minY = sim.camY + 82; // keep the tag below the top HUD
+    const minY = sim.camY + 82 * TAP; // keep the tag below the top HUD
     if (t.kind === 'unit') {
       const u = sim.units.find((x) => x.id === t.id);
       if (!u || u.hp <= 0 || u.state === 'dying' || u.state === 'corpse') return null;
@@ -1595,7 +1825,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       const tall = cfg.isTower ? 50 : 32;
       return {
         x: u.x,
-        y: Math.max(minY, u.y - tall - 14),
+        y: Math.max(minY, u.y - tall - 14 * TAP),
         refund: Math.round(cfg.cost / 2),
         ax: u.x,
         ay: u.y,
@@ -1607,6 +1837,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     const anchor = segs.find((o) => o.id === t.anchorId) ?? segs[0];
     const top = Math.min(...segs.map((o) => o.y));
     const bottom = Math.max(...segs.map((o) => o.y));
+    const left = Math.min(...segs.map((o) => o.x));
+    const right = Math.max(...segs.map((o) => o.x));
     // A damaged wall refunds only the piles that are still standing
     const refund = Math.max(
       1,
@@ -1614,11 +1846,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     );
     return {
       x: anchor.x,
-      y: Math.max(minY, anchor.y - 30),
+      y: Math.max(minY, anchor.y - 16 - 14 * TAP),
       refund,
       ax: anchor.x,
       ay: anchor.y,
-      box: { x: anchor.x - 20, y: top - 20, w: 40, h: bottom - top + 28 } as null | {
+      box: { x: left - 20, y: top - 20, w: right - left + 40, h: bottom - top + 28 } as null | {
         x: number;
         y: number;
         w: number;
@@ -1679,8 +1911,10 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     const sim = simRef.current;
     const frac = (sx - MINIMAP.x) / MINIMAP.w;
     const fracY = Math.max(0, Math.min(1, (sy - MINIMAP.y) / MINIMAP.h));
-    sim.camX = clampCam(frac * WORLD_WIDTH - LOGICAL_WIDTH / 2);
-    sim.camY = clampCamY(ROAD_Y_MIN + fracY * (ROAD_Y_MAX - ROAD_Y_MIN) - CAM_FOCUS_Y);
+    sim.camX = clampCam(frac * WORLD_WIDTH - VIEW_W / 2);
+    sim.camY = siege
+      ? clampCamY(fracY * WORLD_HEIGHT - VIEW_H / 2)
+      : clampCamY(ROAD_Y_MIN + fracY * (ROAD_Y_MAX - ROAD_Y_MIN) - CAM_FOCUS_Y);
     sim.camManualTimer = 4;
   };
 
@@ -1743,8 +1977,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
   const handleCanvasWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     const sim = simRef.current;
-    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-    sim.camX = clampCam(sim.camX + delta * 0.6);
+    if (siege) {
+      // The arena scrolls both ways
+      sim.camX = clampCam(sim.camX + e.deltaX * 0.6);
+      sim.camY = clampCamY(sim.camY + e.deltaY * 0.6);
+    } else {
+      const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      sim.camX = clampCam(sim.camX + delta * 0.6);
+    }
     sim.camManualTimer = 3.5;
   };
 
@@ -1800,7 +2040,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     const clickedRedBarrelIdx = sim.obstacles.findIndex(
       (o) =>
         o.type === 'red_barrel' &&
-        Math.hypot(o.x - coords.x, o.y - 10 - coords.y) <= 22
+        Math.hypot(o.x - coords.x, o.y - 10 - coords.y) <= 22 * TAP
     );
     if (clickedRedBarrelIdx !== -1) {
       const rb = sim.obstacles[clickedRedBarrelIdx];
@@ -1814,8 +2054,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       const tag = getSellTag();
       if (
         tag &&
-        Math.abs(coords.x - tag.x) <= SELL_TAG.hitW &&
-        Math.abs(coords.y - tag.y) <= SELL_TAG.hitH
+        Math.abs(coords.x - tag.x) <= SELL_TAG.hitW * TAP &&
+        Math.abs(coords.y - tag.y) <= SELL_TAG.hitH * TAP
       ) {
         sellSelectedStructure();
         return;
@@ -1859,7 +2099,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       (u) =>
         u.team === 'survivor' &&
         u.state !== 'corpse' &&
-        Math.hypot(u.x - coords.x, u.y - 14 - coords.y) <= 24
+        Math.hypot(u.x - coords.x, u.y - 14 - coords.y) <= 24 * TAP
     );
     if (clickedSurvivor) {
       sim.units.forEach((u) => (u.isPlayerControlled = u.id === clickedSurvivor.id));
@@ -1875,41 +2115,61 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     // Fair Campaign-Tier Scaled Opening Guard across Main, North & South routes!
     const tier = (mission.campaignTier || mission.id) + (ultra ? ULTRA.tierBonus : 0);
     simRef.current.units = [];
+    // Opening guard: on the highway it waits down the road; in SIEGE it surrounds the bus
+    let guardN = 0;
+    const guard = (type: ZombieType, x: number, y: number) => {
+      if (!siege) {
+        spawnZombie(type, x + GUARD_SHIFT, guardY(y));
+        return;
+      }
+      // Far out to the east and west (the long way in), so the opening is as fair as on the highway
+      const a =
+        (guardN % 2 === 0 ? 0 : Math.PI) +
+        ((((guardN * 37 + mission.id * 11) % 60) - 30) * Math.PI) / 165;
+      const rim = siegeEdgePoint(a);
+      const k = 0.72 + ((guardN * 5) % 4) * 0.035;
+      guardN += 1;
+      spawnZombie(
+        type,
+        clampN(BUS_CX + (rim.x - BUS_CX) * k, 20, WORLD_WIDTH - 20),
+        clampN(BUS_CY + (rim.y - BUS_CY) * k, ROAD_Y_MIN + 8, ROAD_Y_MAX - 8)
+      );
+    };
     if (tier === 1) {
       // Staggered 105px apart so player's first Redneck fights 1v1 cleanly!
-      spawnZombie('walker', 485 + GUARD_SHIFT, guardY(212));
-      spawnZombie('walker', 590 + GUARD_SHIFT, guardY(248));
+      guard('walker', 485, 212);
+      guard('walker', 590, 248);
     } else if (tier === 2) {
-      spawnZombie('walker', 490 + GUARD_SHIFT, guardY(210));
-      spawnZombie('walker', 555 + GUARD_SHIFT, guardY(250));
-      spawnZombie('runner', 595 + GUARD_SHIFT, guardY(228));
+      guard('walker', 490, 210);
+      guard('walker', 555, 250);
+      guard('runner', 595, 228);
     } else if (tier === 3) {
-      spawnZombie('walker', 490 + GUARD_SHIFT, guardY(208));
-      spawnZombie('walker', 545 + GUARD_SHIFT, guardY(250));
-      spawnZombie('runner', 585 + GUARD_SHIFT, guardY(224));
-      spawnZombie(mission.skeletonAmbush ? 'skeleton' : 'walker', 520 + GUARD_SHIFT, guardY(236));
+      guard('walker', 490, 208);
+      guard('walker', 545, 250);
+      guard('runner', 585, 224);
+      guard(mission.skeletonAmbush ? 'skeleton' : 'walker', 520, 236);
     } else if (tier === 4) {
-      spawnZombie('walker', 495 + GUARD_SHIFT, guardY(212));
-      spawnZombie('walker', 545 + GUARD_SHIFT, guardY(252));
-      spawnZombie('runner', 575 + GUARD_SHIFT, guardY(222));
-      spawnZombie(mission.zombiePool.includes('armored') ? 'armored' : 'runner', 598 + GUARD_SHIFT, guardY(240));
+      guard('walker', 495, 212);
+      guard('walker', 545, 252);
+      guard('runner', 575, 222);
+      guard(mission.zombiePool.includes('armored') ? 'armored' : 'runner', 598, 240);
     } else if (tier <= 6) {
-      spawnZombie('walker', 495 + GUARD_SHIFT, guardY(208));
-      spawnZombie('runner', 540 + GUARD_SHIFT, guardY(248));
-      spawnZombie('crit_zombie', 575 + GUARD_SHIFT, guardY(220));
-      spawnZombie('armored', 598 + GUARD_SHIFT, guardY(242));
+      guard('walker', 495, 208);
+      guard('runner', 540, 248);
+      guard('crit_zombie', 575, 220);
+      guard('armored', 598, 242);
     } else if (tier <= 9) {
-      spawnZombie('walker', 490 + GUARD_SHIFT, guardY(208));
-      spawnZombie('runner', 532 + GUARD_SHIFT, guardY(248));
-      spawnZombie('crit_zombie', 562 + GUARD_SHIFT, guardY(218));
-      spawnZombie('armored', 585 + GUARD_SHIFT, guardY(252));
-      spawnZombie('bloated', 602 + GUARD_SHIFT, guardY(232));
+      guard('walker', 490, 208);
+      guard('runner', 532, 248);
+      guard('crit_zombie', 562, 218);
+      guard('armored', 585, 252);
+      guard('bloated', 602, 232);
     } else {
-      spawnZombie('runner', 495 + GUARD_SHIFT, guardY(210));
-      spawnZombie('runner', 532 + GUARD_SHIFT, guardY(250));
-      spawnZombie('crit_zombie', 564 + GUARD_SHIFT, guardY(220));
-      spawnZombie('armored', 586 + GUARD_SHIFT, guardY(252));
-      spawnZombie('bloated', 602 + GUARD_SHIFT, guardY(232));
+      guard('runner', 495, 210);
+      guard('runner', 532, 250);
+      guard('crit_zombie', 564, 220);
+      guard('armored', 586, 252);
+      guard('bloated', 602, 232);
     }
 
     // The opening guard is part of the mission's enemy total
@@ -2047,7 +2307,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       const vy = sim.heroJoy.active
         ? sim.heroJoy.dy
         : (keys.has('s') || keys.has('arrowdown') ? 1 : 0) - (keys.has('w') || keys.has('arrowup') ? 1 : 0);
-      return { target: null, facing: 1 as const, pitch: vy * 0.55, tVisY: 0 };
+      // (SIEGE has no "forward": the hero keeps looking where it was looking)
+      return { target: null, facing: (siege ? u.facing : 1) as 1 | -1, pitch: vy * 0.55, tVisY: 0 };
     };
 
     const heroHit = (z: InternalUnit, dmg: number, knock: number, dir: number, sub = 'WACK!') => {
@@ -2287,7 +2548,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           const heroU = sim.units.find((h) => h.isHero && h.hp > 0 && h.state !== 'dying');
           if (heroU) {
             sim.camManualTimer = 0;
-            const target = clampCam(heroU.x - LOGICAL_WIDTH / 2);
+            const target = clampCam(heroU.x - VIEW_W / 2);
             sim.camX += (target - sim.camX) * Math.min(1, dt * 7);
             const targetY = clampCamY(heroU.y - CAM_FOCUS_Y);
             sim.camY += (targetY - sim.camY) * Math.min(1, dt * 6);
@@ -2343,7 +2604,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             sim.heroRespawnTimer -= dt;
             if (sim.heroRespawnTimer <= 0) {
               spawnHero();
-              addFloatingText('¡DE VUELTA!', sim.busX + 130, (ROAD_Y_MIN + ROAD_Y_MAX) / 2, 26, '#facc15', true);
+              addFloatingText('¡DE VUELTA!', HERO_SPAWN.x, HERO_SPAWN.y, 26, '#facc15', true);
             }
           }
 
@@ -2358,8 +2619,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               awardCommanderXp(12);
               addFloatingText(
                 `🏰 ¡HORDA ${sim.fortressHorde} RESISTIDA!`,
-                sim.camX + 360,
-                176 + sim.camY,
+                sim.camX + 360 * TAP,
+                sim.camY + 176 * TAP,
                 30,
                 '#7dd3fc',
                 true
@@ -2378,8 +2639,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               sim.hordeBurstTimer = 1.6;
               addFloatingText(
                 `☠️ ¡HORDA ${sim.fortressHorde}! ☠️`,
-                sim.camX + 360,
-                160 + sim.camY,
+                sim.camX + 360 * TAP,
+                sim.camY + 160 * TAP,
                 30,
                 '#ef4444',
                 true
@@ -2403,10 +2664,17 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             soundFX.playSiren();
             sim.screenShake = 10;
             sim.hordeBurstTimer = 1.6;
-            addFloatingText('☠️ ¡HORDA FINAL! ☠️', sim.camX + 360, 160 + sim.camY, 30, '#ef4444', true);
+            addFloatingText(
+              '☠️ ¡HORDA FINAL! ☠️',
+              sim.camX + 360 * TAP,
+              sim.camY + 160 * TAP,
+              30,
+              '#ef4444',
+              true
+            );
           }
 
-          // FINAL HORDE: bursts of zombies from the right until the whole horde is out
+          // FINAL HORDE: bursts of zombies (from the right; from all around in SIEGE) until it is all out
           if (sim.hordeTriggered && sim.hordeToSpawn > 0) {
             sim.hordeBurstTimer -= dt;
             if (sim.hordeBurstTimer <= 0 && aliveNow < maxActiveZombies + 14) {
@@ -2420,10 +2688,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               const burst = Math.min(sim.hordeToSpawn, 3 + Math.floor(Math.random() * 2) + (ultra ? 1 : 0));
               for (let i = 0; i < burst; i++) {
                 sim.hordeToSpawn -= 1;
-                spawnZombie(
-                  hordePool[Math.floor(Math.random() * hordePool.length)],
-                  sim.barricadeX - 10 - i * 16 - Math.random() * 20
-                );
+                const hType = hordePool[Math.floor(Math.random() * hordePool.length)];
+                if (siege) spawnZombie(hType);
+                else spawnZombie(hType, sim.barricadeX - 10 - i * 16 - Math.random() * 20);
               }
             }
           }
@@ -2509,18 +2776,23 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             if (ultra || vTier >= 3) extraPool.push('zombie_dog');
             if (ultra || vTier >= 5) extraPool.push('acid_spitter');
             if (ultra || vTier >= 7) extraPool.push('flyer');
+            // SIEGE: the wave splits in small groups, each walking in from its own direction
+            let waveOrigin = siege ? siegeEdgePoint() : null;
             for (let p = 0; p < finalCount; p++) {
+              if (siege && p > 0 && Math.random() < 0.55) waveOrigin = siegeEdgePoint();
               const useExtra =
                 extraPool.length > 0 && Math.random() < (ultra ? ULTRA.extraEnemyChance : 0.3);
               const pick = useExtra
                 ? extraPool[Math.floor(Math.random() * extraPool.length)]
                 : pool[Math.floor(Math.random() * pool.length)];
               const px = sim.barricadeX - 20 - p * 20 - Math.random() * 18;
-              spawnB(pick, px);
+              const at = waveOrigin ? nearEdgePoint(waveOrigin, p) : null;
+              spawnB(pick, at ? at.x : px, at ? at.y : undefined);
               const pack = ZOMBIE_CONFIGS[pick].packSize ?? 0;
               if (pack > 0 && aliveZombies + finalCount < maxActiveZombies + 4) {
                 for (let k = 1; k <= pack; k++) {
-                  spawnB(pick, px - k * 14, undefined);
+                  const pat = waveOrigin ? nearEdgePoint(waveOrigin, p + k) : null;
+                  spawnB(pick, pat ? pat.x : px - k * 14, pat ? pat.y : undefined);
                 }
                 soundFX.playZombieDogPack();
               }
@@ -2531,14 +2803,29 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           if (sim.rushWarningTimer > 0) {
             sim.rushWarningTimer -= dt;
             if (sim.rushWarningTimer <= 0) {
-              addFloatingText('¡CORREDORES!', sim.barricadeX - 70, sim.rushWarningY - 12, 20, '#ef4444', true);
-              spawnB('runner', sim.barricadeX - 14, sim.rushWarningY - 6);
+              // Highway: the pack bursts in at the far end of its lane. SIEGE: from the marked side
+              const ro = siege ? { side: sim.rushSide, x: sim.rushWarningX, y: sim.rushWarningY } : null;
+              const rp = (k: number, hx: number, hy: number) =>
+                ro ? nearEdgePoint(ro, k) : { x: sim.barricadeX - hx, y: sim.rushWarningY + hy };
+              addFloatingText(
+                '¡CORREDORES!',
+                ro ? clampN(ro.x, 70, WORLD_WIDTH - 70) : sim.barricadeX - 70,
+                ro ? clampN(ro.y, ROAD_Y_MIN + 40, ROAD_Y_MAX) : sim.rushWarningY - 12,
+                20,
+                '#ef4444',
+                true
+              );
+              const r0 = rp(0, 14, -6);
+              spawnB('runner', r0.x, r0.y);
               if (sector === 1) {
-                spawnB('runner', sim.barricadeX - 34, sim.rushWarningY + 8);
+                const r1 = rp(1, 34, 8);
+                spawnB('runner', r1.x, r1.y);
               } else {
-                spawnB('crit_zombie', sim.barricadeX - 32, sim.rushWarningY + 8);
+                const r1 = rp(1, 32, 8);
+                spawnB('crit_zombie', r1.x, r1.y);
                 if (sector >= 3 && aliveZombies < maxActiveZombies) {
-                  spawnB('runner', sim.barricadeX - 48, sim.rushWarningY);
+                  const r2 = rp(2, 48, 0);
+                  spawnB('runner', r2.x, r2.y);
                 }
               }
             }
@@ -2546,7 +2833,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             sim.rushPackTimer -= dt;
             if (sim.rushPackTimer <= 0 && aliveZombies < maxActiveZombies) {
               sim.rushPackTimer = (sector === 1 ? 30 : sector === 2 ? 26 : 23) + Math.random() * 5;
-              sim.rushWarningY = ROAD_Y_MIN + 18 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 36);
+              if (siege) {
+                const o = siegeEdgePoint();
+                sim.rushSide = o.side;
+                sim.rushWarningX = o.x;
+                sim.rushWarningY = o.y;
+              } else {
+                sim.rushWarningY = ROAD_Y_MIN + 18 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 36);
+              }
               sim.rushWarningTimer = 2.8;
             }
           }
@@ -2555,8 +2849,15 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           sim.skeletonTimer -= dt;
           if (sim.skeletonTimer <= 0 && aliveZombies < maxActiveZombies) {
             sim.skeletonTimer = 13 + Math.random() * 5;
-            const ambushX = 250 + Math.random() * (sim.barricadeX - 400);
-            const ambushY = ROAD_Y_MIN + 14 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 28);
+            // SIEGE: they claw out of the ground anywhere around the bus
+            const ambA = Math.random() * Math.PI * 2;
+            const ambR = 230 + Math.random() * 250;
+            const ambushX = siege
+              ? clampN(BUS_CX + Math.cos(ambA) * ambR, 40, WORLD_WIDTH - 70)
+              : 250 + Math.random() * (sim.barricadeX - 400);
+            const ambushY = siege
+              ? clampN(BUS_CY + Math.sin(ambA) * ambR * 0.62, ROAD_Y_MIN + 14, ROAD_Y_MAX - 14)
+              : ROAD_Y_MIN + 14 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 28);
             spawnB('skeleton', ambushX, ambushY);
             if (sector >= 3 && Math.random() < 0.5) {
               spawnB('skeleton', ambushX + 28, ambushY);
@@ -2583,7 +2884,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 );
                 target.hp -= dmg;
                 target.whiteFlashTimer = 0.09;
-                target.vx += 15;
+                target.vx += 15 * awayFromBus(target.x);
                 sim.billFiringVisual = 0.1;
                 soundFX.playRifle();
                 spawnWeaponTracerAndShell(
@@ -2592,7 +2893,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   76,
                   target.x,
                   target.y,
-                  1,
+                  target.x >= sim.busX + 104 ? 1 : -1,
                   'rifle'
                 );
                 spawnBloodParticles(target.x, target.y, 12, 6);
@@ -2602,16 +2903,19 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           } else {
             sim.billShotTimer -= dt;
             if (sim.billShotTimer <= 0) {
+              // Highway: whoever is closest to the bus down the road. SIEGE: closest on any side
+              const billReach = (zx: number, zy: number) =>
+                siege ? Math.hypot(zx - BUS_CX, (zy - BUS_CY) * DEPTH_W) : zx;
               const closeZombie = sim.units
                 .filter(
                   (u) =>
                     u.team === 'zombie' &&
                     u.state !== 'corpse' &&
                     u.state !== 'dying' &&
-                    u.x < 265 &&
+                    billReach(u.x, u.y) < (siege ? 300 : 265) &&
                     u.hp > 0
                 )
-                .sort((a, b) => a.x - b.x)[0];
+                .sort((a, b) => billReach(a.x, a.y) - billReach(b.x, b.y))[0];
               if (closeZombie) {
                 sim.billShotTimer = 2.4;
                 sim.billFiringVisual = 0.14;
@@ -2622,14 +2926,14 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 );
                 closeZombie.hp -= dmg;
                 closeZombie.whiteFlashTimer = 0.1;
-                closeZombie.vx += 16;
+                closeZombie.vx += 16 * awayFromBus(closeZombie.x);
                 spawnWeaponTracerAndShell(
                   sim.busX + 104,
                   sim.busY + 62,
                   76,
                   closeZombie.x,
                   closeZombie.y,
-                  1,
+                  closeZombie.x >= sim.busX + 104 ? 1 : -1,
                   'rifle'
                 );
                 spawnBloodParticles(closeZombie.x, closeZombie.y, 12, 8);
@@ -2945,8 +3249,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
           for (let i = sim.units.length - 1; i >= 0; i--) {
             const u = sim.units[i];
-            if (!Number.isFinite(u.x)) u.x = sim.busX + 120;
-            if (!Number.isFinite(u.y)) u.y = (ROAD_Y_MIN + ROAD_Y_MAX) * 0.5;
+            if (!Number.isFinite(u.x)) u.x = HERO_SPAWN.x;
+            if (!Number.isFinite(u.y)) u.y = HERO_SPAWN.y;
             if (!Number.isFinite(u.z)) u.z = 0;
             if (!Number.isFinite(u.vx)) u.vx = 0;
             if (!Number.isFinite(u.vy)) u.vy = 0;
@@ -3014,8 +3318,20 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               u.vy *= Math.pow(0.08, dt);
             }
 
-            u.x = Math.max(sim.busX + 102, Math.min(sim.barricadeX - 10, u.x));
-            u.y = Math.max(ROAD_Y_MIN, Math.min(ROAD_Y_MAX, u.y));
+            if (siege) {
+              // Arena bounds (the infected walk in from just outside it) and nobody crosses the bus
+              const zb = u.team === 'zombie';
+              u.x = clampN(u.x, zb ? -30 : 14, WORLD_WIDTH + (zb ? 30 : -14));
+              u.y = clampN(u.y, ROAD_Y_MIN + (zb ? -10 : 2), ROAD_Y_MAX + (zb ? 70 : 0));
+              if (!u.isFlying && !u.inTowerId && !u.isStationary) {
+                const free = outOfBus(u.x, u.y);
+                u.x = free.x;
+                u.y = free.y;
+              }
+            } else {
+              u.x = Math.max(sim.busX + 102, Math.min(sim.barricadeX - 10, u.x));
+              u.y = Math.max(ROAD_Y_MIN, Math.min(ROAD_Y_MAX, u.y));
+            }
 
             if (u.state === 'dying') {
               u.deathProgress = (u.deathProgress ?? 0) + dt / 0.4;
@@ -3105,6 +3421,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               continue; // Watchtower: only holds a shooter (handled above)
             }
 
+            // Legs keep walking while the arms shoot / reload (walking to a tower, backing away)
+            u.moving = false;
+            let walkingToTower = false;
             if (u.team === 'survivor' && u.towerTargetId && !u.inTowerId) {
               const tower = sim.units.find((t) => t.id === u.towerTargetId);
               if (!tower || tower.hp <= 0 || tower.state === 'dying' || (u.isPlayerControlled && isUsingWasd)) {
@@ -3120,16 +3439,102 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   u.baseAttackRange = u.attackRange;
                   u.attackRange = Math.round(u.attackRange * TOWER_RANGE_BONUS);
                   tower.occupied = true;
-                  u.state = 'march';
+                  if (u.state !== 'attack' && u.state !== 'reload') u.state = 'march';
                   addFloatingText('¡EN POSICIÓN!', tower.x, tower.y - 20, 30, '#4ade80', true);
-                } else {
-                  const step = Math.min(dist, u.speed * 1.3 * dt);
-                  u.x += (dx / dist) * step;
-                  u.y += (dy / dist) * step;
-                  u.facing = dx >= 0 ? 1 : -1;
+                  continue;
+                }
+                // It keeps walking to the tower but is no longer defenseless on the way: it falls
+                // through to the normal combat logic below and shoots (and reloads) on the move
+                const way = routeAroundBus(u.x, u.y, tower.x, tower.y);
+                const wdx = way ? way.x - u.x : dx;
+                const wdy = way ? way.y - u.y : dy;
+                const wdist = Math.hypot(wdx, wdy) || 1;
+                const step = Math.min(wdist, u.speed * 1.3 * dt);
+                u.x += (wdx / wdist) * step;
+                u.y += (wdy / wdist) * step;
+                walkingToTower = true;
+                u.moving = true;
+                if (u.state !== 'attack' && u.state !== 'reload') {
+                  u.facing = wdx >= 0 ? 1 : -1;
                   u.state = 'march';
                 }
-                continue;
+              }
+            }
+
+            // RANGED UNITS KEEP THEIR FIRING DISTANCE: when a zombie gets too close they back away
+            // from it (still shooting and reloading on the move) instead of waiting to be bitten
+            let kiting = false;
+            if (
+              u.team === 'survivor' &&
+              u.isRanged &&
+              !u.isHero &&
+              !u.isStationary &&
+              !u.isFlying &&
+              !u.inTowerId &&
+              !walkingToTower &&
+              !(u.isPlayerControlled && isUsingWasd)
+            ) {
+              let threat: InternalUnit | null = null;
+              let threatD = Infinity;
+              for (const z of sim.units) {
+                if (z.team !== 'zombie' || z.hp <= 0 || z.isFlying) continue;
+                if (z.state === 'corpse' || z.state === 'dying' || z.state === 'emerging') continue;
+                const zd = Math.hypot(z.x - u.x, (z.y - u.y) * DEPTH_W);
+                if (zd < threatD) {
+                  threatD = zd;
+                  threat = z;
+                }
+              }
+              if (threat && threatD < u.attackRange * KITE_RATIO) {
+                let nx: number;
+                let ny: number;
+                if (siege && (u.chainTargets > 0 || (u.pellets === 1 && !u.isFlame))) {
+                  // SIEGE, guns that aim freely: straight away from it
+                  let ax = u.x - threat.x;
+                  let ay = u.y - threat.y;
+                  if (Math.hypot(ax, ay) < 8) {
+                    ax = BUS_CX - u.x; // right on top of it: fall back toward the bus
+                    ay = BUS_CY - u.y;
+                  }
+                  const al = Math.hypot(ax, ay) || 1;
+                  nx = u.x + (ax / al) * u.speed * dt;
+                  ny = u.y + (ay / al) * u.speed * 0.75 * dt;
+                } else {
+                  // Lane weapons: back away along the lane while lining up with the zombie, so the
+                  // retreat never costs them their line of fire
+                  const ddx = u.x - threat.x;
+                  const ddy = threat.y - u.y;
+                  const sx = Math.abs(ddx) > 3 ? Math.sign(ddx) : Math.sign(BUS_CX - u.x) || -1;
+                  nx = u.x + sx * u.speed * dt;
+                  ny = Math.abs(ddy) > 6 ? u.y + Math.sign(ddy) * u.speed * 0.65 * dt : u.y;
+                }
+                if (siege) {
+                  const free = outOfBus(
+                    clampN(nx, 14, WORLD_WIDTH - 14),
+                    clampN(ny, ROAD_Y_MIN + 2, ROAD_Y_MAX)
+                  );
+                  nx = free.x;
+                  ny = free.y;
+                } else {
+                  nx = clampN(nx, sim.busX + 102, sim.barricadeX - 10);
+                  ny = clampN(ny, ROAD_Y_MIN, ROAD_Y_MAX);
+                }
+                // SIEGE: never flee far from the bus it is defending
+                const fromBus = (px: number, py: number) =>
+                  Math.hypot(px - BUS_CX, (py - BUS_CY) * DEPTH_W);
+                const leashOk =
+                  !siege || fromBus(nx, ny) <= SIEGE_LEASH || fromBus(nx, ny) <= fromBus(u.x, u.y);
+                // Cornered (end of the road, against the bus): it stands its ground and keeps firing
+                if (leashOk && Math.hypot(nx - u.x, ny - u.y) > u.speed * dt * 0.3) {
+                  u.x = nx;
+                  u.y = ny;
+                  kiting = true;
+                  u.moving = true;
+                  if (u.state !== 'attack' && u.state !== 'reload') {
+                    u.facing = threat.x >= u.x ? 1 : -1; // walks backwards, facing the enemy
+                    u.state = 'march';
+                  }
+                }
               }
             }
 
@@ -3330,6 +3735,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             if (u.team === 'survivor') {
               let closestZ: InternalUnit | null = null;
               let bestDist = Infinity;
+              // SIEGE: the nearest zombie that is already on the bus (worth crossing over for)
+              let busBiter: InternalUnit | null = null;
+              let biterDist = Infinity;
               for (const other of sim.units) {
                 if (
                   other.team === 'zombie' &&
@@ -3344,22 +3752,33 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                     (other.subType === 'bloated' || other.subType === 'armored')
                       ? -85
                       : 0;
-                  const d = Math.hypot(other.x - u.x, (other.y - u.y) * 1.5) + priorityBias;
+                  const raw = Math.hypot(other.x - u.x, (other.y - u.y) * DEPTH_W);
+                  const d = raw + priorityBias;
                   if (d < bestDist) {
                     bestDist = d;
                     closestZ = other;
+                  }
+                  if (siege && raw < biterDist && busGap(other.x, other.y).d <= 60) {
+                    biterDist = raw;
+                    busBiter = other;
                   }
                 }
               }
 
               const distToBarricade = sim.barricadeX - u.x;
+              // SIEGE: single-target guns (and the Tesla coil) aim freely in any direction;
+              // melee and cone weapons still have to line up with their target
+              const freeAim =
+                siege && u.isRanged && (u.chainTargets > 0 || (u.pellets === 1 && !u.isFlame));
+              const zInReach =
+                !!closestZ &&
+                (freeAim
+                  ? Math.hypot(closestZ.x - u.x, (closestZ.y - u.y) * DEPTH_W) <= u.attackRange
+                  : Math.abs(closestZ.x - u.x) <= u.attackRange &&
+                    Math.abs(closestZ.y - u.y) <=
+                      (u.isRanged ? (u.chainTargets > 0 ? 64 : u.inTowerId ? 60 : 38) : 18));
 
-              if (
-                closestZ &&
-                Math.abs(closestZ.x - u.x) <= u.attackRange &&
-                Math.abs(closestZ.y - u.y) <=
-                  (u.isRanged ? (u.chainTargets > 0 ? 64 : u.inTowerId ? 60 : 38) : 18)
-              ) {
+              if (closestZ && zInReach) {
                 u.facing = closestZ.x >= u.x ? 1 : -1;
                 if (u.attackTimer <= 0) {
                   u.state = 'attack';
@@ -3610,26 +4029,113 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   damageEnemyBarricade(Math.round(u.damage * u.barricadeMultiplier), u.y);
                 }
               } else if (!(u.isPlayerControlled && isUsingWasd) && !u.isStationary && !u.inTowerId) {
-                u.state = 'march';
-                if (closestZ && Math.abs(closestZ.x - u.x) < 210) {
-                  const dx = closestZ.x - u.x;
-                  const dy = closestZ.y - u.y;
-                  u.facing = dx >= 0 ? 1 : -1;
-                  const stopX = u.isRanged ? u.attackRange * 0.85 : u.attackRange * 0.7;
-                  if (Math.abs(dx) > stopX) {
-                    u.x += Math.sign(dx) * u.speed * dt;
+                if (walkingToTower || kiting) {
+                  // Its legs already moved this frame (to the tower / away from a zombie)
+                } else if (siege) {
+                  // SIEGE: fight what comes close (or what is on the bus), otherwise hold the post
+                  u.state = 'march';
+                  const prey: InternalUnit | null =
+                    closestZ && bestDist < SIEGE_AGGRO ? closestZ : busBiter;
+                  const fromBus = (px: number, py: number) =>
+                    Math.hypot(px - BUS_CX, (py - BUS_CY) * DEPTH_W);
+                  let gx = 0;
+                  let gy = 0;
+                  let spdY = 0.65;
+                  if (prey) {
+                    u.guardIdle = 0;
+                    const dx = prey.x - u.x;
+                    const dy = prey.y - u.y;
+                    u.facing = dx >= 0 ? 1 : -1;
+                    const way = u.isFlying ? null : routeAroundBus(u.x, u.y, prey.x, prey.y);
+                    if (way) {
+                      const wl = Math.hypot(way.x - u.x, way.y - u.y) || 1;
+                      gx = (way.x - u.x) / wl;
+                      gy = (way.y - u.y) / wl;
+                      spdY = 1;
+                    } else if (freeAim) {
+                      // Walk straight at it until it is comfortably in range
+                      const dl = Math.hypot(dx, dy) || 1;
+                      if (Math.hypot(dx, dy * DEPTH_W) > u.attackRange * 0.85) {
+                        gx = dx / dl;
+                        gy = dy / dl;
+                        spdY = 0.8;
+                      }
+                    } else {
+                      // Line up with it, standing on the side of the bus
+                      const stopX = u.isRanged ? u.attackRange * 0.85 : u.attackRange * 0.7;
+                      if (Math.abs(dx) > stopX) gx = Math.sign(dx);
+                      else if (Math.abs(dx) < stopX * 0.4) {
+                        gx = Math.abs(dx) > 3 ? -Math.sign(dx) : u.x >= BUS_CX ? -1 : 1;
+                      }
+                      if (Math.abs(dy) > 6) gy = Math.sign(dy);
+                    }
+                  } else {
+                    // Nothing to fight: walk back to its post on the ring around the bus
+                    if (u.guardX === undefined || u.guardY === undefined) {
+                      const np = pickGuardPost(u.isRanged) ?? { x: u.x, y: u.y };
+                      u.guardX = np.x;
+                      u.guardY = np.y;
+                    }
+                    const way = u.isFlying ? null : routeAroundBus(u.x, u.y, u.guardX, u.guardY);
+                    const tx = way ? way.x : u.guardX;
+                    const ty = way ? way.y : u.guardY;
+                    const tl = Math.hypot(tx - u.x, ty - u.y);
+                    if (tl > 5) {
+                      gx = (tx - u.x) / tl;
+                      gy = (ty - u.y) / tl;
+                      spdY = 1;
+                      if (Math.abs(gx) > 0.2) u.facing = gx >= 0 ? 1 : -1;
+                    }
                   }
-                  if (Math.abs(dy) > 6) {
-                    u.y += Math.sign(dy) * u.speed * 0.65 * dt;
+                  if (gx !== 0 || gy !== 0) {
+                    const nx = u.x + gx * u.speed * dt;
+                    const ny = u.y + gy * u.speed * spdY * dt;
+                    // Never chases far from the bus it is defending
+                    if (fromBus(nx, ny) <= SIEGE_LEASH || fromBus(nx, ny) <= fromBus(u.x, u.y)) {
+                      u.x = nx;
+                      u.y = ny;
+                    } else {
+                      u.animTime -= dt;
+                    }
+                  } else {
+                    // Holding the post: stands still looking out (or at whatever is coming)
+                    u.animTime -= dt;
+                    if (!prey) {
+                      u.facing = u.x >= BUS_CX ? 1 : -1;
+                      // After a quiet while it moves to a side of the bus that needs it more
+                      u.guardIdle = (u.guardIdle ?? 0) + dt;
+                      if (u.guardIdle >= 4) {
+                        u.guardIdle = 0;
+                        const np = pickGuardPost(u.isRanged, u);
+                        if (np) {
+                          u.guardX = np.x;
+                          u.guardY = np.y;
+                        }
+                      }
+                    }
                   }
                 } else {
-                  u.facing = 1;
-                  u.x += u.speed * dt;
+                  u.state = 'march';
+                  if (closestZ && Math.abs(closestZ.x - u.x) < 210) {
+                    const dx = closestZ.x - u.x;
+                    const dy = closestZ.y - u.y;
+                    u.facing = dx >= 0 ? 1 : -1;
+                    const stopX = u.isRanged ? u.attackRange * 0.85 : u.attackRange * 0.7;
+                    if (Math.abs(dx) > stopX) {
+                      u.x += Math.sign(dx) * u.speed * dt;
+                    }
+                    if (Math.abs(dy) > 6) {
+                      u.y += Math.sign(dy) * u.speed * 0.65 * dt;
+                    }
+                  } else {
+                    u.facing = 1;
+                    u.x += u.speed * dt;
+                  }
                 }
               }
             } else {
-              // Zombie AI
-              u.facing = -1;
+              // Zombie AI (highway: always heading left for the bus; SIEGE: from any side)
+              if (!siege) u.facing = -1;
               // Ground zombies must break barrels / sandbag walls; flyers soar over them
               const blockingBarrel = u.isFlying
                 ? undefined
@@ -3672,27 +4178,42 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
               // ACID SPITTER: stops at range and lobs acid at the nearest survivor (or the bus)
               if (u.spitsAcid) {
+                const gap = siege ? busGap(u.x, u.y) : null;
                 const targetInRange =
                   closestS &&
-                  Math.abs(closestS.x - u.x) <= u.attackRange &&
-                  Math.abs(closestS.y - u.y) <= 70;
-                const busInRange = u.x <= sim.busX + 148 + u.attackRange * 0.8;
+                  (gap
+                    ? bestDist <= u.attackRange
+                    : Math.abs(closestS.x - u.x) <= u.attackRange && Math.abs(closestS.y - u.y) <= 70);
+                const busInRange = gap
+                  ? gap.d <= u.attackRange * 0.8
+                  : u.x <= sim.busX + 148 + u.attackRange * 0.8;
                 if (targetInRange || busInRange) {
-                  u.facing = -1;
+                  u.facing = gap
+                    ? (targetInRange && closestS ? closestS.x : gap.px) >= u.x
+                      ? 1
+                      : -1
+                    : -1;
                   if (u.attackTimer <= 0) {
                     u.state = 'attack';
                     u.attackProgress = 0;
                     u.attackTimer = u.attackCooldown;
-                    const tx = targetInRange && closestS ? closestS.x : sim.busX + 120 + Math.random() * 20;
+                    const tx =
+                      targetInRange && closestS
+                        ? closestS.x
+                        : gap
+                        ? gap.px + (Math.random() - 0.5) * 24
+                        : sim.busX + 120 + Math.random() * 20;
                     const ty =
                       targetInRange && closestS
                         ? closestS.y
+                        : gap
+                        ? gap.py + (Math.random() - 0.5) * 16
                         : ROAD_Y_MIN + 20 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 40);
                     sim.acidBlobs.push({
-                      x: u.x - 8,
+                      x: u.x + u.facing * 8,
                       y: u.y,
                       z: 22,
-                      sx: u.x - 8,
+                      sx: u.x + u.facing * 8,
                       sy: u.y,
                       tx,
                       ty,
@@ -3745,7 +4266,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                     isCrit ? 'CRIT!' : 'WACK!'
                   );
                 }
-              } else if (u.x <= sim.busX + 148) {
+              } else if (siege ? busGap(u.x, u.y).d <= 12 : u.x <= sim.busX + 148) {
+                if (siege) u.facing = BUS_CX >= u.x ? 1 : -1;
                 if (u.attackTimer <= 0) {
                   u.state = 'attack';
                   u.attackProgress = 0;
@@ -3773,14 +4295,23 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 }
               } else {
                 u.state = 'march';
-                if (closestS && Math.abs(closestS.x - u.x) < 125) {
+                if (closestS && (siege ? bestDist < 150 : Math.abs(closestS.x - u.x) < 125)) {
                   const dx = closestS.x - u.x;
                   const dy = closestS.y - u.y;
                   u.facing = dx <= 0 ? -1 : 1;
-                  u.x += Math.sign(dx) * u.speed * dt;
+                  if (!siege || Math.abs(dx) > 3) u.x += Math.sign(dx) * u.speed * dt;
                   if (Math.abs(dy) > 4) {
                     u.y += Math.sign(dy) * u.speed * 0.65 * dt;
                   }
+                } else if (siege) {
+                  // Marches on the bus from wherever it came in: straight to its nearest side
+                  const g = busGap(u.x, u.y);
+                  const mdx = g.px - u.x;
+                  const mdy = g.py - u.y;
+                  const ml = Math.hypot(mdx, mdy) || 1;
+                  u.x += (mdx / ml) * u.speed * dt;
+                  u.y += (mdy / ml) * u.speed * 0.8 * dt;
+                  if (Math.abs(mdx) > 3) u.facing = mdx >= 0 ? 1 : -1;
                 } else {
                   u.facing = -1;
                   u.x -= u.speed * dt;
@@ -3891,7 +4422,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             }
             setRushWarningState({
               active: sim.rushWarningTimer > 0,
-              yPct: Math.round(((sim.rushWarningY - sim.camY) / LOGICAL_HEIGHT) * 100),
+              yPct: Math.round((((sim.rushWarningY - sim.camY) * ZOOM) / LOGICAL_HEIGHT) * 100),
+              xPct: siege
+                ? Math.round((((sim.rushWarningX - sim.camX) * ZOOM) / LOGICAL_WIDTH) * 100)
+                : null,
+              side: sim.rushSide,
             });
           }
         }
@@ -3910,11 +4445,12 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           const sy = (Math.random() - 0.5) * sim.screenShake;
           ctx.translate(sx, sy);
         }
-        // Camera: everything below is drawn in world coordinates
+        // Camera: everything below is drawn in world coordinates (SIEGE looks from further away)
+        if (ZOOM !== 1) ctx.scale(ZOOM, ZOOM);
         ctx.translate(-Math.round(sim.camX * 2) / 2, -Math.round(sim.camY * 2) / 2);
 
         // LAYER 0: 2.5x HiDPI Cached Biome Background + Live Biome Details
-        renderBiomeBackground(ctx, mission.biome, sim.time, mission.id);
+        renderBiomeBackground(ctx, mission.biome, sim.time, mission.id, field);
 
         // LAYER 1: 2x HiDPI Persistent Decal Buffer (Blood puddles, blast craters & spent shells)
         if (decalCanvasRef.current) {
@@ -3930,7 +4466,15 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           ctx.strokeStyle = `rgba(253, 224, 71, ${Math.max(0, 1 - prog) * 0.85})`;
           ctx.lineWidth = 4.5 * (1 - prog * 0.6);
           ctx.beginPath();
-          ctx.ellipse(sim.busX + 115, (ROAD_Y_MIN + ROAD_Y_MAX) / 2, rx, ry, 0, 0, Math.PI * 2);
+          ctx.ellipse(
+            siege ? BUS_CX : sim.busX + 115,
+            siege ? BUS_CY : (ROAD_Y_MIN + ROAD_Y_MAX) / 2,
+            rx,
+            ry,
+            0,
+            0,
+            Math.PI * 2
+          );
           ctx.stroke();
           ctx.restore();
         }
@@ -3944,7 +4488,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         // 2-Tap Tactical Target Zone on the Road (Color-coded Crosshair + Drop Guide!)
         if (sim.draggingItem) {
           const cfg = TACTICAL_ITEM_CONFIGS[sim.draggingItem];
-          const tx = Math.max(142, Math.min(sim.barricadeX - 22, sim.mouseLogical.x));
+          const tx = siege
+            ? clampN(sim.mouseLogical.x, 20, WORLD_WIDTH - 20)
+            : Math.max(142, Math.min(sim.barricadeX - 22, sim.mouseLogical.x));
           const ty = Math.max(ROAD_Y_MIN + 4, Math.min(ROAD_Y_MAX - 4, sim.mouseLogical.y));
           const pulse = 0.85 + Math.sin(sim.time * 9) * 0.15;
           const strokeCol =
@@ -3993,11 +4539,21 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         // Telegraphed Rush Lane Indicator drawn directly on road right edge
         if (sim.rushWarningTimer > 0) {
           const pulse = 0.35 + Math.abs(Math.sin(sim.time * 14)) * 0.45;
+          // Highway: the lane at the far end. SIEGE: the stretch of the rim they will burst from
+          const rr = !siege
+            ? { x: sim.barricadeX - 115, y: sim.rushWarningY - 12, w: 110, h: 24 }
+            : sim.rushSide === 0
+            ? { x: 0, y: sim.rushWarningY - 24, w: 180, h: 48 }
+            : sim.rushSide === 1
+            ? { x: WORLD_WIDTH - 180, y: sim.rushWarningY - 24, w: 180, h: 48 }
+            : sim.rushSide === 2
+            ? { x: sim.rushWarningX - 34, y: ROAD_Y_MIN - 6, w: 68, h: 140 }
+            : { x: sim.rushWarningX - 34, y: ROAD_Y_MAX - 70, w: 68, h: 140 };
           ctx.fillStyle = `rgba(239, 68, 68, ${pulse * 0.38})`;
-          ctx.fillRect(sim.barricadeX - 115, sim.rushWarningY - 12, 110, 24);
+          ctx.fillRect(rr.x, rr.y, rr.w, rr.h);
           ctx.strokeStyle = `rgba(254, 202, 202, ${pulse})`;
-          ctx.lineWidth = 1.5;
-          ctx.strokeRect(sim.barricadeX - 115, sim.rushWarningY - 12, 110, 24);
+          ctx.lineWidth = 1.5 * TAP;
+          ctx.strokeRect(rr.x, rr.y, rr.w, rr.h);
         }
 
         // LAYER 2: Barricade & Y-Sorted 2.5D Entities
@@ -4053,19 +4609,15 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
         // Placement preview for an armed Turret / Tesla Coil (follows the pointer on the road)
         if (sim.placingUnit) {
-          const spot = clampPlacement(
-            sim.busX,
-            sim.barricadeX,
-            sim.mouseLogical.x,
-            sim.mouseLogical.y
-          );
+          const spot = clampPlacement(sim.mouseLogical.x, sim.mouseLogical.y);
           renderPlacementGhost(
             ctx,
             sim.placingUnit,
             spot.x,
             spot.y,
             SURVIVOR_CONFIGS[sim.placingUnit].attackRange,
-            sim.time
+            sim.time,
+            sim.placingUnit === 'barricade' && wallIsFlat(spot.x, spot.y)
           );
         }
 
@@ -4076,7 +4628,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         renderHeroShots(ctx, sim.heroShots, sim.time);
 
         // LAYER 4: Foreground Left Military Truck & Oil Drums
-        renderForegroundLeftProps(ctx);
+        if (!siege) renderForegroundLeftProps(ctx);
 
         // LAYER 5: 1/4-Res Additive Dynamic Lightmap + Cinematic Top Vignette
         renderDynamicLightmap(
@@ -4090,7 +4642,9 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           sim.obstacles,
           sim.tracers,
           sim.lightningArcs,
-          sim.acidPools
+          sim.acidPools,
+          WORLD_WIDTH,
+          WORLD_HEIGHT
         );
 
         // LAYER 6: Flying Crows, Blood Particles & Crisp Comic Popups ("17? / WACK!")
@@ -4105,8 +4659,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
 
         sim.floatingTexts.forEach((ft) => {
           ctx.save();
-          const tx = ft.x;
-          const ty = ft.y - ft.z;
+          // Zoomed-out SIEGE view: popups are drawn bigger so they stay readable
+          ctx.translate(ft.x, ft.y - ft.z);
+          if (siege) ctx.scale(1.45, 1.45);
+          const tx = 0;
+          const ty = 0;
           ctx.textAlign = 'center';
           ctx.lineJoin = 'round';
 
@@ -4153,7 +4710,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             ctx.setLineDash([]);
 
             ctx.translate(tag.x, tag.y);
-            ctx.scale(pulse, pulse);
+            ctx.scale(pulse * TAP, pulse * TAP);
             ctx.fillStyle = '#facc15';
             ctx.beginPath();
             ctx.moveTo(-4.5, SELL_TAG.h / 2 - 0.5);
@@ -4183,7 +4740,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         {
           const mm = MINIMAP;
           const toMm = (wx: number) => mm.x + (Math.max(0, Math.min(WORLD_WIDTH, wx)) / WORLD_WIDTH) * mm.w;
-          const roadT = (wy: number) => mm.y + ((wy - ROAD_Y_MIN) / (ROAD_Y_MAX - ROAD_Y_MIN)) * mm.h;
+          // Highway: only the road band. SIEGE: the whole arena, top to bottom
+          const roadT = (wy: number) =>
+            siege
+              ? mm.y + (clampN(wy, 0, WORLD_HEIGHT) / WORLD_HEIGHT) * mm.h
+              : mm.y + ((wy - ROAD_Y_MIN) / (ROAD_Y_MAX - ROAD_Y_MIN)) * mm.h;
           ctx.save();
           ctx.globalAlpha = 0.92;
           ctx.fillStyle = 'rgba(12, 12, 10, 0.78)';
@@ -4194,7 +4755,16 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           ctx.fillRect(mm.x, mm.y, mm.w, mm.h);
           // Bus (left) and enemy barricade (right)
           ctx.fillStyle = '#facc15';
-          ctx.fillRect(toMm(sim.busX + 40), mm.y + 1, 7, mm.h - 2);
+          if (siege) {
+            ctx.fillRect(
+              toMm(sim.busX),
+              roadT(sim.busY + 20),
+              Math.max(6, toMm(sim.busX + 160) - toMm(sim.busX)),
+              Math.max(3, roadT(sim.busY + 78) - roadT(sim.busY + 20))
+            );
+          } else {
+            ctx.fillRect(toMm(sim.busX + 40), mm.y + 1, 7, mm.h - 2);
+          }
           if (sim.barricadeHp > 0) {
             ctx.fillStyle = '#ef4444';
             ctx.fillRect(toMm(sim.barricadeX) - 1, mm.y - 1, 3, mm.h + 2);
@@ -4222,12 +4792,16 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
           ctx.lineWidth = 1;
           {
             // Road band actually visible between the top HUD and the deck
-            const viewTop = Math.max(mm.y - 1.5, roadT(sim.camY + ROAD_Y_MIN) - 1.5);
-            const viewBot = Math.min(mm.y + mm.h + 1.5, roadT(sim.camY + 278) + 1.5);
+            const viewTop = siege
+              ? roadT(sim.camY) + 0.5
+              : Math.max(mm.y - 1.5, roadT(sim.camY + ROAD_Y_MIN) - 1.5);
+            const viewBot = siege
+              ? roadT(sim.camY + VIEW_H) - 0.5
+              : Math.min(mm.y + mm.h + 1.5, roadT(sim.camY + 278) + 1.5);
             ctx.strokeRect(
               toMm(sim.camX) + 0.5,
               viewTop,
-              (LOGICAL_WIDTH / WORLD_WIDTH) * mm.w - 1,
+              (VIEW_W / WORLD_WIDTH) * mm.w - 1,
               Math.max(4, viewBot - viewTop)
             );
           }
@@ -4263,12 +4837,17 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mission.id]);
 
+  // Defending the bus from every side pays a bit more
+  const siegeMult = siege ? SIEGE.coinsMultiplier : 1;
   const victoryCoins = Math.round(
-    (mission.coinsReward + starsEarned * 15) * (ultra ? ULTRA.coinsMultiplier : 1)
+    (mission.coinsReward + starsEarned * 15) * (ultra ? ULTRA.coinsMultiplier : 1) * siegeMult
   );
   // FORTRESS loot so far (half of it is lost if the bus is destroyed)
   const fortressCoins = fortress
-    ? getFortressCoins(mission, fortressHud.kills, fortressHud.resisted, battleResult === 'defeat')
+    ? Math.round(
+        getFortressCoins(mission, fortressHud.kills, fortressHud.resisted, battleResult === 'defeat') *
+          siegeMult
+      )
     : 0;
   const cashOutFortress = () => {
     soundFX.resumeFromBackground();
@@ -4499,12 +5078,23 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       {/* TELEGRAPHED RUSH WARNING AT EXACT Y LANE */}
       {rushWarningState.active && (
         <div
-          className="absolute right-2 safe-r z-30 flex items-center gap-1 px-2 py-0.5 rounded bg-red-700/95 border-2 border-yellow-300 shadow-lg animate-pulse pointer-events-none"
-          style={{ top: `${Math.max(48, Math.min(82, rushWarningState.yPct))}%` }}
+          className={`absolute z-30 flex items-center gap-1 px-2 py-0.5 rounded bg-red-700/95 border-2 border-yellow-300 shadow-lg animate-pulse pointer-events-none ${
+            rushWarningState.xPct === null ? 'right-2 safe-r' : '-translate-x-1/2'
+          }`}
+          style={
+            rushWarningState.xPct === null
+              ? { top: `${Math.max(48, Math.min(82, rushWarningState.yPct))}%` }
+              : {
+                  // SIEGE: pinned to the side of the screen the pack is coming from
+                  top: `${Math.max(26, Math.min(70, rushWarningState.yPct))}%`,
+                  left: `${Math.max(14, Math.min(86, rushWarningState.xPct))}%`,
+                }
+          }
         >
           <span className="text-xs">⚠️</span>
           <span className="font-pixel text-[7px] text-yellow-200 tracking-tighter">
             ¡CORREDORES!
+            {rushWarningState.xPct !== null && ` ${['⬅', '➡', '⬆', '⬇'][rushWarningState.side] ?? ''}`}
           </span>
         </div>
       )}
@@ -4585,6 +5175,17 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       {fortress && (
         <div className="absolute top-1.5 left-1/2 ml-7 z-20 px-2 py-0.5 rounded bg-gradient-to-b from-sky-600 to-slate-900 border border-sky-300 text-[9px] font-extrabold text-white shadow-lg pointer-events-none">
           🏰 FORTRESS
+        </div>
+      )}
+
+      {/* SIEGE LAYOUT BADGE (it combines with ULTRA / FORTRESS, so it sits under them) */}
+      {siege && (
+        <div
+          className={`absolute left-1/2 ml-7 z-20 px-2 py-0.5 rounded bg-gradient-to-b from-amber-600 to-stone-900 border border-amber-300 text-[9px] font-extrabold text-white shadow-lg pointer-events-none ${
+            ultra || fortress ? 'top-[26px]' : 'top-1.5'
+          }`}
+        >
+          🧭 ASEDIO 360°
         </div>
       )}
 
@@ -5203,7 +5804,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 </p>
                 <p className="text-xs text-zinc-200 mb-4">
                   Botín: <strong className="text-yellow-400">+{victoryCoins} 🪙</strong>
-                  {ultra && <strong className="text-fuchsia-300"> (ULTRA x{ULTRA.coinsMultiplier})</strong>} ({zombiesKilledCount} infectados abatidos)
+                  {ultra && <strong className="text-fuchsia-300"> (ULTRA x{ULTRA.coinsMultiplier})</strong>}
+                  {siege && <strong className="text-amber-300"> (ASEDIO x{SIEGE.coinsMultiplier})</strong>} ({zombiesKilledCount} infectados abatidos)
                 </p>
                 <button
                   onClick={() =>

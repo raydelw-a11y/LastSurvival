@@ -160,6 +160,11 @@ export interface PlayerProgress {
   ultraStars?: Record<number, number>;
   /** FORTRESS mode: most hordes resisted per mission (endless survival record). */
   fortressBest?: Record<number, number>;
+  /**
+   * SIEGE layout (bus in the middle) records, kept apart from the highway ones. Keys are the mode
+   * letter plus the mission id: `n12` / `u12` = best stars in normal / ULTRA, `f12` = most hordes.
+   */
+  siegeBest?: Record<string, number>;
   /** Hero outfits the player owns (armor / clothing). */
   heroOutfits?: HeroOutfitType[];
   /** Hero outfit currently worn. */
@@ -271,6 +276,18 @@ export function getMissionHordeCount(mission: { campaignTier?: number; id: numbe
   const tier = mission.campaignTier || mission.id;
   return Math.round((8 + tier * 1.9) * (ultra ? ULTRA.hordeCount : 1));
 }
+
+/**
+ * SIEGE layout ("Asedio 360°"): the bus is parked in the middle of a larger map of open country
+ * and the infected walk in from any direction. It combines with the normal, ULTRA and FORTRESS modes.
+ */
+export const SIEGE = {
+  /** Defending every flank at once pays a little better. */
+  coinsMultiplier: 1.25,
+  /** The bus can be bitten from all around at once, so it is plated a bit heavier. */
+  busHpMultiplier: 1.4,
+} as const;
+export const siegeKey = (mode: 'n' | 'u' | 'f', missionId: number) => `${mode}${missionId}`;
 
 /**
  * FORTRESS mode: the mission never ends. Hordes keep coming, each one bigger and tougher,
