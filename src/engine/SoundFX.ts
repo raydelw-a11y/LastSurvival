@@ -565,6 +565,22 @@ class SoundSystem {
         this.burst(ctx, out, t, { type: 'bandpass', freq: 1100 * j, q: 3, vol: 0.55 * boost, attack: 0.006, decay: 0.1 });
         this.burst(ctx, out, t + 0.05, { type: 'bandpass', freq: 2600, q: 2, vol: 0.4 * boost, decay: 0.03 });
         break;
+      case 'raptor': // Velociraptor: raspy shriek + snapping jaws
+        this.tone(ctx, out, t, { type: 'sawtooth', f0: 980 * j, f1: 520, vol: 0.26 * boost, attack: 0.006, decay: 0.1 });
+        this.burst(ctx, out, t, { type: 'bandpass', freq: 1900 * j, q: 3, vol: 0.5 * boost, attack: 0.005, decay: 0.09 });
+        this.burst(ctx, out, t + 0.045, { type: 'bandpass', freq: 3200, q: 2, vol: 0.42 * boost, decay: 0.03 });
+        break;
+      case 'trike': // Triceratops: horned ram, bone on bone
+        this.tone(ctx, out, t, { type: 'sine', f0: 120, f1: 40, vol: 0.85 * boost, decay: 0.28 });
+        this.burst(ctx, out, t, { type: 'lowpass', freq: 1100, freqEnd: 260, vol: 0.65 * boost, decay: 0.2, send: 0.3, saturate: true });
+        this.burst(ctx, out, t + 0.02, { type: 'bandpass', freq: 1700 * j, q: 2, vol: 0.3 * boost, decay: 0.05 });
+        break;
+      case 'rex': // T-Rex: bone-crushing bite with a deep growl under it
+        this.tone(ctx, out, t, { type: 'sawtooth', f0: 110 * j, f1: 48, vol: 0.5 * boost, attack: 0.01, decay: 0.3 });
+        this.tone(ctx, out, t, { type: 'sine', f0: 80, f1: 30, vol: 0.9 * boost, decay: 0.34 });
+        this.burst(ctx, out, t, { type: 'lowpass', freq: 800, freqEnd: 180, vol: 0.7 * boost, decay: 0.26, send: 0.4, saturate: true });
+        this.burst(ctx, out, t + 0.06, { type: 'bandpass', freq: 2400, q: 2, vol: 0.45 * boost, decay: 0.04 });
+        break;
       case 'juggernaut': // Seismic sledgehammer: ground-shaking boom + crunch
         this.tone(ctx, out, t, { type: 'sine', f0: 95, f1: 32, vol: 0.9 * boost, decay: 0.32 });
         this.burst(ctx, out, t, { type: 'lowpass', freq: 900, freqEnd: 200, vol: 0.7 * boost, decay: 0.26, send: 0.4, saturate: true });
@@ -744,6 +760,28 @@ class SoundSystem {
       const at = t + i * 0.16;
       this.tone(ctx, out, at, { type: 'sawtooth', f0: 210 + i * 40, f1: 120, vol: 0.16, attack: 0.01, decay: 0.13 });
       this.burst(ctx, out, at, { type: 'bandpass', freq: 700 + i * 120, q: 2.5, vol: 0.28, attack: 0.008, decay: 0.12 });
+    }
+  }
+
+  /** Dinosaur call: a raptor's rasping shriek, or the long chest-shaking roar of a T-Rex. */
+  public playDinoRoar(big: boolean) {
+    const ctx = this.getContext();
+    const dest = this.getDest();
+    if (!ctx || !dest || !this.allow(big ? 'dino_roar_big' : 'dino_roar', big ? 1.4 : 0.8, ctx)) return;
+    const out = this.getWeaponOut(dest);
+    const t = ctx.currentTime + 0.002;
+    if (big) {
+      this.tone(ctx, out, t, { type: 'sawtooth', f0: 150, f1: 58, vol: 0.34, attack: 0.08, decay: 1.0 });
+      this.tone(ctx, out, t, { type: 'square', f0: 96, f1: 41, vol: 0.16, attack: 0.1, decay: 1.05 });
+      this.tone(ctx, out, t + 0.05, { type: 'sine', f0: 70, f1: 34, vol: 0.5, attack: 0.06, decay: 0.9 });
+      this.burst(ctx, out, t, { type: 'bandpass', freq: 520, freqEnd: 240, q: 1.2, vol: 0.5, attack: 0.09, decay: 0.95, send: 0.45, saturate: true });
+      this.burst(ctx, out, t + 0.12, { type: 'highpass', freq: 2600, vol: 0.1, attack: 0.1, decay: 0.6, send: 0.3 });
+    } else {
+      for (let i = 0; i < 2; i++) {
+        const at = t + i * 0.13;
+        this.tone(ctx, out, at, { type: 'sawtooth', f0: 1250 - i * 180, f1: 640, vol: 0.12, attack: 0.012, decay: 0.16 });
+        this.burst(ctx, out, at, { type: 'bandpass', freq: 2100, q: 3, vol: 0.2, attack: 0.01, decay: 0.14, send: 0.2 });
+      }
     }
   }
 

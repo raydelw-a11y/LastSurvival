@@ -1035,6 +1035,557 @@ function renderDroneRig(ctx: CanvasRenderingContext2D, unit: RenderUnit, time: n
   ctx.restore();
 }
 
+// =============================================================================
+// DINOSAURS — tamed squad beasts (Raptor, Triceratops, T-Rex) and their zombie kin
+// Local space: feet on y = 0, facing +x. Drawn live so legs, tail and jaws animate.
+// =============================================================================
+interface DinoLook {
+  skin: string;
+  hi: string;
+  dark: string;
+  belly: string;
+  stripe: string;
+  eye: string;
+  eyeHi: string;
+  claw: string;
+}
+
+function dinoLook(base: DinoLook, flash: boolean): DinoLook {
+  if (!flash) return base;
+  return {
+    skin: '#ffffff',
+    hi: '#ffffff',
+    dark: '#f8fafc',
+    belly: '#ffffff',
+    stripe: '#ffffff',
+    eye: '#ffffff',
+    eyeHi: '#ffffff',
+    claw: '#ffffff',
+  };
+}
+
+function inkedEllipse(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  rot: number,
+  fill: string,
+  highlight?: string,
+  shadow?: string,
+  lineW = 1.5
+) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(rot);
+  ctx.beginPath();
+  ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+  ctx.fillStyle = fill;
+  ctx.fill();
+  if (highlight || shadow) {
+    ctx.save();
+    ctx.clip();
+    if (shadow) {
+      ctx.fillStyle = shadow;
+      ctx.fillRect(-rx, ry * 0.3, rx * 2, ry);
+    }
+    if (highlight) {
+      ctx.fillStyle = highlight;
+      ctx.fillRect(-rx, -ry, rx * 2, ry * 0.5);
+    }
+    ctx.restore();
+  }
+  ctx.beginPath();
+  ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+  ctx.lineWidth = lineW;
+  ctx.strokeStyle = INK;
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Fills and inks a closed polygon / curve built by `build`. */
+function inkedShape(ctx: CanvasRenderingContext2D, fill: string, lineW: number, build: () => void) {
+  ctx.beginPath();
+  build();
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.lineWidth = lineW;
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = INK;
+  ctx.stroke();
+}
+
+/** Bird-like hind leg: thigh forward, shin back, clawed foot flat on the ground. */
+function drawDinoLeg(
+  ctx: CanvasRenderingContext2D,
+  hipX: number,
+  hipY: number,
+  swing: number,
+  thigh: number,
+  shin: number,
+  w: number,
+  foot: number,
+  fill: string,
+  shade: string,
+  claw: string
+) {
+  ctx.save();
+  ctx.translate(hipX, hipY);
+  ctx.rotate(-0.5 - swing * 0.5);
+  inkedRoundRect(ctx, -w * 0.5, -1.5, w, thigh + 1.5, w * 0.45, fill, undefined, shade, 1.2);
+  ctx.translate(0, thigh - 0.5);
+  ctx.rotate(1.0 + swing * 0.2);
+  inkedRoundRect(ctx, -w * 0.33, -0.5, w * 0.66, shin + 0.5, w * 0.3, fill, undefined, undefined, 1.1);
+  ctx.translate(0, shin - 0.4);
+  ctx.rotate(-0.5 + swing * 0.3);
+  inkedRoundRect(ctx, -w * 0.4, -1.4, foot, 2.8, 1.2, fill, undefined, undefined, 1.0);
+  ctx.fillStyle = claw;
+  ctx.beginPath();
+  ctx.moveTo(foot - w * 0.4 - 0.6, -1.3);
+  ctx.lineTo(foot - w * 0.4 + 2.4, 1.1);
+  ctx.lineTo(foot - w * 0.4 - 0.6, 1.3);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+/** Row of fangs hanging from y, between x0 and x1. */
+function drawFangs(ctx: CanvasRenderingContext2D, x0: number, x1: number, y: number, size: number, col: string) {
+  ctx.fillStyle = col;
+  const n = Math.max(2, Math.round((x1 - x0) / (size * 1.25)));
+  const step = (x1 - x0) / n;
+  for (let i = 0; i < n; i++) {
+    const fx = x0 + i * step;
+    ctx.beginPath();
+    ctx.moveTo(fx, y);
+    ctx.lineTo(fx + step * 0.5, y + size);
+    ctx.lineTo(fx + step, y);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
+/** Zombie wound: torn flesh with the ribs showing through. */
+function drawRibWound(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
+  ctx.fillStyle = '#7f1d1d';
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, Math.min(w, h) * 0.3);
+  ctx.fill();
+  ctx.strokeStyle = '#e7e5e4';
+  ctx.lineWidth = Math.max(0.8, h * 0.16);
+  for (let rx = x + w * 0.18; rx < x + w - 0.5; rx += w * 0.24) {
+    ctx.beginPath();
+    ctx.moveTo(rx, y + 0.4);
+    ctx.lineTo(rx, y + h - 0.4);
+    ctx.stroke();
+  }
+}
+
+const RAPTOR_LOOK: DinoLook = {
+  skin: '#3d6ea8',
+  hi: '#6b9fd8',
+  dark: '#1f3d66',
+  belly: '#d7e3f2',
+  stripe: '#f59e0b',
+  eye: '#facc15',
+  eyeHi: '#fef9c3',
+  claw: '#f5f5f4',
+};
+const ZOMBIE_RAPTOR_LOOK: DinoLook = {
+  skin: '#63755a',
+  hi: '#8a9c7c',
+  dark: '#2c3626',
+  belly: '#8b947a',
+  stripe: '#3f4a36',
+  eye: '#ef4444',
+  eyeHi: '#fecaca',
+  claw: '#d6d3d1',
+};
+
+function renderRaptorRig(
+  ctx: CanvasRenderingContext2D,
+  unit: RenderUnit,
+  time: number,
+  flash: boolean,
+  zombie: boolean
+) {
+  const L = dinoLook(zombie ? ZOMBIE_RAPTOR_LOOK : RAPTOR_LOOK, flash);
+  const moving = unit.state === 'march' || !!unit.moving;
+  const stride = moving ? Math.sin(unit.animTime * 17) : 0;
+  const lunge = unit.state === 'attack' ? Math.sin(unit.attackProgress * Math.PI) : 0;
+  const breathe = moving ? 0 : Math.sin(time * 3 + unit.x) * 0.5;
+  const jaw = 0.12 + lunge * 0.55 + (zombie ? 0.1 : 0);
+
+  ctx.save();
+  ctx.translate(lunge * 7, -Math.abs(stride) * 1.6 - lunge * 1.5 + breathe);
+
+  // Stiff counterbalance tail
+  const sway = stride * 2.2 - lunge * 3;
+  inkedShape(ctx, L.skin, 1.3, () => {
+    ctx.moveTo(-7, -22);
+    ctx.quadraticCurveTo(-19, -23 + sway * 0.4, -31, -21 + sway);
+    ctx.quadraticCurveTo(-19, -17 + sway * 0.4, -7, -15);
+  });
+  if (zombie) {
+    ctx.fillStyle = '#7f1d1d';
+    ctx.fillRect(-20, -21 + sway * 0.5, 4, 2);
+  }
+
+  // Far leg (darker), body, near leg
+  drawDinoLeg(ctx, -3, -14, -stride, 8, 8, 4.6, 6, L.dark, L.dark, L.claw);
+  inkedEllipse(ctx, 0, -18.5, 10.5, 5.8, -0.1, L.skin, L.hi, L.belly, 1.5);
+  if (zombie) {
+    drawRibWound(ctx, -4.5, -20.5, 8, 4.6);
+  } else {
+    // Tamed: orange war stripe along the flank
+    ctx.fillStyle = L.stripe;
+    ctx.beginPath();
+    ctx.roundRect(-6.5, -21.4, 12, 1.7, 0.8);
+    ctx.fill();
+  }
+  drawDinoLeg(ctx, 0.5, -14, stride, 8, 8, 5, 6.5, L.skin, L.dark, L.claw);
+
+  // Grasping arm with claws
+  ctx.save();
+  ctx.translate(7.5, -17);
+  ctx.rotate(-0.7 - lunge * 0.9 + stride * 0.15);
+  inkedRoundRect(ctx, -1.1, 0, 2.2, 5.2, 1, L.skin, undefined, undefined, 1.0);
+  ctx.fillStyle = L.claw;
+  ctx.fillRect(-1.3, 4.8, 1, 2);
+  ctx.fillRect(0.4, 4.8, 1, 2);
+  ctx.restore();
+
+  // S-curved neck
+  inkedShape(ctx, L.skin, 1.3, () => {
+    ctx.moveTo(5, -22.5);
+    ctx.quadraticCurveTo(8, -29, 11.5, -33.5);
+    ctx.lineTo(16.5, -30.5);
+    ctx.quadraticCurveTo(13, -24, 10.5, -16.5);
+  });
+
+  // Head: skull, snout, snapping lower jaw
+  ctx.save();
+  ctx.translate(13, -32.5);
+  ctx.rotate(0.12 + lunge * 0.25);
+  if (jaw > 0.3) {
+    // Open maw
+    ctx.fillStyle = flash ? '#ffffff' : '#7f1d1d';
+    ctx.beginPath();
+    ctx.moveTo(1.5, 1.4);
+    ctx.lineTo(13, 1.2);
+    ctx.lineTo(1.5 + Math.cos(jaw) * 11, 1.6 + Math.sin(jaw) * 11);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.save();
+  ctx.translate(1, 1.6);
+  ctx.rotate(jaw);
+  inkedRoundRect(ctx, 0, 0, 11.5, 2.6, 1.2, L.skin, undefined, L.dark, 1.0);
+  drawFangs(ctx, 6, 11, -0.9, -1.4, L.claw);
+  ctx.restore();
+  inkedRoundRect(ctx, -3, -4.4, 9.5, 7, 3, L.skin, L.hi, undefined, 1.3);
+  inkedRoundRect(ctx, 4, -3.2, 10, 4.6, 1.9, L.skin, L.hi, undefined, 1.2);
+  drawFangs(ctx, 6, 13.2, 1.3, 1.6, L.claw);
+  inkedCircle(ctx, 2.4, -1.6, 1.35, L.eye, L.eyeHi, 0.7);
+  ctx.fillStyle = INK;
+  ctx.fillRect(2.1, -2.3, 0.7, 1.5);
+  ctx.fillRect(12.2, -2.2, 0.8, 0.8);
+  if (!zombie) {
+    // Feathered crest
+    ctx.fillStyle = L.stripe;
+    ctx.beginPath();
+    ctx.moveTo(-2.5, -4);
+    ctx.lineTo(-6.5, -6.8);
+    ctx.lineTo(-1.5, -5.6);
+    ctx.lineTo(-4, -8.6);
+    ctx.lineTo(1.2, -4.6);
+    ctx.closePath();
+    ctx.fill();
+  } else {
+    ctx.fillStyle = '#84cc16';
+    ctx.fillRect(9.5, 3.6, 0.9, 2.6);
+  }
+  ctx.restore();
+
+  if (unit.state === 'attack' && lunge > 0.3) {
+    ctx.strokeStyle = zombie ? 'rgba(239, 68, 68, 0.85)' : 'rgba(253, 224, 71, 0.9)';
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.arc(22, -29, 8, -0.8, 0.8);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+const TRIKE_LOOK: DinoLook = {
+  skin: '#7d8f4b',
+  hi: '#a3b56a',
+  dark: '#46532a',
+  belly: '#c9c79a',
+  stripe: '#ea580c',
+  eye: '#facc15',
+  eyeHi: '#fef9c3',
+  claw: '#f1ead6',
+};
+
+function renderTrikeRig(ctx: CanvasRenderingContext2D, unit: RenderUnit, time: number, flash: boolean) {
+  const L = dinoLook(TRIKE_LOOK, flash);
+  const moving = unit.state === 'march' || !!unit.moving;
+  const stride = moving ? Math.sin(unit.animTime * 9) : 0;
+  const lunge = unit.state === 'attack' ? Math.sin(unit.attackProgress * Math.PI) : 0;
+  const breathe = moving ? 0 : Math.sin(time * 2.4 + unit.x) * 0.5;
+  const armor = flash ? '#ffffff' : '#3f5320';
+  const armorHi = flash ? '#ffffff' : '#6b8e23';
+
+  ctx.save();
+  ctx.translate(lunge * 9, -Math.abs(stride) * 0.9 + breathe);
+
+  // Short heavy tail
+  inkedShape(ctx, L.skin, 1.4, () => {
+    ctx.moveTo(-17, -24);
+    ctx.quadraticCurveTo(-27, -21 + stride, -33, -11 + stride * 1.5);
+    ctx.quadraticCurveTo(-24, -11, -16, -13);
+  });
+
+  // Far pair of pillar legs
+  for (const [lx, ph] of [
+    [-12, -stride],
+    [8, stride],
+  ]) {
+    ctx.save();
+    ctx.translate(lx, -11);
+    ctx.rotate(ph * 0.3);
+    inkedRoundRect(ctx, -2.8, 0, 5.6, 11, 2.2, L.dark, undefined, undefined, 1.2);
+    ctx.restore();
+  }
+
+  // Barrel body + pale belly
+  inkedEllipse(ctx, -3, -18.5, 17, 9.6, 0, L.skin, L.hi, L.belly, 1.6);
+
+  // Squad saddle armour: the beast is ours
+  inkedRoundRect(ctx, -12, -28.4, 15, 8, 2.6, armor, armorHi, undefined, 1.3);
+  ctx.fillStyle = flash ? '#ffffff' : '#facc15';
+  ctx.fillRect(-6.2, -26, 3.4, 3.4);
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 1.1;
+  ctx.beginPath();
+  ctx.moveTo(-9, -20.4);
+  ctx.lineTo(-9.6, -10.5);
+  ctx.moveTo(0.5, -20.4);
+  ctx.lineTo(1, -10.5);
+  ctx.stroke();
+
+  // Near pair of pillar legs with toenails
+  for (const [lx, ph] of [
+    [-15.5, stride],
+    [4.5, -stride],
+  ]) {
+    ctx.save();
+    ctx.translate(lx, -11);
+    ctx.rotate(ph * 0.3);
+    inkedRoundRect(ctx, -3, 0, 6, 11, 2.3, L.skin, undefined, L.dark, 1.3);
+    ctx.fillStyle = L.claw;
+    ctx.fillRect(-2.2, 9.2, 1.4, 1.5);
+    ctx.fillRect(-0.2, 9.2, 1.4, 1.5);
+    ctx.fillRect(1.6, 9.2, 1.2, 1.5);
+    ctx.restore();
+  }
+
+  // Head group: lowers to ram on the attack
+  ctx.save();
+  ctx.translate(12, -18);
+  ctx.rotate(0.05 + lunge * 0.3 + stride * 0.03);
+  // Bony frill (shield) behind the skull
+  inkedEllipse(ctx, 1.5, -6.5, 8.2, 10.5, 0.28, L.stripe, flash ? '#ffffff' : '#fb923c', undefined, 1.5);
+  inkedEllipse(ctx, 1.9, -6.2, 5, 7, 0.28, L.skin, undefined, undefined, 1.0);
+  // Far brow horn
+  inkedShape(ctx, flash ? '#ffffff' : '#d6ceb4', 1.1, () => {
+    ctx.moveTo(6.5, -6);
+    ctx.lineTo(18.5, -15.5);
+    ctx.lineTo(9.5, -4.6);
+  });
+  // Skull + parrot beak
+  inkedRoundRect(ctx, 1.5, -6.2, 13.5, 11.2, 4.4, L.skin, L.hi, L.dark, 1.5);
+  inkedShape(ctx, flash ? '#ffffff' : '#c9b458', 1.2, () => {
+    ctx.moveTo(13.5, -3.8);
+    ctx.quadraticCurveTo(19.5, -2.2, 19.8, 3.4);
+    ctx.lineTo(13.5, 4.4);
+  });
+  // Near brow horn + nose horn
+  inkedShape(ctx, L.claw, 1.2, () => {
+    ctx.moveTo(4.5, -5.4);
+    ctx.lineTo(17, -17.5);
+    ctx.lineTo(8.6, -3.6);
+  });
+  inkedShape(ctx, L.claw, 1.1, () => {
+    ctx.moveTo(13, -4.6);
+    ctx.lineTo(17.4, -9.6);
+    ctx.lineTo(16, -3.4);
+  });
+  inkedCircle(ctx, 8.6, -0.6, 1.5, L.eye, L.eyeHi, 0.7);
+  ctx.fillStyle = INK;
+  ctx.fillRect(8.4, -1.3, 0.8, 1.5);
+  ctx.restore();
+
+  if (unit.state === 'attack' && lunge > 0.3) {
+    ctx.strokeStyle = 'rgba(253, 224, 71, 0.9)';
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.arc(31, -20, 10, -0.9, 0.9);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+const REX_LOOK: DinoLook = {
+  skin: '#9a4a2c',
+  hi: '#c8734a',
+  dark: '#572412',
+  belly: '#e3c59a',
+  stripe: '#1f2937',
+  eye: '#fde047',
+  eyeHi: '#fef9c3',
+  claw: '#f5f0e1',
+};
+const ZOMBIE_REX_LOOK: DinoLook = {
+  skin: '#5e7350',
+  hi: '#84996f',
+  dark: '#273121',
+  belly: '#7f8a6c',
+  stripe: '#3a4630',
+  eye: '#f43f5e',
+  eyeHi: '#fecdd3',
+  claw: '#d6d3d1',
+};
+
+function renderRexRig(
+  ctx: CanvasRenderingContext2D,
+  unit: RenderUnit,
+  time: number,
+  flash: boolean,
+  zombie: boolean
+) {
+  const L = dinoLook(zombie ? ZOMBIE_REX_LOOK : REX_LOOK, flash);
+  const moving = unit.state === 'march' || !!unit.moving;
+  const stride = moving ? Math.sin(unit.animTime * (zombie ? 6.5 : 8)) : 0;
+  const lunge = unit.state === 'attack' ? Math.sin(unit.attackProgress * Math.PI) : 0;
+  const windup = unit.state === 'windup' ? 1 : 0;
+  const breathe = moving ? 0 : Math.sin(time * 2 + unit.x) * 0.7;
+  const jaw = 0.1 + lunge * 0.62 + windup * 0.45 + (zombie ? 0.12 : 0) + (moving ? 0 : Math.max(0, Math.sin(time * 1.3 + unit.x)) * 0.08);
+
+  ctx.save();
+  ctx.translate(lunge * 5, -Math.abs(stride) * 1.8 + breathe);
+
+  // Massive tail
+  const sway = stride * 2.5 - lunge * 4;
+  inkedShape(ctx, L.skin, 1.6, () => {
+    ctx.moveTo(-10, -39);
+    ctx.quadraticCurveTo(-28, -38 + sway * 0.4, -44, -29 + sway);
+    ctx.quadraticCurveTo(-27, -25 + sway * 0.4, -10, -22);
+  });
+  if (zombie) {
+    ctx.fillStyle = '#7f1d1d';
+    ctx.fillRect(-31, -33 + sway * 0.6, 6, 3);
+    ctx.fillStyle = '#e7e5e4';
+    ctx.fillRect(-30, -32.2 + sway * 0.6, 4, 0.9);
+  }
+
+  // Far leg, torso, near leg
+  drawDinoLeg(ctx, -6, -24, -stride * 0.8, 13.5, 13, 8, 10, L.dark, L.dark, L.claw);
+  inkedEllipse(ctx, -1, -31, 15.5, 10.8, -0.2, L.skin, L.hi, L.belly, 1.7);
+  if (zombie) {
+    drawRibWound(ctx, -8, -34, 13, 8);
+    ctx.fillStyle = '#7f1d1d';
+    ctx.fillRect(4, -25, 5, 3);
+  } else {
+    // Tamed: harness strap + dark tiger stripes on the back
+    ctx.fillStyle = L.stripe;
+    for (const sx of [-10, -5, 0, 5]) {
+      ctx.beginPath();
+      ctx.moveTo(sx, -40.5 + Math.abs(sx) * 0.12);
+      ctx.lineTo(sx + 2.6, -40.2 + Math.abs(sx) * 0.12);
+      ctx.lineTo(sx + 0.6, -34.5);
+      ctx.closePath();
+      ctx.fill();
+    }
+    inkedRoundRect(ctx, -3.5, -41, 4.6, 19.5, 1.6, flash ? '#ffffff' : '#365314', flash ? '#ffffff' : '#65a30d', undefined, 1.2);
+    ctx.fillStyle = flash ? '#ffffff' : '#facc15';
+    ctx.fillRect(-2.6, -33, 2.8, 2.8);
+  }
+  drawDinoLeg(ctx, -1, -24, stride * 0.8, 13.5, 13, 9, 11, L.skin, L.dark, L.claw);
+
+  // Ridiculous little arm
+  ctx.save();
+  ctx.translate(10, -27);
+  ctx.rotate(-0.5 - lunge * 0.6 + stride * 0.1);
+  inkedRoundRect(ctx, -1.3, 0, 2.6, 5.6, 1.1, L.skin, undefined, undefined, 1.0);
+  ctx.fillStyle = L.claw;
+  ctx.fillRect(-1.3, 5.2, 1, 1.9);
+  ctx.fillRect(0.5, 5.2, 1, 1.9);
+  ctx.restore();
+
+  // Head group: thick neck, boxy skull, bone-crushing jaws
+  ctx.save();
+  ctx.translate(9, -36);
+  ctx.rotate(-0.1 + lunge * 0.42 - windup * 0.25);
+  inkedShape(ctx, L.skin, 1.5, () => {
+    ctx.moveTo(-5, -2);
+    ctx.quadraticCurveTo(1, -10, 6, -13);
+    ctx.lineTo(13, -3);
+    ctx.quadraticCurveTo(7, 3, 1, 9);
+  });
+  // Lower jaw (hinged)
+  if (jaw > 0.3) {
+    // Open maw
+    ctx.fillStyle = flash ? '#ffffff' : '#7f1d1d';
+    ctx.beginPath();
+    ctx.moveTo(7, -3);
+    ctx.lineTo(26, -3.4);
+    ctx.lineTo(6 + Math.cos(jaw) * 19, -1.5 + Math.sin(jaw) * 19);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.save();
+  ctx.translate(6, -1.5);
+  ctx.rotate(jaw);
+  inkedRoundRect(ctx, 0, 0, 19.5, 5, 2.2, L.skin, undefined, L.dark, 1.3);
+  drawFangs(ctx, 6, 18.6, -1.6, -2.4, L.claw);
+  ctx.restore();
+  // Skull + snout
+  inkedRoundRect(ctx, 2.5, -15.5, 14.5, 12.5, 4.6, L.skin, L.hi, undefined, 1.6);
+  inkedRoundRect(ctx, 12.5, -13, 14.5, 10, 3.2, L.skin, L.hi, undefined, 1.5);
+  drawFangs(ctx, 13.5, 26.2, -3.2, 2.8, L.claw);
+  // Brow ridge, eye, nostril
+  ctx.fillStyle = L.dark;
+  ctx.beginPath();
+  ctx.roundRect(7, -14.6, 7.5, 2.4, 1.1);
+  ctx.fill();
+  inkedCircle(ctx, 10.6, -10.4, 1.9, L.eye, L.eyeHi, 0.8);
+  ctx.fillStyle = INK;
+  ctx.fillRect(10.2, -11.4, 0.9, 2);
+  ctx.fillRect(24.6, -11.2, 1.1, 1.1);
+  if (zombie) {
+    // Rotten cheek showing the teeth, toxic drool
+    ctx.fillStyle = '#7f1d1d';
+    ctx.fillRect(14, -6.4, 6, 2.6);
+    ctx.fillStyle = '#84cc16';
+    ctx.fillRect(21, 0.5 + jaw * 6, 1.1, 4 + Math.sin(time * 5 + unit.x) * 1.2);
+    ctx.fillRect(16.5, 0.5 + jaw * 4, 0.9, 2.6);
+  }
+  ctx.restore();
+
+  if (unit.state === 'attack' && lunge > 0.3) {
+    ctx.strokeStyle = zombie ? 'rgba(239, 68, 68, 0.88)' : 'rgba(253, 224, 71, 0.9)';
+    ctx.lineWidth = 2.6;
+    ctx.beginPath();
+    ctx.arc(36, -36, 12, -0.9, 0.9);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 export function renderUnitSprite(
   ctx: CanvasRenderingContext2D,
   unit: RenderUnit,
@@ -1144,6 +1695,12 @@ export function renderUnitSprite(
     renderZombieDogRig(ctx, unit, flash);
   } else if (unit.subType === 'flyer') {
     renderFlyerRig(ctx, unit, time, flash);
+  } else if (unit.subType === 'raptor' || unit.subType === 'zombie_raptor') {
+    renderRaptorRig(ctx, unit, time, flash, unit.subType === 'zombie_raptor');
+  } else if (unit.subType === 'trike') {
+    renderTrikeRig(ctx, unit, time, flash);
+  } else if (unit.subType === 'rex' || unit.subType === 'zombie_rex') {
+    renderRexRig(ctx, unit, time, flash, unit.subType === 'zombie_rex');
   } else {
     // ===============================================================
     // 7-NODE ARTICULATED HUMANOID / ZOMBIE RIG (4x Supersampled Parts)
@@ -1425,6 +1982,14 @@ export function renderUnitSprite(
       ? 42
       : unit.subType === 'hound' || unit.subType === 'zombie_dog'
       ? 29
+      : unit.subType === 'raptor' || unit.subType === 'zombie_raptor'
+      ? 44
+      : unit.subType === 'trike'
+      ? 42
+      : unit.subType === 'rex'
+      ? 58
+      : unit.subType === 'zombie_rex'
+      ? 66
       : unit.subType === 'flyer'
       ? 62
       : unit.subType === 'watchtower'
@@ -1856,6 +2421,21 @@ export function renderCharacterPreview(
   if (subType === 'flyer') {
     // Hovering rig would be cut off at the top of a small portrait: bring it down
     ctx.translate(0, FLYER_HOVER_Z * 0.75);
+  }
+  // Dinosaurs are far longer than a person: shrink them to fit the portrait
+  const dinoFit =
+    subType === 'raptor' || subType === 'zombie_raptor'
+      ? 0.7
+      : subType === 'trike'
+      ? 0.58
+      : subType === 'rex'
+      ? 0.48
+      : subType === 'zombie_rex'
+      ? 0.42
+      : 1;
+  if (dinoFit !== 1) {
+    ctx.translate(isZombie ? -4 : 4, 0);
+    ctx.scale(dinoFit, dinoFit);
   }
 
   const previewUnit: RenderUnit = {

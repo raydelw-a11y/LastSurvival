@@ -136,6 +136,10 @@ interface InternalUnit extends RenderUnit {
   /** SIEGE: seconds spent standing at its post with nothing to fight. */
   guardIdle?: number;
   barricadeMultiplier: number;
+  /** Dinosaurs: a melee hit also wounds whoever stands this close to the target. */
+  cleaveRadius?: number;
+  /** Heavy beasts: share of every knockback they shrug off (0..1). */
+  kbResist?: number;
   infectedZombieType?: ZombieType;
   critChance: number;
   critMultiplier: number;
@@ -241,6 +245,9 @@ const INITIAL_UNIT_COOLDOWNS: Record<SurvivorType, number> = {
   tesla: 0,
   barricade: 0,
   watchtower: 0,
+  raptor: 0,
+  trike: 0,
+  rex: 0,
   hero: 0,
 };
 
@@ -1000,7 +1007,18 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       fromCorpse = false,
       hpScale = 1
     ) => {
-      const cfg = ZOMBIE_CONFIGS[type];
+      let cfg = ZOMBIE_CONFIGS[type];
+      // Boss-class infected (zombie T-Rex): never more than its cap alive; the rest come as raptors
+      if (cfg.maxAlive !== undefined) {
+        let alive = 0;
+        for (const z of simRef.current.units) {
+          if (z.team === 'zombie' && z.subType === type && z.hp > 0) alive++;
+        }
+        if (alive >= cfg.maxAlive) {
+          type = 'zombie_raptor';
+          cfg = ZOMBIE_CONFIGS[type];
+        }
+      }
       // SIEGE: with no spot given, the infected walks in from a random side of the arena
       const edge = siege && customX === undefined ? siegeEdgePoint() : null;
       const spawnX = customX ?? (edge ? edge.x : simRef.current.barricadeX - 30 - Math.random() * 45);
@@ -1008,6 +1026,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         customY ??
         (edge ? edge.y : ROAD_Y_MIN + 8 + Math.random() * (ROAD_Y_MAX - ROAD_Y_MIN - 16));
       const isEmerging = (cfg.emergesFromGround && customX !== undefined) || fromCorpse;
+      // A beast this big keeps to the middle lanes, clear of the HUD at the bottom of the road
+      const laneY =
+        type === 'zombie_rex' && !siege && customY === undefined
+          ? clampN(spawnY, ROAD_Y_MIN + 44, ROAD_Y_MAX - 46)
+          : spawnY;
       // Gentle campaign-tier scaling (+3.2% HP per tier past Tier 1) across all 50 missions
       const tier = (mission.campaignTier || mission.id) + (ultra ? ULTRA.tierBonus : 0);
       const missionScale = 1 + Math.max(0, tier - 1) * 0.032;
@@ -1024,7 +1047,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         subType: type,
         level: Math.min(12, tier + 1),
         x: spawnX,
-        y: spawnY,
+        y: laneY,
         z: 0,
         vx: 0,
         vy: 0,
@@ -1054,6 +1077,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         meleeResist: 0,
         armorPiercing: 0,
         firstHitCritMult: 1,
+        cleaveRadius: cfg.cleaveRadius,
+        kbResist: cfg.kbResist,
         isStationary: false,
         isFlying: !!cfg.isFlying,
         spitsAcid: !!cfg.spitsAcid,
@@ -1062,7 +1087,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         chainRange: 0,
         chainFalloff: 1,
         stunTime: 0,
-        barricadeMultiplier: 1,
+        barricadeMultiplier: cfg.obstacleMultiplier ?? 1,
         critChance: cfg.critChance,
         critMultiplier: cfg.critMultiplier,
         explodesOnDeath: cfg.explodesOnDeath,
@@ -1080,6 +1105,13 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       };
       simRef.current.units.push(zUnit);
       if (cfg.isFlying) soundFX.playFlyerScreech();
+      if (type === 'zombie_rex') {
+        // The ground shakes before anyone sees it
+        const sim = simRef.current;
+        soundFX.playDinoRoar(true);
+        sim.screenShake = Math.max(sim.screenShake, 9);
+        addFloatingText('🦖 ¡T-REX ZOMBI! 🦖', sim.camX + 360 * TAP, sim.camY + 120 * TAP, 30, '#a3e635', true);
+      }
     },
     [mission.id]
   );
@@ -1322,6 +1354,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
         chainFalloff: cfg.chainFalloff ?? 1,
         stunTime: cfg.stunTime ?? 0,
         barricadeMultiplier: cfg.barricadeMultiplier ?? 1,
+        cleaveRadius: cfg.cleaveRadius,
+        kbResist: cfg.kbResist,
         infectedZombieType: cfg.infectedZombieType,
         critChance: (cfg.fortune / 100) * (isLucky ? 1.55 : 1),
         critMultiplier: 1.8,
@@ -1352,6 +1386,23 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       }
 
       sim.units.push(newUnit);
+
+      if (cfg.roarRadius) {
+        // T-REX: its arrival roar shoves the horde back and leaves it reeling for a moment
+        soundFX.playDinoRoar(true);
+        sim.screenShake = Math.max(sim.screenShake, 9);
+        addFloatingText('¡¡RAAAWR!!', spawnX, spawnY, 52, '#fb923c', true);
+        for (const z of sim.units) {
+          if (z.team !== 'zombie' || z.hp <= 0 || z.state === 'corpse' || z.state === 'dying') continue;
+          const rd = Math.hypot(z.x - spawnX, (z.y - spawnY) * DEPTH_W);
+          if (rd > cfg.roarRadius) continue;
+          z.vx += (z.x >= spawnX ? 1 : -1) * 120 * (1 - rd / (cfg.roarRadius * 1.6));
+          z.attackTimer = Math.max(z.attackTimer, 1.1);
+          z.whiteFlashTimer = 0.12;
+        }
+      } else if (type === 'raptor' || type === 'trike') {
+        soundFX.playDinoRoar(false);
+      }
 
       if (cfg.placeable && !freeInitial) {
         // Install effect: dust ring + sparks where the structure lands
@@ -2664,6 +2715,11 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             soundFX.playSiren();
             sim.screenShake = 10;
             sim.hordeBurstTimer = 1.6;
+            // From the mid campaign on (and always in ULTRA) a zombie T-Rex leads the final horde
+            if (ultra || tier >= 6) {
+              if (siege) spawnZombie('zombie_rex');
+              else spawnZombie('zombie_rex', sim.barricadeX - 46);
+            }
             addFloatingText(
               '☠️ ¡HORDA FINAL! ☠️',
               sim.camX + 360 * TAP,
@@ -2683,6 +2739,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               // FORTRESS unlocks the nastier infected as the hordes go by
               const vTier = tier + (fortress ? sim.fortressHorde : 0);
               if (ultra || vTier >= 3) hordePool.push('zombie_dog');
+              if (ultra || vTier >= 4) hordePool.push('zombie_raptor');
               if (ultra || vTier >= 5) hordePool.push('acid_spitter');
               if (ultra || vTier >= 7) hordePool.push('flyer');
               const burst = Math.min(sim.hordeToSpawn, 3 + Math.floor(Math.random() * 2) + (ultra ? 1 : 0));
@@ -2774,17 +2831,23 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
             // ULTRA unleashes every new enemy type from the very first mission
             const vTier = tier + (fortress ? sim.fortressHorde : 0);
             if (ultra || vTier >= 3) extraPool.push('zombie_dog');
+            if (ultra || vTier >= 4) extraPool.push('zombie_raptor');
             if (ultra || vTier >= 5) extraPool.push('acid_spitter');
             if (ultra || vTier >= 7) extraPool.push('flyer');
+            // Late campaign / deep Fortress: now and then a zombie T-Rex stomps in with the wave
+            const rexRoams = vTier >= 12;
             // SIEGE: the wave splits in small groups, each walking in from its own direction
             let waveOrigin = siege ? siegeEdgePoint() : null;
             for (let p = 0; p < finalCount; p++) {
               if (siege && p > 0 && Math.random() < 0.55) waveOrigin = siegeEdgePoint();
               const useExtra =
                 extraPool.length > 0 && Math.random() < (ultra ? ULTRA.extraEnemyChance : 0.3);
-              const pick = useExtra
-                ? extraPool[Math.floor(Math.random() * extraPool.length)]
-                : pool[Math.floor(Math.random() * pool.length)];
+              const pick: ZombieType =
+                rexRoams && !isBreather && Math.random() < 0.02
+                  ? 'zombie_rex'
+                  : useExtra
+                  ? extraPool[Math.floor(Math.random() * extraPool.length)]
+                  : pool[Math.floor(Math.random() * pool.length)];
               const px = sim.barricadeX - 20 - p * 20 - Math.random() * 18;
               const at = waveOrigin ? nearEdgePoint(waveOrigin, p) : null;
               spawnB(pick, at ? at.x : px, at ? at.y : undefined);
@@ -2794,7 +2857,8 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   const pat = waveOrigin ? nearEdgePoint(waveOrigin, p + k) : null;
                   spawnB(pick, pat ? pat.x : px - k * 14, pat ? pat.y : undefined);
                 }
-                soundFX.playZombieDogPack();
+                if (pick === 'zombie_raptor') soundFX.playDinoRoar(false);
+                else soundFX.playZombieDogPack();
               }
             }
           }
@@ -3312,8 +3376,10 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
               u.vy = 0;
             }
             if (Math.abs(u.vx) > 0.5 || Math.abs(u.vy) > 0.5) {
-              u.x += u.vx * dt;
-              u.y += u.vy * dt;
+              // Heavy beasts (Triceratops, T-Rex) barely give ground when they are hit
+              const give = 1 - (u.kbResist ?? 0);
+              u.x += u.vx * give * dt;
+              u.y += u.vy * give * dt;
               u.vx *= Math.pow(0.08, dt);
               u.vy *= Math.pow(0.08, dt);
             }
@@ -3979,6 +4045,21 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                     closestZ.hp -= dmg;
                     closestZ.whiteFlashTimer = 0.1;
                     closestZ.vx += u.facing * u.knockback * (isCrit ? 1.5 : 1);
+                    if (u.cleaveRadius) {
+                      // Dinosaurs: horns and jaws catch everything packed around the victim
+                      const splash = Math.max(1, Math.round(dmg * 0.6));
+                      for (const z of sim.units) {
+                        if (z === closestZ || z.team !== 'zombie' || z.hp <= 0 || z.isFlying) continue;
+                        if (z.state === 'corpse' || z.state === 'dying' || z.state === 'emerging') continue;
+                        if (Math.hypot(z.x - closestZ.x, (z.y - closestZ.y) * DEPTH_W) > u.cleaveRadius) continue;
+                        z.hp -= splash;
+                        z.whiteFlashTimer = 0.1;
+                        z.vx += u.facing * u.knockback * 0.7;
+                        spawnBloodParticles(z.x, z.y, 12, 8);
+                        addFloatingText(`${splash}`, z.x, z.y, 18, '#fdba74');
+                      }
+                      sim.screenShake = Math.max(sim.screenShake, u.subType === 'rex' ? 5 : 3);
+                    }
                     spawnBloodParticles(closestZ.x, closestZ.y, 12, 18);
                     addFloatingText(
                       `${dmg}?`,
@@ -4150,9 +4231,10 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                   u.state = 'attack';
                   u.attackProgress = 0;
                   u.attackTimer = u.attackCooldown;
-                  blockingBarrel.hp -= u.damage;
+                  blockingBarrel.hp -= u.damage * u.barricadeMultiplier;
                   blockingBarrel.whiteFlashTimer = 0.1;
                   soundFX.playBarricadeBash();
+                  if (u.barricadeMultiplier > 1) sim.screenShake = Math.max(sim.screenShake, 4);
                 }
                 continue;
               }
@@ -4247,9 +4329,25 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                       u.damage * (isCrit ? u.critMultiplier : 1) * (1 - closestS.meleeResist)
                     )
                   );
-                  soundFX.playMeleeHit(isCrit);
+                  if (u.subType === 'zombie_rex') soundFX.playUnitMelee('rex', isCrit);
+                  else if (u.subType === 'zombie_raptor') soundFX.playUnitMelee('raptor', isCrit);
+                  else soundFX.playMeleeHit(isCrit);
                   closestS.hp -= dmg;
                   closestS.whiteFlashTimer = 0.1;
+                  if (u.cleaveRadius) {
+                    // Giant jaws: everyone packed around the victim is bitten too
+                    for (const s of sim.units) {
+                      if (s === closestS || s.team !== 'survivor' || s.hp <= 0 || s.isFlying || s.inTowerId) continue;
+                      if (s.state === 'corpse' || s.state === 'dying') continue;
+                      if (Math.hypot(s.x - closestS.x, (s.y - closestS.y) * DEPTH_W) > u.cleaveRadius) continue;
+                      const splash = Math.max(1, Math.round(u.damage * 0.6 * (1 - s.meleeResist)));
+                      s.hp -= splash;
+                      s.whiteFlashTimer = 0.1;
+                      spawnBloodParticles(s.x, s.y, 12, 8);
+                      addFloatingText(`${splash}`, s.x, s.y, 18, '#fca5a5');
+                    }
+                    sim.screenShake = Math.max(sim.screenShake, 5);
+                  }
                   // Comeback Rage Mechanic: +0.18 Rage per HP lost on survivors!
                   sim.rage = Math.min(100, sim.rage + dmg * 0.18);
                   if (!closestS.isLucky && closestS.meleeResist < 0.4) {

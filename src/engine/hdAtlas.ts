@@ -392,7 +392,20 @@ export function getUnitAtlas(subType: SurvivorType | ZombieType): UnitPartAtlas 
     case 'barricade':
     case 'watchtower':
     case 'zombie_dog':
+    case 'raptor':
+    case 'trike':
+    case 'rex':
+    case 'zombie_raptor':
+    case 'zombie_rex':
     case 'flyer': {
+      // Dinosaurs only take their footprint (shadow width) and overall size from here
+      if (subType === 'raptor' || subType === 'zombie_raptor') widthFactor = 1.8;
+      else if (subType === 'trike') widthFactor = 2.7;
+      else if (subType === 'rex') widthFactor = 3.0;
+      else if (subType === 'zombie_rex') {
+        scale = 1.15;
+        widthFactor = 3.0;
+      }
       // Custom non-humanoid rigs rendered directly in PixelArtRenderer, bake fallback badge
       inkedCircle(hctx, 12, 12, 6, '#475569', '#94a3b8');
       inkedRoundRect(tctx, 6, 6, 12, 12, 3, '#334155', '#64748b');

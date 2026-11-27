@@ -23,7 +23,7 @@ import { ContinuePrompt } from './components/ContinuePrompt';
 import { useCloudSync } from './sync/useCloudSync';
 import { Smartphone } from 'lucide-react';
 
-const FALLBACK_TIMESTAMP = '2:00 PM - 11/27/2026';
+const FALLBACK_TIMESTAMP = '2:16 PM - 11/27/2026';
 export const BUILD_TS =
   typeof __BUILD_TIMESTAMP__ !== 'undefined' ? __BUILD_TIMESTAMP__ : FALLBACK_TIMESTAMP;
 const CURRENT_BUILD_ID = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : '';
@@ -63,6 +63,9 @@ const INITIAL_PROGRESS: PlayerProgress = {
     tesla: 1,
     barricade: 1,
     watchtower: 1,
+    raptor: 1,
+    trike: 1,
+    rex: 1,
     hero: 1,
   },
   missionStars: {},
@@ -117,7 +120,7 @@ function sanitizeProgress(rawObj: Partial<PlayerProgress>): PlayerProgress {
     validDeck.push('gunslinger');
   }
   // Saves from before a unit existed: auto-equip it once if it is already unlocked
-  for (const newUnit of ['tesla', 'barricade', 'watchtower'] as SurvivorType[]) {
+  for (const newUnit of ['tesla', 'barricade', 'watchtower', 'raptor', 'trike', 'rex'] as SurvivorType[]) {
     const knownBefore = !!(rawObj.unitLevels && newUnit in rawObj.unitLevels);
     if (!knownBefore && isUnitUnlocked(newUnit, lvl) && !validDeck.includes(newUnit)) {
       validDeck.push(newUnit);

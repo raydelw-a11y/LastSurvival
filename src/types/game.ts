@@ -14,6 +14,9 @@ export type SurvivorType =
   | 'tesla'
   | 'barricade'
   | 'watchtower'
+  | 'raptor'
+  | 'trike'
+  | 'rex'
   | 'hero';
 
 export type TacticalItemType = 'blue_barrel' | 'red_barrel' | 'medkit';
@@ -26,7 +29,9 @@ export type ZombieType =
   | 'bloated'
   | 'zombie_dog'
   | 'flyer'
-  | 'acid_spitter';
+  | 'acid_spitter'
+  | 'zombie_raptor'
+  | 'zombie_rex';
 export type BiomeType = 'forest_highway' | 'farm_crossing' | 'graveyard' | 'junkyard_city';
 
 export interface SurvivorConfig {
@@ -71,6 +76,12 @@ export interface SurvivorConfig {
   isTower?: boolean;
   /** The player's own hero: fully manual, never deployed from the deck. */
   isHero?: boolean;
+  /** Dinosaurs: a melee hit also wounds the other zombies this close to the target (60% damage). */
+  cleaveRadius?: number;
+  /** Heavy beasts: share of every knockback they shrug off (0..1). */
+  kbResist?: number;
+  /** T-Rex: roars when deployed, shoving back every zombie within this radius. */
+  roarRadius?: number;
   infectedZombieType?: ZombieType;
   description: string;
   quotes: string[];
@@ -113,6 +124,14 @@ export interface ZombieConfig {
   spitsAcid?: boolean;
   /** Spawns together with this many extra copies (zombie dog packs). */
   packSize?: number;
+  /** Giant jaws: a bite also wounds the other survivors this close to the victim (60% damage). */
+  cleaveRadius?: number;
+  /** Heavy beasts: share of every knockback they shrug off (0..1). */
+  kbResist?: number;
+  /** Damage multiplier against barrels and sandbag walls. */
+  obstacleMultiplier?: number;
+  /** Boss-class enemy: never more than this many alive at once. */
+  maxAlive?: number;
   description: string;
 }
 
@@ -420,7 +439,7 @@ export const HERO_WEAPON_ORDER: Record<HeroWeaponCategory, HeroWeaponType[]> = {
 /** Hero damage grows with the commander level (+6% per level). */
 export const heroDamageMult = (commanderLevel: number) => 1 + (Math.max(1, commanderLevel) - 1) * 0.06;
 
-export const MAX_COMMANDER_LEVEL = 13;
+export const MAX_COMMANDER_LEVEL = 16;
 /** Commander Mastery (+10% damage & HP to the whole squad) kicks in at this level. */
 export const MASTERY_LEVEL = 12;
 
@@ -461,6 +480,9 @@ export const SURVIVOR_ORDER: SurvivorType[] = [
   'tesla',
   'barricade',
   'watchtower',
+  'raptor',
+  'trike',
+  'rex',
 ];
 
 /** The active squad has no size cap: any number of unlocked units can be equipped. */
@@ -482,6 +504,9 @@ export const SHORT_UNIT_NAMES: Record<SurvivorType, string> = {
   tesla: 'Tesla',
   barricade: 'Barricada',
   watchtower: 'Torre',
+  raptor: 'Raptor',
+  trike: 'Tricerátops',
+  rex: 'T-Rex',
   hero: 'Héroe',
 };
 
@@ -504,6 +529,9 @@ export const XP_THRESHOLDS: Record<number, number> = {
   10: 650, // Nv.10 -> Nv.11 (Dron MQ-9)
   11: 740, // Nv.11 -> Nv.12 (Juggernaut + Maestría +10%)
   12: 820, // Nv.12 -> Nv.13 (Bobina Tesla)
+  13: 900, // Nv.13 -> Nv.14 (Raptor Azul)
+  14: 980, // Nv.14 -> Nv.15 (Tricerátops)
+  15: 1060, // Nv.15 -> Nv.16 (T-Rex)
 };
 
 export function getXpForNextLevel(level: number): number {
@@ -521,6 +549,8 @@ export const ZOMBIE_XP_REWARD: Record<ZombieType, number> = {
   zombie_dog: 10,
   flyer: 16,
   acid_spitter: 18,
+  zombie_raptor: 22,
+  zombie_rex: 120,
 };
 
 export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
@@ -885,6 +915,79 @@ export const SURVIVOR_CONFIGS: Record<SurvivorType, SurvivorConfig> = {
     quotes: [],
     hotkey: 'V',
   },
+  raptor: {
+    id: 'raptor',
+    name: 'Raptor Azul',
+    roleTitle: 'Velocirraptor de Caza',
+    unlockLevel: 14,
+    cost: 20,
+    prepTime: 5.5,
+    baseHp: 118,
+    baseDamage: 28,
+    fortune: 50,
+    speed: 98,
+    attackRange: 22,
+    attackCooldown: 0.46,
+    isRanged: false,
+    knockback: 16,
+    meleeResist: 0.2,
+    firstHitCritMultiplier: 2.4,
+    description:
+      'Desbloquea Nv.14: Dinosaurio cazador rapidísimo. Abre cada pelea con un zarpazo crítico y jamás revive infectado.',
+    quotes: ['¡SKRIII!', '¡Krrr-krrr!'],
+    hotkey: 'Y',
+  },
+  trike: {
+    id: 'trike',
+    name: 'Tricerátops',
+    roleTitle: 'Ariete Acorazado',
+    unlockLevel: 15,
+    cost: 38,
+    prepTime: 15.0,
+    baseHp: 380,
+    baseDamage: 36,
+    fortune: 40,
+    speed: 25,
+    attackRange: 30,
+    attackCooldown: 1.1,
+    isRanged: false,
+    knockback: 72,
+    bulletResist: 0.6,
+    meleeResist: 0.55,
+    barricadeMultiplier: 3,
+    cleaveRadius: 32,
+    kbResist: 0.85,
+    description:
+      'Desbloquea Nv.15: Tanque de tres cuernos (-55% daño melee). Su embestida golpea a varios zombis a la vez y los lanza hacia atrás.',
+    quotes: ['¡MRUUUH!', '¡BRRRUM!'],
+    hotkey: 'U',
+  },
+  rex: {
+    id: 'rex',
+    name: 'T-Rex',
+    roleTitle: 'Rey Depredador',
+    unlockLevel: 16,
+    cost: 60,
+    prepTime: 28.0,
+    baseHp: 600,
+    baseDamage: 92,
+    fortune: 45,
+    speed: 30,
+    attackRange: 36,
+    attackCooldown: 1.3,
+    isRanged: false,
+    knockback: 46,
+    bulletResist: 0.5,
+    meleeResist: 0.4,
+    barricadeMultiplier: 4,
+    cleaveRadius: 34,
+    kbResist: 0.9,
+    roarRadius: 130,
+    description:
+      'Desbloquea Nv.16: El depredador definitivo. Al llegar ruge y hace retroceder a la horda; su mordisco destroza a varios zombis de golpe.',
+    quotes: ['¡¡RAAAWR!!', '¡GRROOOAR!'],
+    hotkey: 'I',
+  },
   hero: {
     id: 'hero',
     name: 'Comandante',
@@ -1134,6 +1237,42 @@ export const ZOMBIE_CONFIGS: Record<ZombieType, ZombieConfig> = {
     bulletResist: 0.1,
     spitsAcid: true,
     description: 'Lanza bolas de ácido desde lejos que dejan charcos corrosivos. Ataca primero o aléjate del charco.',
+  },
+  zombie_raptor: {
+    id: 'zombie_raptor',
+    name: 'Raptor Zombi',
+    baseHp: 96,
+    baseDamage: 16,
+    speed: 72,
+    attackRange: 22,
+    attackCooldown: 0.55,
+    rageReward: 7,
+    courageDropChance: 0.3,
+    critChance: 0.2,
+    critMultiplier: 1.7,
+    packSize: 1,
+    description:
+      'Dinosaurio podrido que caza en pareja: más rápido que un corredor y el doble de duro. Frénalo con barricadas o fuego concentrado.',
+  },
+  zombie_rex: {
+    id: 'zombie_rex',
+    name: 'T-Rex Zombi',
+    baseHp: 950,
+    baseDamage: 40,
+    speed: 15,
+    attackRange: 34,
+    attackCooldown: 1.5,
+    rageReward: 30,
+    courageDropChance: 1,
+    critChance: 0.1,
+    critMultiplier: 1.5,
+    bulletResist: 0.2,
+    cleaveRadius: 30,
+    kbResist: 0.9,
+    obstacleMultiplier: 2.5,
+    maxAlive: 1,
+    description:
+      'Coloso jurásico reanimado: aplasta barricadas, muerde en área y casi no retrocede. Concéntrale todo el fuego antes de que llegue al autobús.',
   },
 };
 
