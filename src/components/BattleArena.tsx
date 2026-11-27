@@ -252,7 +252,7 @@ const INITIAL_UNIT_COOLDOWNS: Record<SurvivorType, number> = {
 };
 
 /** Deck hotkeys go by card position, left to right along the keyboard's number row. */
-const DECK_KEYS = ['`', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '='];
+const DECK_KEYS = ['`', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '[', ']', '\\'];
 
 /** The squad cards in the order the HUD shows them: melee, ranged, structures. */
 function deckInDisplayOrder(
