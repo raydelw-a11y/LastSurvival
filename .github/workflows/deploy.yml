@@ -38,6 +38,17 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: './dist'
+      # The artifact is sometimes not visible to the Pages API right after the upload:
+      # give it a moment, and retry once if the first attempt still cannot find it.
+      - name: Wait for the artifact to be listed
+        run: sleep 15
       - name: Deploy to GitHub Pages
         id: deployment
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+      - name: Wait before retrying
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 45
+      - name: Deploy to GitHub Pages (retry)
+        if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v4
