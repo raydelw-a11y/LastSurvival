@@ -944,6 +944,23 @@ export const RoadMapHub: React.FC<RoadMapHubProps> = ({
                   ) : node.difficulty === 'NIGHTMARE' ? (
                     <span className="absolute -top-2 -right-2 text-[10px] drop-shadow">💀</span>
                   ) : null}
+                  {(() => {
+                    // 360° (bus in the middle) versions already beaten on this mission
+                    const sn = progress.siegeBest?.[siegeKey('n', node.id)] || 0;
+                    const su = progress.siegeBest?.[siegeKey('u', node.id)] || 0;
+                    if (sn <= 0 && su <= 0) return null;
+                    return (
+                      <span
+                        className={`absolute -bottom-2 -left-2.5 px-0.5 rounded border text-[8px] font-extrabold text-white shadow leading-tight ${
+                          su > 0 ? 'bg-fuchsia-700 border-fuchsia-300' : 'bg-sky-700 border-sky-300'
+                        }`}
+                        title={`360° superado${sn > 0 ? `: ${sn}★` : ''}${su > 0 ? ` · ULTRA 360°: ${su}★` : ''}`}
+                      >
+                        🧭{sn > 0 ? sn : ''}
+                        {su > 0 ? `☠️${su}` : ''}
+                      </span>
+                    );
+                  })()}
                 </div>
                 <span
                   className={`mt-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold whitespace-nowrap border ${
