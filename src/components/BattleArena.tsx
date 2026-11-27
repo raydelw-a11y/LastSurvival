@@ -5084,13 +5084,41 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       {/* PAUSE MODAL OVERLAY */}
       {paused && battleResult === 'none' && !fortressExit && (
         <div className="absolute inset-0 z-40 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="max-w-xs w-full bg-[#1f2118] border-2 border-amber-500 rounded-lg p-5 text-center shadow-2xl">
+          <div className="max-w-sm w-full max-h-full overflow-y-auto bg-[#1f2118] border-2 border-amber-500 rounded-lg p-4 text-center shadow-2xl">
             <div className="font-pixel text-sm sm:text-base text-amber-400 mb-1.5">
               ⏸ JUEGO EN PAUSA
             </div>
-            <p className="text-[11px] text-zinc-300 mb-4 leading-relaxed">
+            <p className="text-[11px] text-zinc-300 mb-2 leading-relaxed">
               Combate y audio en espera segura. Tus unidades y el autobús están listos cuando vuelvas.
             </p>
+            {/* Keyboard shortcuts */}
+            <div className="mb-3 rounded border border-zinc-700 bg-black/40 px-2 py-1.5 text-left">
+              <div className="text-[8px] font-extrabold uppercase tracking-wider text-amber-300 mb-1">⌨️ Teclas</div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+                {(
+                  [
+                    ['WASD / Flechas', 'Mover al héroe'],
+                    ['J / K', 'Disparar / atacar'],
+                    ['R', 'Recargar'],
+                    ['Z', 'Arma melee (cambiar)'],
+                    ['C', 'Arma a distancia (cambiar)'],
+                    ['G', 'Arma de lanzar (cambiar)'],
+                    [activeSquadUnits.map((u) => SURVIVOR_CONFIGS[u].hotkey.toUpperCase()).join(' ') || '1-9', 'Desplegar unidad'],
+                    ['Tab', 'Cambiar de unidad'],
+                    ['Q / X / E', 'Barriles / botiquín'],
+                    ['Espacio', 'Whiskey de furia'],
+                    ['Esc', 'Pausar / reanudar'],
+                  ] as [string, string][]
+                ).map(([k, label]) => (
+                  <div key={label} className="flex items-center gap-1.5 min-w-0">
+                    <kbd className="shrink-0 px-1 py-px rounded bg-zinc-800 border border-zinc-600 text-[8px] font-bold text-yellow-200 leading-tight">
+                      {k}
+                    </kbd>
+                    <span className="text-[8.5px] text-zinc-300 leading-tight truncate">{label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
             <div className="flex flex-col gap-2">
               <button
                 onClick={resumeBattle}
