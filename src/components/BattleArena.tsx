@@ -252,7 +252,7 @@ const INITIAL_UNIT_COOLDOWNS: Record<SurvivorType, number> = {
 };
 
 /** Deck hotkeys go by card position, left to right along the keyboard's number row. */
-const DECK_KEYS = ['`', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '[', ']', '\\'];
+const DECK_KEYS = ['`', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', 'o', 'p', '[', ']', '\\'];
 
 /** The squad cards in the order the HUD shows them: melee, ranged, structures. */
 function deckInDisplayOrder(
@@ -5550,7 +5550,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 const cd = unitCooldowns[sType];
                 const canAfford = courage >= cfg.cost && cd <= 0;
                 const lvl = progress.unitLevels[sType] || 1;
-                const slotKey = DECK_KEYS[deckOrder.indexOf(sType)] ?? '';
+                const slotKey = (DECK_KEYS[deckOrder.indexOf(sType)] ?? '').toUpperCase();
                 const isPlacing = placingUnit === sType;
                 const shortName = SHORT_UNIT_NAMES[sType];
 
@@ -5825,7 +5825,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                     ['Z', 'Arma melee (cambiar)'],
                     ['C', 'Arma a distancia (cambiar)'],
                     ['G', 'Arma de lanzar (cambiar)'],
-                    [DECK_KEYS.slice(0, Math.max(1, deckOrder.length)).join(' '), 'Desplegar unidad (en el orden del mazo)'],
+                    [DECK_KEYS.slice(0, Math.max(1, deckOrder.length)).join(' ').toUpperCase(), 'Desplegar unidad (en el orden del mazo)'],
                     ['Tab', 'Cambiar de unidad'],
                     ['Q / X / E', 'Barriles / botiquín'],
                     ['Espacio', 'Whiskey de furia'],
