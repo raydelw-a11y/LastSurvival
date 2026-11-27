@@ -251,6 +251,21 @@ const INITIAL_UNIT_COOLDOWNS: Record<SurvivorType, number> = {
   hero: 0,
 };
 
+/** Deck hotkeys go by card position, left to right along the keyboard's number row. */
+const DECK_KEYS = ['`', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '='];
+
+/** The squad cards in the order the HUD shows them: melee, ranged, structures. */
+function deckInDisplayOrder(
+  deck: SurvivorType[],
+  unitLevels: Partial<Record<SurvivorType, number>>,
+  commanderLevel: number
+): SurvivorType[] {
+  const active = deck.filter((t) => commanderLevel >= SURVIVOR_CONFIGS[t].unlockLevel);
+  const sorted = sortUnitsByRoleAndDamage(active.length > 0 ? active : ['redneck'], unitLevels);
+  const role = (t: SurvivorType) => (SURVIVOR_CONFIGS[t].isSupport ? 2 : SURVIVOR_CONFIGS[t].isRanged ? 1 : 0);
+  return [0, 1, 2].flatMap((r) => sorted.filter((t) => role(t) === r));
+}
+
 export const BattleArena: React.FC<BattleArenaProps> = ({
   mission,
   ultra = false,
@@ -1690,9 +1705,16 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
       const key = e.key.toLowerCase();
       simRef.current.keysPressed.add(key);
 
-      const hotkeyUnit = liveBridgeRef.current.progress.equippedDeck.find(
-        (u) => SURVIVOR_CONFIGS[u]?.hotkey.toLowerCase() === key
-      );
+      const liveProgress = liveBridgeRef.current.progress;
+      const deckSlot = DECK_KEYS.indexOf(key);
+      const hotkeyUnit =
+        deckSlot >= 0
+          ? deckInDisplayOrder(
+              liveProgress.equippedDeck,
+              liveProgress.unitLevels,
+              simRef.current.commanderLevel
+            )[deckSlot]
+          : undefined;
       if (hotkeyUnit) {
         activateUnit(hotkeyUnit);
       } else if (key === 'z' || key === 'c' || key === 'g') {
@@ -4969,6 +4991,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
     (t) => SURVIVOR_CONFIGS[t].isRanged && !SURVIVOR_CONFIGS[t].isSupport
   );
   const supportSquad = effectiveSquad.filter((t) => SURVIVOR_CONFIGS[t].isSupport);
+  const deckOrder = deckInDisplayOrder(progress.equippedDeck, progress.unitLevels, commanderLevel);
   const nextLockedCfg = getNextLockedUnit(commanderLevel);
   const xpNeeded = getXpForNextLevel(commanderLevel);
   const xpPercent =
@@ -5527,7 +5550,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                 const cd = unitCooldowns[sType];
                 const canAfford = courage >= cfg.cost && cd <= 0;
                 const lvl = progress.unitLevels[sType] || 1;
-                const slotKey = cfg.hotkey;
+                const slotKey = DECK_KEYS[deckOrder.indexOf(sType)] ?? '';
                 const isPlacing = placingUnit === sType;
                 const shortName = SHORT_UNIT_NAMES[sType];
 
@@ -5544,7 +5567,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                         ? 'bg-[#3f4430]/95 border-2 border-[#c2c799] shadow-[0_3px_8px_rgba(0,0,0,0.8)] cursor-pointer hover:scale-105 active:scale-95'
                         : 'bg-[#26281d]/88 border border-[#4a4d38] cursor-not-allowed'
                     }`}
-                    title={`${cfg.name} (${cfg.roleTitle}) — ${cfg.cost} Valor [${slotKey}]${
+                    title={`${cfg.name} (${cfg.roleTitle}) — ${cfg.cost} Valor${slotKey ? ` [${slotKey}]` : ''}${
                       cfg.placeable ? ' — 1er toque: elegir, 2do toque en la carretera: instalar' : ''
                     }`}
                   >
@@ -5802,7 +5825,7 @@ export const BattleArena: React.FC<BattleArenaProps> = ({
                     ['Z', 'Arma melee (cambiar)'],
                     ['C', 'Arma a distancia (cambiar)'],
                     ['G', 'Arma de lanzar (cambiar)'],
-                    [activeSquadUnits.map((u) => SURVIVOR_CONFIGS[u].hotkey.toUpperCase()).join(' ') || '1-9', 'Desplegar unidad'],
+                    [DECK_KEYS.slice(0, Math.max(1, deckOrder.length)).join(' '), 'Desplegar unidad (en el orden del mazo)'],
                     ['Tab', 'Cambiar de unidad'],
                     ['Q / X / E', 'Barriles / botiquín'],
                     ['Espacio', 'Whiskey de furia'],
